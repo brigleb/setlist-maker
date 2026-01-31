@@ -170,14 +170,35 @@ async def identify_sample_with_retry(
 
 def deduplicate_tracklist(raw_results: list[tuple[int, dict | None]]) -> list[tuple[int, dict | None]]:
     """
-    Collapse consecutive identical matches, keeping the first occurrence.
-    Preserves unidentified gaps for context.
+    Filter and deduplicate track matches.
+    1. Remove singletons (tracks appearing only once - likely samples)
+    2. Collapse consecutive identical matches
     """
+    # Count occurrences of each track
+    track_counts: dict[tuple[str, str], int] = {}
+    for timestamp, track_info in raw_results:
+        if track_info:
+            key = (track_info["title"].lower(), track_info["artist"].lower())
+            track_counts[key] = track_counts.get(key, 0) + 1
+
+    # Filter: replace singletons with None (treat as unidentified)
+    filtered_results = []
+    for timestamp, track_info in raw_results:
+        if track_info:
+            key = (track_info["title"].lower(), track_info["artist"].lower())
+            if track_counts[key] == 1:
+                filtered_results.append((timestamp, None))  # Singleton = unidentified
+            else:
+                filtered_results.append((timestamp, track_info))
+        else:
+            filtered_results.append((timestamp, None))
+
+    # Apply consecutive deduplication
     tracklist = []
     last_track_key = None
     pending_unidentified = None
 
-    for timestamp, track_info in raw_results:
+    for timestamp, track_info in filtered_results:
         if track_info is None:
             # Track unidentified samples but don't add until we see a change
             if last_track_key is not None and pending_unidentified is None:
@@ -215,11 +236,11 @@ def generate_markdown(tracklist: list[tuple[int, dict | None]], source_filename:
     for i, (timestamp, track_info) in enumerate(tracklist, 1):
         time_str = format_timestamp(timestamp)
         if track_info is None:
-            lines.append(f"{i}. **~{time_str}** — *Unidentified*")
+            lines.append(f"{i}. *Unidentified* ({time_str})")
         else:
             artist = track_info["artist"]
             title = track_info["title"]
-            lines.append(f"{i}. **~{time_str}** — {artist} - {title}")
+            lines.append(f"{i}. **{artist}** - {title} ({time_str})")
 
     lines.append("")
     return "\n".join(lines)
@@ -288,7 +309,7 @@ async def process_single_file(
     with tempfile.TemporaryDirectory() as temp_dir:
         for i, (timestamp, segment) in enumerate(slices[start_index:], start_index + 1):
             time_str = format_timestamp(timestamp)
-            print(f"\n  [{i}/{total_slices}] Sample at {time_str}...", end=" ", flush=True)
+            print(f"  [{i}/{total_slices}] Sample at {time_str}...", end=" ", flush=True)
 
             track_info = await identify_sample_with_retry(shazam, segment, temp_dir)
 
