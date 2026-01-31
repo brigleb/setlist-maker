@@ -133,7 +133,7 @@ def parse_markdown_tracklist(content: str) -> Tracklist:
         r"|"
         r"\*Unidentified\*"  # *Unidentified*
         r")\s*"
-        r"\((\d+:?\d*:\d+)\)"  # (MM:SS) or (H:MM:SS)
+        r"\((\d+:\d+(?::\d+)?)\)"  # (MM:SS) or (H:MM:SS)
     )
 
     for line in lines:
@@ -566,6 +566,9 @@ class CorrectionsDB:
         """Apply known corrections to a tracklist. Returns count of corrections applied."""
         applied = 0
         for track in tracklist.tracks:
+            # Skip unidentified tracks - no point looking up corrections for empty strings
+            if track.is_unidentified:
+                continue
             correction = self.get_correction(track.artist, track.title)
             if correction:
                 track.original_artist = track.artist
