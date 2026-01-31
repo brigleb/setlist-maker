@@ -8,6 +8,7 @@ Supports single files, multiple files, or entire directories.
 
 Features:
     - Automatic track identification via Shazam
+    - Audio processing: join files, remove silence, compress, normalize
     - Interactive TUI editor for reviewing and correcting results
     - Learns from your corrections to improve future identifications
     - Resume interrupted processing sessions
@@ -35,6 +36,15 @@ Usage:
 
     # With options
     setlist-maker /path/to/sets/ --delay 20 --output-dir ./tracklists/
+
+    # Process and combine audio files
+    setlist-maker process part1.wav part2.wav -o "My Set.mp3"
+
+    # Process with custom settings
+    setlist-maker process *.wav -o output.mp3 --loudness -14 --bitrate 320k
+
+    # Process and identify tracks
+    setlist-maker process *.wav -o output.mp3 --identify --edit
 """
 
 import argparse
@@ -57,6 +67,13 @@ from setlist_maker.editor import (
     Tracklist,
     parse_markdown_tracklist,
     run_editor,
+)
+from setlist_maker.processor import (
+    FFmpegError,
+    ProcessingConfig,
+    check_ffmpeg,
+    get_audio_duration,
+    process_audio,
 )
 
 # Configuration
@@ -476,62 +493,141 @@ async def process_batch(
     return results
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Generate tracklists from DJ sets or long audio recordings using Shazam.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s recording.mp3                          # Process single file
-  %(prog)s recording.mp3 --edit                   # Process and open editor
-  %(prog)s tracklist.md                           # Edit existing tracklist
-  %(prog)s set1.mp3 set2.mp3 set3.mp3            # Process multiple files
-  %(prog)s /path/to/dj_sets/                     # Process all audio in folder
-  %(prog)s ./sets/ -o ./tracklists/ -d 20        # Custom output dir and delay
-""",
+def format_duration(seconds: float) -> str:
+    """Format duration in seconds to human-readable string."""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m {secs}s"
+    elif minutes > 0:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def cmd_process(args: argparse.Namespace) -> None:
+    """Handle the 'process' subcommand for audio processing."""
+    # Verify FFmpeg is available
+    if not check_ffmpeg():
+        print("Error: FFmpeg not found. Please install it:")
+        print("  macOS: brew install ffmpeg")
+        print("  Ubuntu/Debian: sudo apt install ffmpeg")
+        print("  Windows: download from ffmpeg.org")
+        sys.exit(1)
+
+    # Gather input files
+    input_files = []
+    for path_str in args.inputs:
+        path = Path(path_str)
+        if path.is_file():
+            if path.suffix.lower() in AUDIO_EXTENSIONS:
+                input_files.append(path)
+            else:
+                print(f"Warning: Skipping non-audio file: {path}")
+        else:
+            print(f"Warning: File not found: {path}")
+
+    if not input_files:
+        print("Error: No valid audio files found.")
+        print(f"Supported formats: {', '.join(sorted(AUDIO_EXTENSIONS))}")
+        sys.exit(1)
+
+    # Display input files
+    print(f"\n{'=' * 60}")
+    print("Audio Processing Pipeline")
+    print(f"{'=' * 60}")
+    print(f"\nInput files ({len(input_files)}):")
+    total_duration = 0.0
+    for f in input_files:
+        duration = get_audio_duration(f)
+        if duration:
+            total_duration += duration
+            print(f"  - {f.name} ({format_duration(duration)})")
+        else:
+            print(f"  - {f.name}")
+
+    if total_duration > 0:
+        print(f"\nTotal input duration: {format_duration(total_duration)}")
+
+    output_path = Path(args.output)
+    print(f"\nOutput: {output_path}")
+
+    # Build processing config
+    config = ProcessingConfig(
+        target_loudness=args.loudness,
+        bitrate=args.bitrate,
+        remove_silence=not args.no_silence_removal,
+        apply_compression=not args.no_compress,
+        apply_normalization=not args.no_normalize,
     )
 
-    parser.add_argument(
-        "paths",
-        nargs="+",
-        help="Audio file(s), directory, or markdown tracklist to edit",
-    )
+    # Show processing stages
+    stages = []
+    if len(input_files) > 1:
+        stages.append("Concatenate files")
+    if config.remove_silence:
+        stages.append("Remove leading silence")
+    if config.apply_compression:
+        stages.append("Apply compression")
+    if config.apply_normalization:
+        stages.append(f"Normalize loudness ({config.target_loudness} LUFS)")
+    stages.append(f"Export MP3 @ {config.bitrate}")
 
-    parser.add_argument(
-        "-o", "--output-dir", help="Output directory for tracklist files (default: same as input)"
-    )
+    print("\nProcessing stages:")
+    for i, stage in enumerate(stages, 1):
+        print(f"  {i}. {stage}")
 
-    parser.add_argument(
-        "-d",
-        "--delay",
-        type=int,
-        default=DEFAULT_DELAY_SECONDS,
-        help=f"Delay in seconds between API calls (default: {DEFAULT_DELAY_SECONDS})",
-    )
+    # Run processing
+    print(f"\n{'─' * 60}")
+    print("Processing audio...")
 
-    parser.add_argument(
-        "-e",
-        "--edit",
-        action="store_true",
-        help="Open interactive editor after processing",
-    )
+    try:
+        result_path = process_audio(
+            input_files=input_files,
+            output_file=output_path,
+            config=config,
+            verbose=args.verbose if hasattr(args, "verbose") else False,
+        )
+        print(f"\n✓ Output saved: {result_path}")
 
-    parser.add_argument(
-        "--no-resume",
-        action="store_true",
-        help="Start fresh instead of resuming from previous progress",
-    )
+        # Show output file info
+        output_duration = get_audio_duration(result_path)
+        if output_duration:
+            print(f"  Duration: {format_duration(output_duration)}")
 
-    parser.add_argument(
-        "--no-learn",
-        action="store_true",
-        help="Disable learning from corrections (don't save/apply corrections)",
-    )
+        output_size = result_path.stat().st_size
+        print(f"  Size: {output_size / (1024 * 1024):.1f} MB")
 
-    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
+    except FFmpegError as e:
+        print(f"\nError: {e}")
+        sys.exit(1)
 
-    args = parser.parse_args()
+    # Chain to identification if requested
+    if args.identify:
+        print(f"\n{'=' * 60}")
+        print("Track Identification")
+        print(f"{'=' * 60}")
 
+        corrections_db = CorrectionsDB() if not args.no_learn else None
+
+        result = asyncio.run(
+            process_single_file(
+                audio_path=result_path,
+                output_dir=result_path.parent,
+                delay_seconds=args.delay,
+                resume=True,
+                corrections_db=corrections_db,
+            )
+        )
+
+        if result and args.edit:
+            tracklist, tracklist_path = result
+            print(f"\nOpening interactive editor for: {tracklist.source_file}")
+            run_editor(tracklist, tracklist_path, use_corrections=not args.no_learn)
+
+
+def cmd_identify(args: argparse.Namespace) -> None:
+    """Handle the 'identify' subcommand (default behavior)."""
     # Check if we're editing an existing markdown file
     if len(args.paths) == 1:
         input_path = Path(args.paths[0])
@@ -573,6 +669,200 @@ Examples:
             use_corrections=not args.no_learn,
         )
     )
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate tracklists from DJ sets or long audio recordings using Shazam.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Identify tracks in audio
+  %(prog)s recording.mp3                          # Process single file
+  %(prog)s recording.mp3 --edit                   # Process and open editor
+  %(prog)s tracklist.md                           # Edit existing tracklist
+
+  # Process audio files
+  %(prog)s process part1.wav part2.wav -o set.mp3 # Join and process files
+  %(prog)s process *.wav -o out.mp3 --identify    # Process and identify tracks
+""",
+    )
+
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
+
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 'process' subcommand - audio processing pipeline
+    # ─────────────────────────────────────────────────────────────────────────
+    process_parser = subparsers.add_parser(
+        "process",
+        help="Process and combine audio files (join, compress, normalize)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s part1.wav part2.wav -o "My Set.mp3"
+  %(prog)s *.wav -o output.mp3 --loudness -14 --bitrate 320k
+  %(prog)s *.wav -o output.mp3 --identify --edit
+""",
+    )
+
+    process_parser.add_argument(
+        "inputs",
+        nargs="+",
+        help="Input audio files to process (joined in order specified)",
+    )
+
+    process_parser.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        help="Output file path (MP3)",
+    )
+
+    process_parser.add_argument(
+        "--loudness",
+        type=float,
+        default=-16.0,
+        help="Target loudness in LUFS (default: -16)",
+    )
+
+    process_parser.add_argument(
+        "--bitrate",
+        default="192k",
+        help="Output bitrate (default: 192k)",
+    )
+
+    process_parser.add_argument(
+        "--no-compress",
+        action="store_true",
+        help="Skip compression stage",
+    )
+
+    process_parser.add_argument(
+        "--no-normalize",
+        action="store_true",
+        help="Skip loudness normalization stage",
+    )
+
+    process_parser.add_argument(
+        "--no-silence-removal",
+        action="store_true",
+        help="Skip leading silence removal",
+    )
+
+    process_parser.add_argument(
+        "--identify",
+        action="store_true",
+        help="Run Shazam identification after processing",
+    )
+
+    process_parser.add_argument(
+        "-e",
+        "--edit",
+        action="store_true",
+        help="Open interactive editor after identification (requires --identify)",
+    )
+
+    process_parser.add_argument(
+        "-d",
+        "--delay",
+        type=int,
+        default=DEFAULT_DELAY_SECONDS,
+        help=f"Delay between Shazam API calls (default: {DEFAULT_DELAY_SECONDS})",
+    )
+
+    process_parser.add_argument(
+        "--no-learn",
+        action="store_true",
+        help="Disable learning from corrections",
+    )
+
+    process_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show FFmpeg output",
+    )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 'identify' subcommand - track identification (also default behavior)
+    # ─────────────────────────────────────────────────────────────────────────
+    identify_parser = subparsers.add_parser(
+        "identify",
+        help="Identify tracks in audio files using Shazam",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s recording.mp3
+  %(prog)s recording.mp3 --edit
+  %(prog)s set1.mp3 set2.mp3 set3.mp3
+  %(prog)s /path/to/dj_sets/ -o ./tracklists/
+""",
+    )
+
+    identify_parser.add_argument(
+        "paths",
+        nargs="+",
+        help="Audio file(s), directory, or markdown tracklist to edit",
+    )
+
+    identify_parser.add_argument(
+        "-o",
+        "--output-dir",
+        help="Output directory for tracklist files (default: same as input)",
+    )
+
+    identify_parser.add_argument(
+        "-d",
+        "--delay",
+        type=int,
+        default=DEFAULT_DELAY_SECONDS,
+        help=f"Delay in seconds between API calls (default: {DEFAULT_DELAY_SECONDS})",
+    )
+
+    identify_parser.add_argument(
+        "-e",
+        "--edit",
+        action="store_true",
+        help="Open interactive editor after processing",
+    )
+
+    identify_parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Start fresh instead of resuming from previous progress",
+    )
+
+    identify_parser.add_argument(
+        "--no-learn",
+        action="store_true",
+        help="Disable learning from corrections",
+    )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Parse and route
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Handle backward compatibility: if first arg is not a subcommand, treat as 'identify'
+    # Check sys.argv to detect if user passed a file path directly
+    if len(sys.argv) > 1:
+        first_arg = sys.argv[1]
+        # If first arg is not a known subcommand and not a flag, insert 'identify'
+        if first_arg not in ("process", "identify", "-h", "--help", "-v", "--version"):
+            sys.argv.insert(1, "identify")
+
+    args = parser.parse_args()
+
+    # Handle case where no command specified (just --help or --version)
+    if args.command is None:
+        parser.print_help()
+        sys.exit(0)
+
+    # Route to appropriate handler
+    if args.command == "process":
+        cmd_process(args)
+    elif args.command == "identify":
+        cmd_identify(args)
 
 
 if __name__ == "__main__":

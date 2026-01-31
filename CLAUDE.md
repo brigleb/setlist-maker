@@ -30,11 +30,12 @@ pytest
 
 ## Architecture
 
-Two-module CLI application:
+Three-module CLI application:
 
-### `setlist_maker/cli.py` - Main CLI and audio processing
-- **Entry point:** `main()` parses args, detects file type (audio vs markdown)
-- **Audio processing:** Uses `pydub` to load and slice audio into 30-second chunks
+### `setlist_maker/cli.py` - Main CLI with subcommands
+- **Entry point:** `main()` with subcommand routing (`process`, `identify`)
+- **Backward compatible:** Running without subcommand defaults to `identify` behavior
+- **Audio identification:** Uses `pydub` to slice audio into 30-second chunks
 - **Track identification:** Uses `shazamio` async library with exponential backoff retry for rate limits
 - **Deduplication:** `deduplicate_tracklist()` removes singleton matches and collapses consecutive identical tracks
 - **Progress persistence:** JSON progress files enable resuming interrupted runs
@@ -43,6 +44,20 @@ Key constants at top of `cli.py`:
 - `SAMPLE_DURATION_MS = 30000` (30-second slices)
 - `DEFAULT_DELAY_SECONDS = 15` (between API calls)
 - `AUDIO_EXTENSIONS` (supported formats)
+
+### `setlist_maker/processor.py` - FFmpeg-based audio processing
+- **ProcessingConfig:** Dataclass with all processing parameters (silence threshold, compression, loudness targets)
+- **process_audio():** Full pipeline: concat → silence removal → compress → normalize → MP3 export
+- **build_filter_chain():** Constructs FFmpeg `-af` filter string
+- **create_concat_file():** Generates filelist.txt for FFmpeg concat demuxer
+- **get_audio_duration():** Uses ffprobe to get file duration
+- **analyze_loudness():** Uses FFmpeg loudnorm filter to analyze loudness statistics
+
+Default processing settings:
+- Silence removal: -50dB threshold
+- Compression: -18dB threshold, 3:1 ratio
+- Loudness: -16 LUFS, -1.5 dBTP
+- Output: MP3 CBR 192kbps
 
 ### `setlist_maker/editor.py` - Interactive TUI editor
 - **TracklistEditor:** Textual app providing spreadsheet-like interface
