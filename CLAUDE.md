@@ -30,18 +30,29 @@ pytest
 
 ## Architecture
 
-Single-module CLI application with all logic in `setlist_maker/cli.py`:
+Two-module CLI application:
 
-- **Entry point:** `main()` parses args and kicks off `process_batch()` async
+### `setlist_maker/cli.py` - Main CLI and audio processing
+- **Entry point:** `main()` parses args, detects file type (audio vs markdown)
 - **Audio processing:** Uses `pydub` to load and slice audio into 30-second chunks
 - **Track identification:** Uses `shazamio` async library with exponential backoff retry for rate limits
-- **Deduplication:** `deduplicate_tracklist()` removes singleton matches (likely samples) and collapses consecutive identical tracks
+- **Deduplication:** `deduplicate_tracklist()` removes singleton matches and collapses consecutive identical tracks
 - **Progress persistence:** JSON progress files enable resuming interrupted runs
 
 Key constants at top of `cli.py`:
 - `SAMPLE_DURATION_MS = 30000` (30-second slices)
 - `DEFAULT_DELAY_SECONDS = 15` (between API calls)
 - `AUDIO_EXTENSIONS` (supported formats)
+
+### `setlist_maker/editor.py` - Interactive TUI editor
+- **TracklistEditor:** Textual app providing spreadsheet-like interface
+- **EditTrackScreen:** Modal dialog for editing artist/title fields
+- **CorrectionsDB:** Persistent storage for user corrections (~/.config/setlist-maker/corrections.json)
+- **parse_markdown_tracklist():** Parses existing markdown files for editing
+
+Key classes:
+- `Track`: Dataclass representing a single track with timestamp, artist, title, rejected status
+- `Tracklist`: Collection of tracks with markdown/JSON export methods
 
 ## Code Style
 

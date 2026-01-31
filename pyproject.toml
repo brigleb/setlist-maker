@@ -30,6 +30,7 @@ dependencies = [
     "shazamio>=0.6.0",
     "pydub>=0.25.0",
     "audioop-lts>=0.2;python_version>='3.13'",
+    "textual>=0.47.0",
 ]
 
 [project.optional-dependencies]
