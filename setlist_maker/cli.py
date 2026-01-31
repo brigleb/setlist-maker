@@ -6,6 +6,12 @@ Identifies tracks in long audio recordings (DJ sets, radio shows, etc.)
 by slicing them into 30-second samples and running each through Shazam.
 Supports single files, multiple files, or entire directories.
 
+Features:
+    - Automatic track identification via Shazam
+    - Interactive TUI editor for reviewing and correcting results
+    - Learns from your corrections to improve future identifications
+    - Resume interrupted processing sessions
+
 Requirements:
     pip install setlist-maker
 
@@ -15,14 +21,17 @@ You also need ffmpeg installed on your system:
     Windows: download from ffmpeg.org and add to PATH
 
 Usage:
-    # Single file
+    # Process audio file and open interactive editor
+    setlist-maker recording.mp3 --edit
+
+    # Edit an existing tracklist
+    setlist-maker tracklist.md
+
+    # Process without opening editor
     setlist-maker recording.mp3
 
     # Multiple files
     setlist-maker set1.mp3 set2.mp3 set3.mp3
-
-    # Entire folder
-    setlist-maker /path/to/dj_sets/
 
     # With options
     setlist-maker /path/to/sets/ --delay 20 --output-dir ./tracklists/
@@ -42,6 +51,13 @@ from pydub import AudioSegment
 from shazamio import Shazam
 
 from setlist_maker import __version__
+from setlist_maker.editor import (
+    CorrectionsDB,
+    Track,
+    Tracklist,
+    parse_markdown_tracklist,
+    run_editor,
+)
 
 # Configuration
 SAMPLE_DURATION_MS = 30 * 1000  # 30 seconds in milliseconds
@@ -168,7 +184,9 @@ async def identify_sample_with_retry(
     return None
 
 
-def deduplicate_tracklist(raw_results: list[tuple[int, dict | None]]) -> list[tuple[int, dict | None]]:
+def deduplicate_tracklist(
+    raw_results: list[tuple[int, dict | None]],
+) -> list[tuple[int, dict | None]]:
     """
     Filter and deduplicate track matches.
     1. Remove singletons (tracks appearing only once - likely samples)
@@ -224,6 +242,58 @@ def deduplicate_tracklist(raw_results: list[tuple[int, dict | None]]) -> list[tu
     return tracklist
 
 
+def results_to_tracklist(
+    raw_results: list[tuple[int, dict | None]],
+    source_filename: str,
+    corrections_db: CorrectionsDB | None = None,
+) -> Tracklist:
+    """
+    Convert raw Shazam results to a Tracklist object.
+    Applies corrections from the database and deduplicates.
+    """
+    # Apply corrections before deduplication
+    if corrections_db:
+        corrected_results = []
+        for timestamp, track_info in raw_results:
+            if track_info:
+                correction = corrections_db.get_correction(
+                    track_info["artist"], track_info["title"]
+                )
+                if correction:
+                    track_info = track_info.copy()
+                    track_info["original_artist"] = track_info["artist"]
+                    track_info["original_title"] = track_info["title"]
+                    track_info["artist"], track_info["title"] = correction
+            corrected_results.append((timestamp, track_info))
+        raw_results = corrected_results
+
+    # Deduplicate
+    deduped = deduplicate_tracklist(raw_results)
+
+    # Convert to Track objects
+    tracks = []
+    for timestamp, track_info in deduped:
+        if track_info:
+            track = Track(
+                timestamp=timestamp,
+                artist=track_info.get("artist", ""),
+                title=track_info.get("title", ""),
+                shazam_url=track_info.get("shazam_url"),
+                album=track_info.get("album"),
+                original_artist=track_info.get("original_artist"),
+                original_title=track_info.get("original_title"),
+            )
+        else:
+            track = Track(timestamp=timestamp, artist="", title="")
+        tracks.append(track)
+
+    return Tracklist(
+        source_file=source_filename,
+        tracks=tracks,
+        generated_on=datetime.now().strftime("%Y-%m-%d %H:%M"),
+    )
+
+
 def generate_markdown(tracklist: list[tuple[int, dict | None]], source_filename: str) -> str:
     """Generate markdown output from the tracklist."""
     lines = [
@@ -263,11 +333,15 @@ def load_progress(filepath: Path) -> list:
 
 
 async def process_single_file(
-    audio_path: Path, output_dir: Path | None, delay_seconds: int, resume: bool = True
-) -> Path | None:
+    audio_path: Path,
+    output_dir: Path | None,
+    delay_seconds: int,
+    resume: bool = True,
+    corrections_db: CorrectionsDB | None = None,
+) -> tuple[Tracklist, Path] | None:
     """
     Process a single audio file and generate its tracklist.
-    Returns the output path on success, None on failure.
+    Returns (Tracklist, output_path) on success, None on failure.
     """
     print(f"\n{'=' * 60}")
     print(f"Processing: {audio_path.name}")
@@ -299,7 +373,7 @@ async def process_single_file(
         raw_results = load_progress(progress_path)
         start_index = len(raw_results)
         if start_index > 0:
-            print(f"  Resuming from sample {start_index + 1} (found {start_index} previous results)")
+            print(f"  Resuming from sample {start_index + 1} ({start_index} previous results)")
 
     # Initialize Shazam
     shazam = Shazam()
@@ -327,29 +401,37 @@ async def process_single_file(
             if i < total_slices:
                 await asyncio.sleep(delay_seconds)
 
-    # Deduplicate and generate output
-    print(f"\n  Processing complete. Generating tracklist...")
-    tracklist = deduplicate_tracklist(raw_results)
-    markdown = generate_markdown(tracklist, audio_path.name)
+    # Convert to Tracklist with corrections applied
+    print("\n  Processing complete. Generating tracklist...")
+    tracklist = results_to_tracklist(raw_results, audio_path.name, corrections_db)
+
+    # Generate markdown output
+    markdown = tracklist.to_markdown()
 
     # Write output
     with open(output_path, "w") as f:
         f.write(markdown)
 
     print(f"  Saved: {output_path}")
-    print(f"  Found {len(tracklist)} unique tracks")
+    print(f"  Found {len(tracklist.tracks)} unique tracks")
 
     # Clean up progress file
     if progress_path.exists():
         os.remove(progress_path)
 
-    return output_path
+    return tracklist, output_path
 
 
 async def process_batch(
-    audio_files: list[Path], output_dir: Path | None, delay_seconds: int, resume: bool = True
-):
+    audio_files: list[Path],
+    output_dir: Path | None,
+    delay_seconds: int,
+    resume: bool = True,
+    open_editor: bool = False,
+    use_corrections: bool = True,
+) -> list[tuple[Tracklist, Path]]:
     """Process multiple audio files in sequence."""
+    corrections_db = CorrectionsDB() if use_corrections else None
 
     total_files = len(audio_files)
     print(f"\n{'#' * 60}")
@@ -357,25 +439,41 @@ async def process_batch(
     print(f"# Delay between samples: {delay_seconds} seconds")
     if output_dir:
         print(f"# Output directory: {output_dir}")
+    if use_corrections:
+        print("# Learning mode: enabled (corrections will be remembered)")
     print(f"{'#' * 60}")
 
+    results = []
     for idx, file in enumerate(audio_files, 1):
         print(f"\n[File {idx}/{total_files}]")
         result = await process_single_file(
-            audio_path=file, output_dir=output_dir, delay_seconds=delay_seconds, resume=resume
+            audio_path=file,
+            output_dir=output_dir,
+            delay_seconds=delay_seconds,
+            resume=resume,
+            corrections_db=corrections_db,
         )
 
         if result:
+            tracklist, output_path = result
+            results.append((tracklist, output_path))
             print(f"\n{'─' * 40}")
             # Print the tracklist
-            with open(result, "r") as f:
-                print(f.read())
+            print(tracklist.to_markdown())
         else:
             print(f"\n  Warning: Failed to process {file.name}")
 
     print(f"\n{'#' * 60}")
     print(f"# Batch complete! Processed {total_files} file(s)")
     print(f"{'#' * 60}")
+
+    # Open editor for the last processed file if requested
+    if open_editor and results:
+        tracklist, output_path = results[-1]
+        print(f"\nOpening interactive editor for: {tracklist.source_file}")
+        run_editor(tracklist, output_path, use_corrections=use_corrections)
+
+    return results
 
 
 def main():
@@ -385,13 +483,19 @@ def main():
         epilog="""
 Examples:
   %(prog)s recording.mp3                          # Process single file
+  %(prog)s recording.mp3 --edit                   # Process and open editor
+  %(prog)s tracklist.md                           # Edit existing tracklist
   %(prog)s set1.mp3 set2.mp3 set3.mp3            # Process multiple files
   %(prog)s /path/to/dj_sets/                     # Process all audio in folder
   %(prog)s ./sets/ -o ./tracklists/ -d 20        # Custom output dir and delay
 """,
     )
 
-    parser.add_argument("paths", nargs="+", help="Audio file(s) or directory containing audio files")
+    parser.add_argument(
+        "paths",
+        nargs="+",
+        help="Audio file(s), directory, or markdown tracklist to edit",
+    )
 
     parser.add_argument(
         "-o", "--output-dir", help="Output directory for tracklist files (default: same as input)"
@@ -406,14 +510,43 @@ Examples:
     )
 
     parser.add_argument(
-        "--no-resume", action="store_true", help="Start fresh instead of resuming from previous progress"
+        "-e",
+        "--edit",
+        action="store_true",
+        help="Open interactive editor after processing",
     )
 
     parser.add_argument(
-        "-v", "--version", action="version", version=f"%(prog)s {__version__}"
+        "--no-resume",
+        action="store_true",
+        help="Start fresh instead of resuming from previous progress",
     )
 
+    parser.add_argument(
+        "--no-learn",
+        action="store_true",
+        help="Disable learning from corrections (don't save/apply corrections)",
+    )
+
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
+
     args = parser.parse_args()
+
+    # Check if we're editing an existing markdown file
+    if len(args.paths) == 1:
+        input_path = Path(args.paths[0])
+        if input_path.suffix.lower() == ".md" and input_path.is_file():
+            # Edit existing tracklist
+            print(f"Opening tracklist for editing: {input_path.name}")
+            with open(input_path) as f:
+                content = f.read()
+            tracklist = parse_markdown_tracklist(content)
+            if not tracklist.tracks:
+                print("Error: Could not parse tracklist from markdown file.")
+                sys.exit(1)
+            print(f"Loaded {len(tracklist.tracks)} tracks from {tracklist.source_file}")
+            run_editor(tracklist, input_path, use_corrections=not args.no_learn)
+            return
 
     # Gather all audio files
     audio_files = get_audio_files(args.paths)
@@ -436,6 +569,8 @@ Examples:
             output_dir=output_dir,
             delay_seconds=args.delay,
             resume=not args.no_resume,
+            open_editor=args.edit,
+            use_corrections=not args.no_learn,
         )
     )
 
