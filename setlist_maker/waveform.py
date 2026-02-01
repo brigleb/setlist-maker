@@ -5,6 +5,10 @@ Renders audio segments as colored braille-pattern waveforms showing
 peak amplitude, symmetric around a center line.
 """
 
+from __future__ import annotations
+
+import array
+
 # Braille Unicode block starts at U+2800
 # Dot positions and their bit values:
 #   [1] [4]    0x01  0x08
@@ -51,3 +55,55 @@ def amplitude_to_braille(amp_left: float, amp_right: float) -> str:
     dots = LEFT_COLUMN_DOTS[level_left] | RIGHT_COLUMN_DOTS[level_right]
 
     return chr(BRAILLE_BASE + dots)
+
+
+def extract_peaks(
+    samples: list[int] | array.array,
+    num_buckets: int,
+    channels: int = 1,
+) -> list[float]:
+    """
+    Extract peak amplitudes from audio samples.
+
+    Divides samples into buckets and finds the maximum absolute
+    amplitude in each bucket, normalized to 0.0-1.0.
+
+    Args:
+        samples: Raw audio samples (interleaved if stereo)
+        num_buckets: Number of output values (typically terminal width * 2)
+        channels: Number of audio channels (1=mono, 2=stereo)
+
+    Returns:
+        List of normalized peak amplitudes (0.0-1.0)
+    """
+    if not samples:
+        return [0.0] * num_buckets
+
+    # Convert stereo to mono by averaging channels
+    if channels == 2:
+        mono_samples = []
+        for i in range(0, len(samples) - 1, 2):
+            mono_samples.append((samples[i] + samples[i + 1]) // 2)
+        samples = mono_samples
+
+    # Find global max for normalization
+    max_amp = max(abs(s) for s in samples) if samples else 1
+    if max_amp == 0:
+        return [0.0] * num_buckets
+
+    # Divide into buckets and find peak in each
+    samples_per_bucket = max(1, len(samples) // num_buckets)
+    peaks = []
+
+    for i in range(num_buckets):
+        start = i * samples_per_bucket
+        end = start + samples_per_bucket
+        bucket = samples[start:end] if start < len(samples) else [0]
+
+        if bucket:
+            peak = max(abs(s) for s in bucket)
+            peaks.append(peak / max_amp)
+        else:
+            peaks.append(0.0)
+
+    return peaks
