@@ -75,6 +75,7 @@ from setlist_maker.processor import (
     get_audio_duration,
     process_audio,
 )
+from setlist_maker.waveform import render_waveform
 
 # Configuration
 SAMPLE_DURATION_MS = 30 * 1000  # 30 seconds in milliseconds
@@ -400,14 +401,16 @@ async def process_single_file(
     with tempfile.TemporaryDirectory() as temp_dir:
         for i, (timestamp, segment) in enumerate(slices[start_index:], start_index + 1):
             time_str = format_timestamp(timestamp)
-            print(f"  [{i}/{total_slices}] Sample at {time_str}...", end=" ", flush=True)
+            waveform = render_waveform(segment)
+            print(f"  [{i}/{total_slices}] Sample at {time_str}")
+            print(f"  {waveform}")
 
             track_info = await identify_sample_with_retry(shazam, segment, temp_dir)
 
             if track_info:
-                print(f"Found: {track_info['artist']} - {track_info['title']}")
+                print(f"  Found: {track_info['artist']} - {track_info['title']}")
             else:
-                print("Not identified")
+                print("  Not identified")
 
             raw_results.append((timestamp, track_info))
 
