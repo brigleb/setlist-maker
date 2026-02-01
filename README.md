@@ -4,11 +4,12 @@ Generate tracklists from DJ sets or long audio recordings using Shazam.
 
 ## Features
 
-- Automatic track identification via Shazam
-- Interactive TUI editor for reviewing and correcting results
-- Learns from your corrections to improve future identifications
-- Resume interrupted processing sessions
-- Multiple output formats (Markdown, JSON)
+- **Audio processing**: Join multiple recordings, remove leading silence, compress, and normalize loudness
+- **Track identification**: Automatic via Shazam
+- **Interactive TUI editor**: Review and correct results
+- **Learning**: Remembers your corrections to improve future identifications
+- **Resume support**: Pick up interrupted processing sessions
+- **Multiple output formats**: Markdown and JSON
 
 ## Installation
 
@@ -31,7 +32,32 @@ sudo apt install ffmpeg
 
 ## Usage
 
-### Basic Usage
+### Audio Processing (`process`)
+
+Combine, compress, and normalize audio files for broadcast:
+
+```bash
+# Join multiple recordings into one
+setlist-maker process part1.wav part2.wav part3.wav -o "My Set.mp3"
+
+# Custom loudness and bitrate
+setlist-maker process *.wav -o output.mp3 --loudness -14 --bitrate 320k
+
+# Process and identify tracks in one go
+setlist-maker process *.wav -o output.mp3 --identify --edit
+
+# Skip specific processing stages
+setlist-maker process recording.wav -o output.mp3 --no-compress --no-normalize
+```
+
+Processing pipeline:
+1. Concatenate input files (in order specified)
+2. Remove leading silence (-50dB threshold)
+3. Apply compression (-18dB threshold, 3:1 ratio)
+4. Normalize loudness (-16 LUFS, -1.5 dBTP)
+5. Export as MP3 CBR (192kbps default)
+
+### Track Identification
 
 ```bash
 # Process a single file
@@ -88,6 +114,22 @@ setlist-maker recording.mp3 --no-learn
 
 ## Options
 
+### Process Command
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output` | Output file path (required) |
+| `--loudness` | Target loudness in LUFS (default: -16) |
+| `--bitrate` | Output bitrate (default: 192k) |
+| `--no-compress` | Skip compression stage |
+| `--no-normalize` | Skip loudness normalization |
+| `--no-silence-removal` | Skip leading silence removal |
+| `--identify` | Run Shazam identification after processing |
+| `-e, --edit` | Open editor after identification |
+| `--verbose` | Show FFmpeg output |
+
+### Identify Command
+
 | Option | Description |
 |--------|-------------|
 | `-e, --edit` | Open interactive editor after processing |
@@ -95,6 +137,11 @@ setlist-maker recording.mp3 --no-learn
 | `-d, --delay` | Delay in seconds between API calls (default: 15) |
 | `--no-resume` | Start fresh instead of resuming from previous progress |
 | `--no-learn` | Disable learning from corrections |
+
+### Global Options
+
+| Option | Description |
+|--------|-------------|
 | `-v, --version` | Show version |
 
 ## How It Works
