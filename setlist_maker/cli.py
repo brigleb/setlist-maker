@@ -593,6 +593,16 @@ def cmd_process(args: argparse.Namespace) -> None:
         )
         print(f"\n✓ Output saved: {result_path}")
 
+        # Show waveform preview of processed audio
+        try:
+            from pydub import AudioSegment as PydubSegment
+
+            preview = PydubSegment.from_file(str(result_path))[:30000]  # First 30 sec
+            waveform = render_waveform(preview)
+            print(f"  {waveform}")
+        except Exception:
+            pass  # Skip waveform if preview fails
+
         # Show output file info
         output_duration = get_audio_duration(result_path)
         if output_duration:
