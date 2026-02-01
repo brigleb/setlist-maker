@@ -107,3 +107,33 @@ def extract_peaks(
             peaks.append(0.0)
 
     return peaks
+
+
+# ANSI color codes for amplitude gradient
+COLORS = [
+    "\033[90m",  # 0-25%: dim gray
+    "\033[37m",  # 25-50%: white
+    "\033[36m",  # 50-75%: cyan
+    "\033[96m",  # 75-100%: bright cyan
+]
+RESET = "\033[0m"
+
+
+def colorize(char: str, amplitude: float, use_color: bool = True) -> str:
+    """
+    Wrap a character in ANSI color codes based on amplitude.
+
+    Args:
+        char: Character to colorize
+        amplitude: Amplitude value (0.0-1.0) to determine color
+        use_color: If False, return char unchanged
+
+    Returns:
+        Character wrapped in ANSI codes, or plain char if use_color=False
+    """
+    if not use_color:
+        return char
+
+    # Map amplitude to color index (0-3)
+    color_idx = min(3, int(amplitude * 4))
+    return f"{COLORS[color_idx]}{char}{RESET}"

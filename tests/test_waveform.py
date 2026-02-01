@@ -49,3 +49,29 @@ def test_extract_peaks_stereo():
     assert len(peaks) == 2
     assert peaks[0] == 1.0  # loudest bucket
     assert peaks[1] == pytest.approx(0.5, abs=0.01)  # quieter bucket
+
+
+def test_colorize_by_amplitude():
+    """Colors vary by amplitude level."""
+    from setlist_maker.waveform import colorize
+
+    # Low amplitude = dim
+    dim = colorize("⠀", 0.1)
+    assert "\033[90m" in dim  # dim gray
+
+    # High amplitude = bright cyan
+    bright = colorize("⣿", 0.9)
+    assert "\033[96m" in bright  # bright cyan
+
+    # Both should have reset code
+    assert "\033[0m" in dim
+    assert "\033[0m" in bright
+
+
+def test_colorize_disabled():
+    """Color can be disabled."""
+    from setlist_maker.waveform import colorize
+
+    result = colorize("⣿", 1.0, use_color=False)
+    assert result == "⣿"
+    assert "\033[" not in result
