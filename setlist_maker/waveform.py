@@ -8,6 +8,8 @@ peak amplitude, symmetric around a center line.
 from __future__ import annotations
 
 import array
+import os
+import shutil
 
 # Braille Unicode block starts at U+2800
 # Dot positions and their bit values:
@@ -137,3 +139,64 @@ def colorize(char: str, amplitude: float, use_color: bool = True) -> str:
     # Map amplitude to color index (0-3)
     color_idx = min(3, int(amplitude * 4))
     return f"{COLORS[color_idx]}{char}{RESET}"
+
+
+def get_terminal_width() -> int:
+    """Get terminal width, defaulting to 80 if unavailable."""
+    try:
+        return shutil.get_terminal_size().columns
+    except Exception:
+        return 80
+
+
+def supports_unicode() -> bool:
+    """Check if terminal likely supports Unicode braille characters."""
+    term = os.environ.get("TERM", "")
+    # Most modern terminals support Unicode; dumb terminals don't
+    return term != "dumb"
+
+
+def render_waveform(
+    segment,  # AudioSegment type but avoid import for flexibility
+    width: int | None = None,
+    use_color: bool | None = None,
+) -> str:
+    """
+    Render an audio segment as a colored braille waveform string.
+
+    Args:
+        segment: pydub AudioSegment to visualize
+        width: Target width in characters (default: terminal width - 10)
+        use_color: Enable ANSI colors (default: auto-detect)
+
+    Returns:
+        Colored string ready to print
+    """
+    # Determine width
+    if width is None:
+        width = get_terminal_width() - 10  # Leave padding
+
+    # Auto-detect color support
+    if use_color is None:
+        use_color = supports_unicode()
+
+    # Extract samples
+    samples = segment.get_array_of_samples()
+    channels = segment.channels
+
+    # Need 2 samples per braille character
+    num_buckets = width * 2
+    peaks = extract_peaks(samples, num_buckets, channels)
+
+    # Build waveform string
+    chars = []
+    for i in range(0, len(peaks) - 1, 2):
+        amp_left = peaks[i]
+        amp_right = peaks[i + 1] if i + 1 < len(peaks) else 0.0
+        avg_amp = (amp_left + amp_right) / 2
+
+        char = amplitude_to_braille(amp_left, amp_right)
+        colored = colorize(char, avg_amp, use_color)
+        chars.append(colored)
+
+    return "".join(chars)

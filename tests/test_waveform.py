@@ -1,5 +1,7 @@
 """Tests for waveform visualization module."""
 
+from unittest.mock import MagicMock
+
 
 def test_amplitude_to_braille_silence():
     """Amplitude 0 returns empty braille character."""
@@ -75,3 +77,36 @@ def test_colorize_disabled():
     result = colorize("⣿", 1.0, use_color=False)
     assert result == "⣿"
     assert "\033[" not in result
+
+
+def test_render_waveform_basic():
+    """render_waveform produces braille output from AudioSegment."""
+    from setlist_maker.waveform import render_waveform
+
+    # Create mock AudioSegment
+    mock_segment = MagicMock()
+    mock_segment.channels = 1
+    mock_segment.get_array_of_samples.return_value = [0, 50, 100, 150, 200, 150, 100, 50] * 100
+
+    result = render_waveform(mock_segment, width=10, use_color=False)
+
+    # Should be 10 braille characters
+    assert len(result) == 10
+    # All characters should be braille (U+2800 block)
+    for char in result:
+        assert 0x2800 <= ord(char) <= 0x28FF
+
+
+def test_render_waveform_with_color():
+    """render_waveform applies color codes."""
+    from setlist_maker.waveform import render_waveform
+
+    mock_segment = MagicMock()
+    mock_segment.channels = 1
+    mock_segment.get_array_of_samples.return_value = [100, 200, 100] * 100
+
+    result = render_waveform(mock_segment, width=5, use_color=True)
+
+    # Should contain ANSI codes
+    assert "\033[" in result
+    assert "\033[0m" in result
