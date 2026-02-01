@@ -34,6 +34,9 @@ RIGHT_COLUMN_DOTS = [
     0x08 | 0x10 | 0x20 | 0x80,  # level 2: dots 4,5,6,8
 ]
 
+# ASCII characters for fallback: silence, low, medium, high
+ASCII_CHARS = "_-#^"
+
 
 def amplitude_to_braille(amp_left: float, amp_right: float) -> str:
     """
@@ -57,6 +60,22 @@ def amplitude_to_braille(amp_left: float, amp_right: float) -> str:
     dots = LEFT_COLUMN_DOTS[level_left] | RIGHT_COLUMN_DOTS[level_right]
 
     return chr(BRAILLE_BASE + dots)
+
+
+def amplitude_to_ascii(amp_left: float, amp_right: float) -> str:
+    """
+    Convert two amplitude values to ASCII characters (fallback).
+
+    Args:
+        amp_left: Amplitude for first character (0.0-1.0)
+        amp_right: Amplitude for second character (0.0-1.0)
+
+    Returns:
+        Two ASCII characters representing amplitudes
+    """
+    idx_left = min(3, int(amp_left * 4))
+    idx_right = min(3, int(amp_right * 4))
+    return ASCII_CHARS[idx_left] + ASCII_CHARS[idx_right]
 
 
 def extract_peaks(
@@ -164,6 +183,8 @@ def render_waveform(
     """
     Render an audio segment as a colored braille waveform string.
 
+    Falls back to ASCII characters when Unicode is not supported.
+
     Args:
         segment: pydub AudioSegment to visualize
         width: Target width in characters (default: terminal width - 10)
@@ -176,9 +197,12 @@ def render_waveform(
     if width is None:
         width = get_terminal_width() - 10  # Leave padding
 
-    # Auto-detect color support
+    # Check Unicode support
+    unicode_ok = supports_unicode()
+
+    # Auto-detect color support (only with Unicode)
     if use_color is None:
-        use_color = supports_unicode()
+        use_color = unicode_ok
 
     # Extract samples
     samples = segment.get_array_of_samples()
@@ -195,8 +219,12 @@ def render_waveform(
         amp_right = peaks[i + 1] if i + 1 < len(peaks) else 0.0
         avg_amp = (amp_left + amp_right) / 2
 
-        char = amplitude_to_braille(amp_left, amp_right)
-        colored = colorize(char, avg_amp, use_color)
-        chars.append(colored)
+        if unicode_ok:
+            char = amplitude_to_braille(amp_left, amp_right)
+            colored = colorize(char, avg_amp, use_color)
+            chars.append(colored)
+        else:
+            # ASCII fallback - 2 chars per position
+            chars.append(amplitude_to_ascii(amp_left, amp_right))
 
     return "".join(chars)

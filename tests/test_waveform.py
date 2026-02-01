@@ -110,3 +110,29 @@ def test_render_waveform_with_color():
     # Should contain ANSI codes
     assert "\033[" in result
     assert "\033[0m" in result
+
+
+def test_amplitude_to_ascii():
+    """ASCII fallback for terminals without Unicode."""
+    from setlist_maker.waveform import amplitude_to_ascii
+
+    assert amplitude_to_ascii(0.0, 0.0) == "__"  # silence
+    assert amplitude_to_ascii(0.5, 0.5) == "##"  # medium
+    assert amplitude_to_ascii(1.0, 1.0) == "^^"  # loud
+
+
+def test_render_waveform_ascii_fallback(monkeypatch):
+    """render_waveform uses ASCII when Unicode not supported."""
+    from setlist_maker.waveform import render_waveform
+
+    monkeypatch.setenv("TERM", "dumb")
+
+    mock_segment = MagicMock()
+    mock_segment.channels = 1
+    mock_segment.get_array_of_samples.return_value = [0, 100, 200, 100, 0] * 100
+
+    result = render_waveform(mock_segment, width=5, use_color=False)
+
+    # Should be ASCII characters only
+    assert all(ord(c) < 128 for c in result)
+    assert any(c in "_#^" for c in result)
