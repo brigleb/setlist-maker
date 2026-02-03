@@ -91,7 +91,7 @@ def extract_peaks(
 
     Args:
         samples: Raw audio samples (interleaved if stereo)
-        num_buckets: Number of output values (typically terminal width * 2)
+        num_buckets: Number of output values (typically terminal width)
         channels: Number of audio channels (1=mono, 2=stereo)
 
     Returns:
@@ -208,23 +208,20 @@ def render_waveform(
     samples = segment.get_array_of_samples()
     channels = segment.channels
 
-    # Need 2 samples per braille character
-    num_buckets = width * 2
+    # One bucket per character (same amplitude for both columns = mono display)
+    num_buckets = width
     peaks = extract_peaks(samples, num_buckets, channels)
 
     # Build waveform string
     chars = []
-    for i in range(0, len(peaks) - 1, 2):
-        amp_left = peaks[i]
-        amp_right = peaks[i + 1] if i + 1 < len(peaks) else 0.0
-        avg_amp = (amp_left + amp_right) / 2
-
+    for peak in peaks:
         if unicode_ok:
-            char = amplitude_to_braille(amp_left, amp_right)
-            colored = colorize(char, avg_amp, use_color)
+            # Same value for both columns creates unified bars
+            char = amplitude_to_braille(peak, peak)
+            colored = colorize(char, peak, use_color)
             chars.append(colored)
         else:
-            # ASCII fallback - 2 chars per position
-            chars.append(amplitude_to_ascii(amp_left, amp_right))
+            # ASCII fallback - same amplitude for both chars
+            chars.append(amplitude_to_ascii(peak, peak))
 
     return "".join(chars)
