@@ -50,7 +50,6 @@ Usage:
 import argparse
 import asyncio
 import json
-import os
 import random
 import sys
 import tempfile
@@ -60,7 +59,7 @@ from pathlib import Path
 from pydub import AudioSegment
 from shazamio import Shazam
 
-from setlist_maker import __version__
+from setlist_maker import AUDIO_EXTENSIONS, __version__
 from setlist_maker.editor import (
     CorrectionsDB,
     Track,
@@ -81,9 +80,6 @@ SAMPLE_DURATION_MS = 30 * 1000  # 30 seconds in milliseconds
 DEFAULT_DELAY_SECONDS = 15  # Pause between API calls
 MAX_RETRIES = 5
 INITIAL_BACKOFF = 30
-
-# Supported audio extensions
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma", ".aiff"}
 
 
 def format_timestamp(seconds: int) -> str:
@@ -157,7 +153,7 @@ async def identify_sample_with_retry(
     Identify a single audio segment using Shazam with exponential backoff retry.
     Returns track info dict or None if not identified.
     """
-    temp_path = os.path.join(temp_dir, "temp_sample.mp3")
+    temp_path = str(Path(temp_dir) / "temp_sample.mp3")
     segment.export(temp_path, format="mp3")
 
     backoff = INITIAL_BACKOFF
@@ -412,7 +408,7 @@ async def process_single_file(
 
     # Clean up progress file
     if progress_path.exists():
-        os.remove(progress_path)
+        progress_path.unlink()
 
     return tracklist, output_path
 

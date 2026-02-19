@@ -21,8 +21,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
 
-# Audio extensions to look for (same as cli.py)
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma", ".aiff"}
+from setlist_maker import AUDIO_EXTENSIONS
 
 
 @dataclass

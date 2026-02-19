@@ -1,3 +1,8 @@
 """Setlist Maker - Generate tracklists from DJ sets using Shazam."""
 
-__version__ = "1.0.0"
+from importlib.metadata import version
+
+__version__ = version("setlist-maker")
+
+# Supported audio extensions (shared across modules)
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma", ".aiff"}
