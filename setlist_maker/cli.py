@@ -75,7 +75,6 @@ from setlist_maker.processor import (
     get_audio_duration,
     process_audio,
 )
-from setlist_maker.waveform import render_waveform
 
 # Configuration
 SAMPLE_DURATION_MS = 30 * 1000  # 30 seconds in milliseconds
@@ -401,9 +400,7 @@ async def process_single_file(
     with tempfile.TemporaryDirectory() as temp_dir:
         for i, (timestamp, segment) in enumerate(slices[start_index:], start_index + 1):
             time_str = format_timestamp(timestamp)
-            waveform = render_waveform(segment)
             print(f"  [{i}/{total_slices}] Sample at {time_str}")
-            print(f"  {waveform}")
 
             track_info = await identify_sample_with_retry(shazam, segment, temp_dir)
 
@@ -592,16 +589,6 @@ def cmd_process(args: argparse.Namespace) -> None:
             verbose=args.verbose if hasattr(args, "verbose") else False,
         )
         print(f"\n✓ Output saved: {result_path}")
-
-        # Show waveform preview of processed audio
-        try:
-            from pydub import AudioSegment as PydubSegment
-
-            preview = PydubSegment.from_file(str(result_path))[:30000]  # First 30 sec
-            waveform = render_waveform(preview)
-            print(f"  {waveform}")
-        except Exception:
-            pass  # Skip waveform if preview fails
 
         # Show output file info
         output_duration = get_audio_duration(result_path)

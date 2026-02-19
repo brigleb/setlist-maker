@@ -5,36 +5,21 @@ Provides a spreadsheet-like interface for:
 - Browsing tracks with arrow keys
 - Rejecting tracks with spacebar
 - Editing artist/title with Enter
-- Playing 30-second audio samples with waveform visualization
 - Saving corrections that improve future identifications
 """
 
 import json
 import re
-import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-from pydub import AudioSegment
-
-# sounddevice is optional - playback won't work without it but editor still functions
-try:
-    import sounddevice as sd
-
-    SOUNDDEVICE_AVAILABLE = True
-except OSError:
-    sd = None  # type: ignore[assignment]
-    SOUNDDEVICE_AVAILABLE = False
-from textual import on, work
+from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
-
-from setlist_maker.waveform import colorize, extract_peaks, supports_unicode
 
 # Audio extensions to look for (same as cli.py)
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".wma", ".aiff"}
@@ -180,148 +165,6 @@ def parse_markdown_tracklist(content: str) -> Tracklist:
     return tracklist
 
 
-class PlaybackEngine:
-    """
-    Audio playback engine for playing segments from an audio file.
-
-    Uses pydub to extract segments and sounddevice for non-blocking playback.
-    """
-
-    def __init__(self, audio_path: Path):
-        """
-        Initialize the playback engine.
-
-        Args:
-            audio_path: Path to the audio file
-
-        Raises:
-            RuntimeError: If sounddevice/PortAudio is not available
-        """
-        if not SOUNDDEVICE_AVAILABLE:
-            raise RuntimeError(
-                "Audio playback requires PortAudio. "
-                "Install it with: apt install libportaudio2"
-            )
-        self.audio_path = audio_path
-        self._audio: AudioSegment | None = None
-        self._playing = False
-        self._stream: sd.OutputStream | None = None  # type: ignore[name-defined]
-        self._playback_position = 0
-        self._total_frames = 0
-        self._lock = threading.Lock()
-        self._waveform_peaks: list[float] = []
-
-    def _load_audio(self) -> None:
-        """Load the audio file if not already loaded."""
-        if self._audio is None:
-            self._audio = AudioSegment.from_file(str(self.audio_path))
-
-    def play_segment(
-        self, start_seconds: int, duration: int = 30
-    ) -> tuple[list[float], int]:
-        """
-        Start playing a segment of the audio file.
-
-        Args:
-            start_seconds: Start position in seconds
-            duration: Duration to play in seconds (default 30)
-
-        Returns:
-            Tuple of (waveform peaks for visualization, sample rate)
-        """
-        self.stop()
-
-        self._load_audio()
-        assert self._audio is not None
-
-        # Extract the segment
-        start_ms = start_seconds * 1000
-        end_ms = start_ms + (duration * 1000)
-        segment = self._audio[start_ms:end_ms]
-
-        # Convert to numpy array for sounddevice
-        samples = np.array(segment.get_array_of_samples(), dtype=np.float32)
-
-        # Normalize to -1.0 to 1.0 range
-        max_val = float(2 ** (segment.sample_width * 8 - 1))
-        samples = samples / max_val
-
-        # Handle stereo
-        if segment.channels == 2:
-            samples = samples.reshape((-1, 2))
-
-        # Extract waveform peaks for visualization (enough for ~80 char width)
-        raw_samples = segment.get_array_of_samples()
-        self._waveform_peaks = extract_peaks(raw_samples, 160, segment.channels)
-
-        self._total_frames = len(samples)
-        self._playback_position = 0
-
-        # Create callback for position tracking
-        def callback(outdata, frames, time_info, status):
-            with self._lock:
-                start = self._playback_position
-                end = start + frames
-
-                if end > len(samples):
-                    # End of audio
-                    outdata[: len(samples) - start] = samples[start:]
-                    outdata[len(samples) - start :] = 0
-                    self._playing = False
-                    raise sd.CallbackStop()
-                else:
-                    outdata[:] = samples[start:end]
-                    self._playback_position = end
-
-        # Start playback
-        self._stream = sd.OutputStream(
-            samplerate=segment.frame_rate,
-            channels=segment.channels,
-            callback=callback,
-            finished_callback=self._on_finished,
-        )
-        self._playing = True
-        self._stream.start()
-
-        return self._waveform_peaks, segment.frame_rate
-
-    def _on_finished(self) -> None:
-        """Called when playback finishes."""
-        with self._lock:
-            self._playing = False
-
-    def stop(self) -> None:
-        """Stop playback."""
-        with self._lock:
-            if self._stream is not None:
-                self._stream.stop()
-                self._stream.close()
-                self._stream = None
-            self._playing = False
-            self._playback_position = 0
-
-    def is_playing(self) -> bool:
-        """Check if audio is currently playing."""
-        with self._lock:
-            return self._playing
-
-    def get_position(self) -> float:
-        """
-        Get current playback position as a fraction (0.0 to 1.0).
-
-        Returns:
-            Playback progress from 0.0 (start) to 1.0 (end)
-        """
-        with self._lock:
-            if self._total_frames == 0:
-                return 0.0
-            return min(1.0, self._playback_position / self._total_frames)
-
-    def get_waveform_peaks(self) -> list[float]:
-        """Get the waveform peaks for visualization."""
-        return self._waveform_peaks
-
-
 def find_audio_file(markdown_path: Path) -> Path | None:
     """
     Find the audio file matching a markdown tracklist.
@@ -454,21 +297,6 @@ class TracklistEditor(App[None]):
         margin-right: 2;
     }
 
-    #waveform-bar {
-        height: 3;
-        background: $primary-background;
-        padding: 0 1;
-        display: none;
-    }
-
-    #waveform-bar.playing {
-        display: block;
-    }
-
-    #info-bar.hidden {
-        display: none;
-    }
-
     DataTable {
         height: 1fr;
     }
@@ -504,7 +332,6 @@ class TracklistEditor(App[None]):
         Binding("s", "save", "Save"),
         Binding("space", "toggle_reject", "Reject/Accept"),
         Binding("enter", "edit_track", "Edit"),
-        Binding("p", "play", "Play"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("?", "show_help", "Help"),
@@ -522,14 +349,6 @@ class TracklistEditor(App[None]):
         self.corrections_db = corrections_db
         self.unsaved_changes = False
 
-        # Audio playback
-        self.audio_file = find_audio_file(output_path)
-        self.playback_engine: PlaybackEngine | None = None
-        self._playback_timer: object | None = None
-        self._waveform_peaks: list[float] = []
-        self._playback_start_timestamp: int = 0
-        self._loading_audio: bool = False
-
     def compose(self) -> ComposeResult:
         yield Header()
         with Container(id="main-container"):
@@ -537,10 +356,9 @@ class TracklistEditor(App[None]):
                 yield Label(f"File: {self.tracklist.source_file}")
                 yield Label(f"Tracks: {len(self.tracklist.tracks)}")
                 yield Label(id="status-label")
-            yield Static("", id="waveform-bar")
             yield DataTable(id="track-table")
         yield Static(
-            "[Space] Reject/Accept  [Enter] Edit  [P] Play  [S] Save  [Q] Quit  [?] Help",
+            "[Space] Reject/Accept  [Enter] Edit  [S] Save  [Q] Quit  [?] Help",
             id="help-bar",
         )
         yield Footer()
@@ -688,7 +506,6 @@ class TracklistEditor(App[None]):
 
     def action_quit(self) -> None:
         """Quit the editor."""
-        self._stop_playback()
         if self.unsaved_changes:
             self.notify(
                 "You have unsaved changes! Press S to save or Q again to quit.",
@@ -701,217 +518,20 @@ class TracklistEditor(App[None]):
 
     def action_cursor_down(self) -> None:
         """Move cursor down."""
-        self._stop_playback()
         table = self.query_one("#track-table", DataTable)
         table.action_cursor_down()
 
     def action_cursor_up(self) -> None:
         """Move cursor up."""
-        self._stop_playback()
         table = self.query_one("#track-table", DataTable)
         table.action_cursor_up()
 
     def action_show_help(self) -> None:
         """Show help information."""
         self.notify(
-            "↑↓/jk: Navigate | Space: Reject | Enter: Edit | P: Play | S: Save | Q: Quit",
+            "↑↓/jk: Navigate | Space: Reject | Enter: Edit | S: Save | Q: Quit",
             title="Keyboard Shortcuts",
         )
-
-    def action_play(self) -> None:
-        """Play/stop the 30-second sample at the current track's timestamp."""
-        # If already playing, stop
-        if self.playback_engine and self.playback_engine.is_playing():
-            self._stop_playback()
-            return
-
-        # If currently loading, ignore
-        if hasattr(self, "_loading_audio") and self._loading_audio:
-            return
-
-        # Check if audio file exists
-        if self.audio_file is None:
-            self.notify(
-                "No audio file found. Expected MP3 in same directory as tracklist.",
-                title="Audio Not Found",
-                severity="error",
-            )
-            return
-
-        # Get current track
-        result = self._get_current_track()
-        if not result:
-            return
-
-        _, track = result
-        self._playback_start_timestamp = track.timestamp
-
-        # Show loading indicator
-        self._show_loading_bar()
-
-        # Start loading in background worker
-        self._start_playback_worker(track.timestamp)
-
-    @work(thread=True)
-    def _start_playback_worker(self, timestamp: int) -> None:
-        """Load and start audio playback in a background thread."""
-        self._loading_audio = True
-        try:
-            # Initialize playback engine if needed (loads audio file)
-            if self.playback_engine is None:
-                self.playback_engine = PlaybackEngine(self.audio_file)
-
-            # Start playback and get waveform data
-            self._waveform_peaks, _ = self.playback_engine.play_segment(timestamp)
-
-            # Schedule UI update on main thread
-            self.call_from_thread(self._on_playback_started)
-
-        except Exception as e:
-            self.call_from_thread(self._on_playback_error, str(e))
-        finally:
-            self._loading_audio = False
-
-    def _on_playback_started(self) -> None:
-        """Called on main thread when playback has started."""
-        # Show waveform bar, hide info bar
-        self._show_waveform_bar(True)
-
-        # Start timer to update waveform display
-        self._playback_timer = self.set_interval(0.1, self._update_waveform_display)
-
-    def _on_playback_error(self, error_message: str) -> None:
-        """Called on main thread when playback fails."""
-        self.notify(
-            f"Playback failed: {error_message}",
-            title="Playback Error",
-            severity="error",
-        )
-        self._stop_playback()
-
-    def _show_loading_bar(self) -> None:
-        """Show a loading indicator while audio loads."""
-        waveform_bar = self.query_one("#waveform-bar", Static)
-        waveform_bar.update("⏳ Loading audio...")
-        info_bar = self.query_one("#info-bar", Horizontal)
-        info_bar.add_class("hidden")
-        waveform_bar.add_class("playing")
-
-    def _stop_playback(self) -> None:
-        """Stop any current playback and restore UI."""
-        self._loading_audio = False
-
-        if self.playback_engine:
-            self.playback_engine.stop()
-
-        if self._playback_timer:
-            self._playback_timer.stop()
-            self._playback_timer = None
-
-        self._show_waveform_bar(False)
-
-    def _show_waveform_bar(self, show: bool) -> None:
-        """Toggle visibility of waveform bar vs info bar."""
-        info_bar = self.query_one("#info-bar", Horizontal)
-        waveform_bar = self.query_one("#waveform-bar", Static)
-
-        if show:
-            info_bar.add_class("hidden")
-            waveform_bar.add_class("playing")
-        else:
-            info_bar.remove_class("hidden")
-            waveform_bar.remove_class("playing")
-            waveform_bar.update("")
-
-    def _update_waveform_display(self) -> None:
-        """Update the waveform display during playback."""
-        if not self.playback_engine or not self.playback_engine.is_playing():
-            self._stop_playback()
-            return
-
-        # Get playback position
-        position = self.playback_engine.get_position()
-        elapsed_seconds = int(position * 30)
-        total_seconds = 30
-
-        # Format timestamp
-        timestamp = self._playback_start_timestamp
-        hours = timestamp // 3600
-        minutes = (timestamp % 3600) // 60
-        secs = timestamp % 60
-        if hours > 0:
-            time_str = f"{hours}:{minutes:02d}:{secs:02d}"
-        else:
-            time_str = f"{minutes}:{secs:02d}"
-
-        # Build waveform visualization
-        waveform_str = self._render_waveform_progress(position)
-
-        # Build display string
-        play_icon = "▶"
-        display = f"{play_icon} {time_str}  {waveform_str}  [{elapsed_seconds}s/{total_seconds}s]"
-
-        waveform_bar = self.query_one("#waveform-bar", Static)
-        waveform_bar.update(display)
-
-    def _render_waveform_progress(self, position: float) -> str:
-        """
-        Render waveform with playback progress indicator.
-
-        Args:
-            position: Playback progress from 0.0 to 1.0
-
-        Returns:
-            Colored waveform string with progress indicator
-        """
-        if not self._waveform_peaks:
-            return ""
-
-        # Target ~60 characters for the waveform
-        target_width = 60
-        peaks = self._waveform_peaks
-
-        # Resample peaks to target width * 2 (for braille pairs)
-        num_chars = min(target_width, len(peaks) // 2)
-        step = len(peaks) / (num_chars * 2)
-
-        use_unicode = supports_unicode()
-        chars = []
-
-        for i in range(num_chars):
-            idx = int(i * 2 * step)
-            idx2 = int((i * 2 + 1) * step)
-            amp_left = peaks[idx] if idx < len(peaks) else 0.0
-            amp_right = peaks[idx2] if idx2 < len(peaks) else 0.0
-            avg_amp = (amp_left + amp_right) / 2
-
-            # Determine if this position has been played
-            char_position = i / num_chars
-            played = char_position < position
-
-            if use_unicode:
-                # Use braille for waveform
-                from setlist_maker.waveform import amplitude_to_braille
-
-                char = amplitude_to_braille(amp_left, amp_right)
-
-                if played:
-                    # Bright cyan for played portion
-                    char = f"\033[96m{char}\033[0m"
-                else:
-                    # Dim for unplayed portion
-                    char = colorize(char, avg_amp * 0.5)
-            else:
-                # ASCII fallback
-                from setlist_maker.waveform import amplitude_to_ascii
-
-                char = amplitude_to_ascii(amp_left, amp_right)
-                if not played:
-                    char = f"\033[90m{char}\033[0m"
-
-            chars.append(char)
-
-        return "".join(chars)
 
 
 class CorrectionsDB:

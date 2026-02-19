@@ -37,3 +37,4 @@ Thumbs.db
 
 # Project specific
 *_progress.json
+.todos/
