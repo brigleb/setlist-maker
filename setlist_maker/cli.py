@@ -311,28 +311,6 @@ def results_to_tracklist(
     )
 
 
-def generate_markdown(tracklist: list[tuple[int, dict | None]], source_filename: str) -> str:
-    """Generate markdown output from the tracklist."""
-    lines = [
-        f"# Tracklist: {source_filename}",
-        "",
-        f"*Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}*",
-        "",
-    ]
-
-    for i, (timestamp, track_info) in enumerate(tracklist, 1):
-        time_str = format_timestamp(timestamp)
-        if track_info is None:
-            lines.append(f"{i}. *Unidentified* ({time_str})")
-        else:
-            artist = track_info["artist"]
-            title = track_info["title"]
-            lines.append(f"{i}. **{artist}** - {title} ({time_str})")
-
-    lines.append("")
-    return "\n".join(lines)
-
-
 def save_progress(results: list, filepath: Path):
     """Save intermediate results to JSON in case of interruption."""
     # Convert to serializable format
