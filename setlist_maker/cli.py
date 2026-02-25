@@ -679,12 +679,16 @@ def _load_tracklist_with_artwork_urls(
             with open(tracklist_path) as f:
                 tracklist = parse_markdown_tracklist(f.read())
 
-            # Map coverart URLs from JSON to tracklist tracks by index
-            for i, jt in enumerate(json_tracks):
-                url = jt.get("coverart_url")
-                if url and i < len(tracklist.tracks):
-                    tracklist.tracks[i].coverart_url = url
-                    coverart_urls[i] = url
+            # Map coverart URLs from JSON to tracklist tracks by timestamp
+            # (index mapping breaks when rejected tracks are excluded from JSON)
+            json_by_timestamp = {jt["timestamp"]: jt for jt in json_tracks if "timestamp" in jt}
+            for i, track in enumerate(tracklist.tracks):
+                jt = json_by_timestamp.get(track.timestamp)
+                if jt:
+                    url = jt.get("coverart_url")
+                    if url:
+                        track.coverart_url = url
+                        coverart_urls[i] = url
 
             return tracklist, coverart_urls
         except (json.JSONDecodeError, IOError):
@@ -709,12 +713,13 @@ def cmd_chapters(args: argparse.Namespace) -> None:
     print(f"Loading tracklist: {tracklist_path.name}")
     tracklist, coverart_urls = _load_tracklist_with_artwork_urls(tracklist_path)
 
-    active_tracks = [t for t in tracklist.tracks if not t.rejected and not t.is_unidentified]
-    if not active_tracks:
+    # Get all non-rejected tracks (including unidentified) for chapter timing
+    chapter_tracks = [t for t in tracklist.tracks if not t.rejected]
+    if not any(not t.is_unidentified for t in chapter_tracks):
         print("Error: No identified tracks found in tracklist.")
         sys.exit(1)
 
-    print(f"  Found {len(active_tracks)} tracks")
+    print(f"  Found {len(chapter_tracks)} tracks")
 
     # Find the audio file
     if args.audio:
@@ -732,9 +737,6 @@ def cmd_chapters(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     print(f"  Audio file: {audio_path.name}")
-
-    # Get all non-rejected tracks (including unidentified) for chapter timing
-    chapter_tracks = [t for t in tracklist.tracks if not t.rejected]
 
     # Fetch artwork and generate chapter images
     chapter_images: dict[int, bytes] = {}

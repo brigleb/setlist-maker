@@ -92,28 +92,25 @@ fall back to the text-overlay approach using the episode artwork as the base.
 ```
 mutagen>=1.47.0    # ID3 tag manipulation (CHAP, CTOC, APIC frames)
 Pillow>=10.0.0     # Image processing for text overlay artwork
-requests>=2.28.0   # HTTP requests for fetching artwork (or use urllib)
 ```
 
-### New module: `setlist_maker/metadata.py`
+### New modules: `setlist_maker/chapters.py` and `setlist_maker/artwork.py`
 
-Core functions:
+`chapters.py` — ID3v2 chapter embedding:
 
 ```python
-def embed_episode_artwork(mp3_path, image_path):
-    """Embed episode-level cover art as APIC frame (type 3)."""
+def embed_chapters(audio_path, tracks, chapter_images=None, episode_image=None):
+    """Write CHAP + CTOC frames from a list of Tracks."""
+```
 
-def embed_chapters(mp3_path, tracklist, audio_duration_ms):
-    """Write CHAP + CTOC frames from a Tracklist."""
+`artwork.py` — Artwork fetching and chapter image generation:
 
-def embed_chapter_artwork(mp3_path, chapter_id, image_data):
-    """Add APIC sub-frame to an existing CHAP frame."""
+```python
+def fetch_artwork(artist, title, coverart_url=None, size=600):
+    """Fetch artwork: try coverart_url first, fall back to iTunes Search API."""
 
-def fetch_track_artwork(artist, title, artwork_url=None):
-    """Fetch artwork: try artwork_url first, fall back to iTunes Search API."""
-
-def generate_overlay_artwork(base_image_path, artist, title, size=(600, 600)):
-    """Render artist/title text over base image, MTV lower-third style."""
+def create_chapter_image(artwork_bytes, artist, title, size=600):
+    """Render MTV-style lower-third overlay image for chapter markers."""
 ```
 
 ### Changes to existing code
@@ -137,18 +134,17 @@ def generate_overlay_artwork(base_image_path, artist, title, size=(600, 600)):
    processing), if `--chapters` is set, call the metadata module to embed
    chapters into the MP3.
 
-### New subcommand: `tag`
+### New subcommand: `chapters`
 
-Alternatively, add a `tag` subcommand that can be run independently:
+A `chapters` subcommand that can be run independently:
 
 ```
-setlist-maker tag recording.mp3 recording_tracklist.json \
-  --artwork cover.jpg \
-  --chapters \
-  --chapter-art
+setlist-maker chapters recording_tracklist.md
+setlist-maker chapters recording_tracklist.md --audio recording.mp3
+setlist-maker chapters recording_tracklist.md --no-artwork
 ```
 
-This would let users tag an existing MP3 with an existing tracklist JSON,
+This lets users embed chapters into an existing MP3 with an existing tracklist,
 without re-running identification. Useful for re-tagging with different
 artwork or after manual tracklist edits.
 

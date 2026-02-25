@@ -31,18 +31,25 @@ class TestResizeCoverArtUrl:
     def test_resizes_standard_url(self):
         url = "https://is1-ssl.mzstatic.com/image/400x400cc.jpg"
         result = resize_cover_art_url(url, 600)
-        assert "600x600" in result
+        assert "600x600cc" in result
 
-    def test_resizes_different_dimensions(self):
+    def test_resizes_bb_suffix(self):
         url = "https://example.com/art/100x100bb.jpg"
         result = resize_cover_art_url(url, 1200)
-        assert "1200x1200" in result
+        assert "1200x1200bb" in result
 
     def test_handles_url_without_dimensions(self):
         url = "https://example.com/image.jpg"
         result = resize_cover_art_url(url, 600)
         # Should return unchanged since no dimension pattern found
         assert result == url
+
+    def test_does_not_mangle_other_dimension_patterns(self):
+        url = "https://is1-ssl.mzstatic.com/image/thumb/Music124/v4/12x34/400x400bb.jpg"
+        result = resize_cover_art_url(url, 600)
+        # Should only replace the 400x400bb part, not 12x34
+        assert "12x34" in result
+        assert "600x600bb" in result
 
 
 class TestSearchItunesArtwork:

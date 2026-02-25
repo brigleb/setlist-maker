@@ -9,11 +9,14 @@ Provides functionality for:
 
 import io
 import json
+import logging
 import re
 import urllib.parse
 import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont
+
+logger = logging.getLogger(__name__)
 
 # Target size for chapter artwork (square, pixels)
 CHAPTER_IMAGE_SIZE = 600
@@ -40,7 +43,8 @@ def download_image(url: str, timeout: int = 15) -> bytes | None:
         req = urllib.request.Request(url, headers={"User-Agent": "setlist-maker/1.0"})
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return response.read()
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to download image from %s: %s", url, e)
         return None
 
 
@@ -76,8 +80,8 @@ def search_itunes_artwork(artist: str, title: str, size: int = 600) -> str | Non
             artwork_url = result.get("artworkUrl100", "")
             if artwork_url:
                 return artwork_url.replace("100x100bb", f"{size}x{size}bb")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("iTunes artwork search failed for '%s %s': %s", artist, title, e)
 
     return None
 
@@ -96,7 +100,7 @@ def resize_cover_art_url(url: str, size: int = 600) -> str:
     Returns:
         URL with updated dimensions.
     """
-    return re.sub(r"\d+x\d+", f"{size}x{size}", url)
+    return re.sub(r"\d+x\d+(?=bb|cc)", f"{size}x{size}", url)
 
 
 def fetch_artwork(
@@ -215,7 +219,8 @@ def create_chapter_image(
         try:
             base = Image.open(io.BytesIO(artwork_bytes)).convert("RGBA")
             base = base.resize((size, size), Image.LANCZOS)
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to load artwork image, using fallback: %s", e)
             base = _create_fallback_background(size)
     else:
         base = _create_fallback_background(size)

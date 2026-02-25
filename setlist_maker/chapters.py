@@ -66,6 +66,20 @@ def embed_chapters(
     # Remove any existing chapter-related frames
     _remove_existing_chapters(audio)
 
+    # Add episode-level artwork before chapters so delall("APIC") doesn't
+    # risk interfering with CHAP sub-frames
+    if episode_image:
+        audio.tags.delall("APIC")
+        audio.tags.add(
+            APIC(
+                encoding=3,
+                mime="image/jpeg",
+                type=PictureType.COVER_FRONT,
+                desc="Episode Cover",
+                data=episode_image,
+            )
+        )
+
     # Build chapter element IDs
     chapter_ids = [f"chp{i:03d}" for i in range(len(tracks))]
 
@@ -122,20 +136,6 @@ def embed_chapters(
             ],
         )
     )
-
-    # Add episode-level artwork
-    if episode_image:
-        # Remove existing cover art first
-        audio.tags.delall("APIC")
-        audio.tags.add(
-            APIC(
-                encoding=3,
-                mime="image/jpeg",
-                type=PictureType.COVER_FRONT,
-                desc="Episode Cover",
-                data=episode_image,
-            )
-        )
 
     audio.save()
     return audio_path
