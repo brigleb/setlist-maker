@@ -9,6 +9,7 @@ You just played a 2-hour set and can't remember half the tracks you played. Setl
 - Identify tracks via Shazam across full-length recordings
 - Join, compress, and normalize audio with a single command
 - Review and correct results in an interactive TUI editor
+- Embed chapter markers and artwork into MP3s for podcast players
 - Learns from your corrections to improve future runs
 - Resume interrupted sessions — progress is saved automatically
 - Outputs markdown and JSON tracklists
@@ -142,6 +143,25 @@ setlist-maker my_set_tracklist.md
 | `Q` | Quit |
 | `?` | Show help |
 
+### Chapter Markers & Artwork (`chapters`)
+
+After identifying and editing a tracklist, embed it as navigable chapter markers in the MP3 — with per-chapter artwork fetched from Shazam/iTunes:
+
+```bash
+# Embed chapters (auto-detects the audio file from tracklist name)
+setlist-maker chapters my_set_tracklist.md
+
+# Specify the audio file explicitly
+setlist-maker chapters my_set_tracklist.md --audio my_set.mp3
+
+# Chapters only, skip artwork fetching
+setlist-maker chapters my_set_tracklist.md --no-artwork
+```
+
+This writes ID3v2 CHAP/CTOC frames into the MP3. Podcast players (Apple Podcasts, Overcast, Pocket Casts, etc.) and VLC will show a chapter list with timestamps, titles, and artwork for each track.
+
+For each track, artwork is fetched from the Shazam cover art URL saved during identification. If that fails, it falls back to the iTunes Search API. Each chapter image gets an MTV-style lower-third overlay with the artist and title.
+
 ### Learning from Corrections
 
 When you fix a misidentified track in the editor, Setlist Maker remembers the correction and automatically applies it in future runs. Corrections are stored in `~/.config/setlist-maker/corrections.json`.
@@ -176,6 +196,13 @@ setlist-maker recording.mp3 --no-learn
 | `-d, --delay` | Delay in seconds between API calls (default: 15) |
 | `--no-resume` | Start fresh instead of resuming from previous progress |
 | `--no-learn` | Disable learning from corrections |
+
+### Chapters Command
+
+| Option | Description |
+|--------|-------------|
+| `--audio` | Path to the MP3 file (auto-detected from tracklist name if omitted) |
+| `--no-artwork` | Skip artwork fetching (embed chapter markers only) |
 
 ### Global Options
 

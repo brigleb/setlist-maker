@@ -34,6 +34,7 @@ class Track:
     rejected: bool = False
     shazam_url: str | None = None
     album: str | None = None
+    coverart_url: str | None = None
     original_artist: str | None = None  # For tracking corrections
     original_title: str | None = None
 
@@ -102,6 +103,7 @@ class Tracklist:
                 "rejected": t.rejected,
                 "shazam_url": t.shazam_url,
                 "album": t.album,
+                "coverart_url": t.coverart_url,
             }
             for t in self.tracks
             if not t.rejected

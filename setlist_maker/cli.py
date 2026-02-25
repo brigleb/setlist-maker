@@ -60,10 +60,13 @@ from pydub import AudioSegment
 from shazamio import Shazam
 
 from setlist_maker import AUDIO_EXTENSIONS, __version__
+from setlist_maker.artwork import create_chapter_image, fetch_artwork
+from setlist_maker.chapters import embed_chapters
 from setlist_maker.editor import (
     CorrectionsDB,
     Track,
     Tracklist,
+    find_audio_file,
     parse_markdown_tracklist,
     run_editor,
 )
@@ -162,6 +165,7 @@ async def identify_sample_with_retry(
             result = await shazam.recognize(temp_path)
             if result and "track" in result:
                 track = result["track"]
+                images = track.get("images", {})
                 return {
                     "title": track.get("title", "Unknown Title"),
                     "artist": track.get("subtitle", "Unknown Artist"),
@@ -169,6 +173,7 @@ async def identify_sample_with_retry(
                     "album": track.get("sections", [{}])[0].get("metadata", [{}])[0].get("text")
                     if track.get("sections")
                     else None,
+                    "coverart_url": images.get("coverarthq") or images.get("coverart"),
                 }
             return None
         except Exception as e:
@@ -293,6 +298,7 @@ def results_to_tracklist(
                 title=track_info.get("title", ""),
                 shazam_url=track_info.get("shazam_url"),
                 album=track_info.get("album"),
+                coverart_url=track_info.get("coverart_url"),
                 original_artist=track_info.get("original_artist"),
                 original_title=track_info.get("original_title"),
             )
@@ -645,6 +651,161 @@ def cmd_identify(args: argparse.Namespace) -> None:
     )
 
 
+def _load_tracklist_with_artwork_urls(
+    tracklist_path: Path,
+) -> tuple[Tracklist, dict[int, str]]:
+    """
+    Load a tracklist and extract any saved cover art URLs.
+
+    Tries the JSON sidecar file first (has coverart_url), falls back to
+    parsing the markdown.
+
+    Args:
+        tracklist_path: Path to the markdown tracklist file.
+
+    Returns:
+        Tuple of (Tracklist, dict mapping track index to coverart_url).
+    """
+    coverart_urls: dict[int, str] = {}
+
+    # Try loading from JSON sidecar for richer metadata
+    json_path = tracklist_path.with_suffix(".json")
+    if json_path.exists():
+        try:
+            with open(json_path) as f:
+                json_tracks = json.load(f)
+
+            # Parse markdown for the canonical tracklist structure
+            with open(tracklist_path) as f:
+                tracklist = parse_markdown_tracklist(f.read())
+
+            # Map coverart URLs from JSON to tracklist tracks by timestamp
+            # (index mapping breaks when rejected tracks are excluded from JSON)
+            json_by_timestamp = {jt["timestamp"]: jt for jt in json_tracks if "timestamp" in jt}
+            for i, track in enumerate(tracklist.tracks):
+                jt = json_by_timestamp.get(track.timestamp)
+                if jt:
+                    url = jt.get("coverart_url")
+                    if url:
+                        track.coverart_url = url
+                        coverart_urls[i] = url
+
+            return tracklist, coverart_urls
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # Fallback: parse markdown only (no coverart URLs available)
+    with open(tracklist_path) as f:
+        tracklist = parse_markdown_tracklist(f.read())
+
+    return tracklist, coverart_urls
+
+
+def cmd_chapters(args: argparse.Namespace) -> None:
+    """Handle the 'chapters' subcommand for embedding chapter markers."""
+    tracklist_path = Path(args.tracklist)
+
+    if not tracklist_path.exists():
+        print(f"Error: Tracklist file not found: {tracklist_path}")
+        sys.exit(1)
+
+    # Load tracklist with any saved artwork URLs
+    print(f"Loading tracklist: {tracklist_path.name}")
+    tracklist, coverart_urls = _load_tracklist_with_artwork_urls(tracklist_path)
+
+    # Get all non-rejected tracks (including unidentified) for chapter timing
+    chapter_tracks = [t for t in tracklist.tracks if not t.rejected]
+    if not any(not t.is_unidentified for t in chapter_tracks):
+        print("Error: No identified tracks found in tracklist.")
+        sys.exit(1)
+
+    print(f"  Found {len(chapter_tracks)} tracks")
+
+    # Find the audio file
+    if args.audio:
+        audio_path = Path(args.audio)
+    else:
+        audio_path = find_audio_file(tracklist_path)
+
+    if not audio_path or not audio_path.exists():
+        print("Error: Could not find the audio file.")
+        print("  Use --audio to specify the MP3 file path.")
+        sys.exit(1)
+
+    if audio_path.suffix.lower() != ".mp3":
+        print(f"Error: Chapter markers require an MP3 file, got: {audio_path.suffix}")
+        sys.exit(1)
+
+    print(f"  Audio file: {audio_path.name}")
+
+    # Fetch artwork and generate chapter images
+    chapter_images: dict[int, bytes] = {}
+    episode_image: bytes | None = None
+
+    if not args.no_artwork:
+        print(f"\n{'─' * 60}")
+        print("Fetching artwork...")
+
+        for i, track in enumerate(chapter_tracks):
+            if track.is_unidentified:
+                print(f"  [{i + 1}/{len(chapter_tracks)}] {track.time_str} - Skipping unidentified")
+                continue
+
+            label = f"{track.artist} - {track.title}"
+            print(f"  [{i + 1}/{len(chapter_tracks)}] {track.time_str} - {label}")
+
+            # Fetch cover art
+            artwork_bytes = fetch_artwork(
+                artist=track.artist,
+                title=track.title,
+                coverart_url=track.coverart_url,
+            )
+
+            if artwork_bytes:
+                print("    Found artwork, generating chapter image...")
+            else:
+                print("    No artwork found, using text-only image")
+
+            # Create MTV-style overlay image
+            chapter_img = create_chapter_image(
+                artwork_bytes=artwork_bytes,
+                artist=track.artist,
+                title=track.title,
+            )
+            chapter_images[i] = chapter_img
+
+            # Use first track's artwork as episode cover
+            if episode_image is None and artwork_bytes:
+                episode_image = create_chapter_image(
+                    artwork_bytes=artwork_bytes,
+                    artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
+                    title="Tracklist",
+                )
+
+        print(f"  Generated {len(chapter_images)} chapter image(s)")
+
+    # Embed chapters into MP3
+    print(f"\n{'─' * 60}")
+    print("Embedding chapter markers...")
+
+    embed_chapters(
+        audio_path=audio_path,
+        tracks=chapter_tracks,
+        chapter_images=chapter_images if not args.no_artwork else None,
+        episode_image=episode_image if not args.no_artwork else None,
+    )
+
+    print(f"\n  Embedded {len(chapter_tracks)} chapter(s) into {audio_path.name}")
+    if chapter_images:
+        print(f"  Embedded {len(chapter_images)} chapter image(s)")
+    if episode_image:
+        print("  Embedded episode cover art")
+
+    print(f"\n{'=' * 60}")
+    print("Done! Chapter markers embedded successfully.")
+    print(f"{'=' * 60}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate tracklists from DJ sets or long audio recordings using Shazam.",
@@ -659,6 +820,10 @@ Examples:
   # Process audio files
   %(prog)s process part1.wav part2.wav -o set.mp3 # Join and process files
   %(prog)s process *.wav -o out.mp3 --identify    # Process and identify tracks
+
+  # Embed chapter markers and artwork into MP3
+  %(prog)s chapters recording_tracklist.md        # Auto-detect audio file
+  %(prog)s chapters tracklist.md --audio set.mp3  # Specify audio file
 """,
     )
 
@@ -814,6 +979,37 @@ Examples:
     )
 
     # ─────────────────────────────────────────────────────────────────────────
+    # 'chapters' subcommand - embed chapter markers and artwork
+    # ─────────────────────────────────────────────────────────────────────────
+    chapters_parser = subparsers.add_parser(
+        "chapters",
+        help="Embed chapter markers and artwork into an MP3 file",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s recording_tracklist.md
+  %(prog)s recording_tracklist.md --audio recording.mp3
+  %(prog)s recording_tracklist.md --no-artwork
+""",
+    )
+
+    chapters_parser.add_argument(
+        "tracklist",
+        help="Markdown tracklist file (from identify or editor)",
+    )
+
+    chapters_parser.add_argument(
+        "--audio",
+        help="Path to the MP3 file (auto-detected from tracklist name if omitted)",
+    )
+
+    chapters_parser.add_argument(
+        "--no-artwork",
+        action="store_true",
+        help="Skip artwork fetching (embed chapter markers only)",
+    )
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Parse and route
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -822,7 +1018,7 @@ Examples:
     if len(sys.argv) > 1:
         first_arg = sys.argv[1]
         # If first arg is not a known subcommand and not a flag, insert 'identify'
-        if first_arg not in ("process", "identify", "-h", "--help", "-v", "--version"):
+        if first_arg not in ("process", "identify", "chapters", "-h", "--help", "-v", "--version"):
             sys.argv.insert(1, "identify")
 
     args = parser.parse_args()
@@ -837,6 +1033,8 @@ Examples:
         cmd_process(args)
     elif args.command == "identify":
         cmd_identify(args)
+    elif args.command == "chapters":
+        cmd_chapters(args)
 
 
 if __name__ == "__main__":
