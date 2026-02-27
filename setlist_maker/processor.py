@@ -14,10 +14,12 @@ Requires ffmpeg installed on your system:
     Windows: download from ffmpeg.org and add to PATH
 """
 
+import json
+import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -235,6 +237,132 @@ def process_audio(
             raise FFmpegError(f"FFmpeg processing failed:\n{error_msg}")
 
     return output_file
+
+
+@dataclass
+class AudioAnalysis:
+    """Results from analyzing an audio file."""
+
+    duration: float | None = None
+    size_bytes: int = 0
+    loudness_i: float | None = None  # Integrated loudness (LUFS)
+    true_peak: float | None = None  # True peak (dBTP)
+    loudness_range: float | None = None  # Loudness range (LU)
+    waveform: list[float] = field(default_factory=list)  # Normalized 0.0-1.0 RMS values
+
+
+def analyze_audio(audio_file: Path, waveform_points: int = 60) -> AudioAnalysis:
+    """
+    Analyze an audio file for loudness stats and waveform data.
+
+    Runs two read-only FFmpeg passes:
+    1. loudnorm filter for loudness statistics
+    2. astats filter for per-chunk RMS levels (sparkline data)
+
+    Args:
+        audio_file: Path to the audio file.
+        waveform_points: Number of waveform data points to return.
+
+    Returns:
+        AudioAnalysis with whatever data could be gathered.
+    """
+    analysis = AudioAnalysis(
+        duration=get_audio_duration(audio_file),
+        size_bytes=audio_file.stat().st_size if audio_file.exists() else 0,
+    )
+
+    # Pass 1: Loudness stats via loudnorm
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-i",
+                str(audio_file),
+                "-af",
+                "loudnorm=print_format=json",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+        if result.returncode == 0:
+            # Extract JSON block from stderr
+            match = re.search(r"\{[^}]+\}", result.stderr, re.DOTALL)
+            if match:
+                stats = json.loads(match.group())
+                analysis.loudness_i = float(stats.get("input_i", 0))
+                analysis.true_peak = float(stats.get("input_tp", 0))
+                analysis.loudness_range = float(stats.get("input_lra", 0))
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError, ValueError):
+        pass
+
+    # Pass 2: Waveform data via astats + ametadata
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-i",
+                str(audio_file),
+                "-af",
+                "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+        if result.returncode == 0:
+            # Parse RMS dB values from stderr
+            rms_pattern = re.compile(r"RMS_level=(-?[\d.]+)")
+            rms_values = [
+                float(m.group(1))
+                for m in rms_pattern.finditer(result.stderr)
+                if m.group(1) != "-inf"
+            ]
+
+            if rms_values:
+                analysis.waveform = _downsample_to_sparkline(rms_values, waveform_points)
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        pass
+
+    return analysis
+
+
+def _downsample_to_sparkline(db_values: list[float], num_points: int) -> list[float]:
+    """
+    Downsample RMS dB values to normalized 0.0-1.0 values for sparkline display.
+
+    Splits the input into num_points buckets, averages each bucket,
+    then normalizes against the range of values seen.
+    """
+    if not db_values:
+        return []
+
+    # Split into buckets and average
+    bucket_size = max(1, len(db_values) // num_points)
+    buckets = []
+    for i in range(0, len(db_values), bucket_size):
+        chunk = db_values[i : i + bucket_size]
+        buckets.append(sum(chunk) / len(chunk))
+
+    # Trim to desired number of points
+    buckets = buckets[:num_points]
+
+    # Normalize to 0.0-1.0 range
+    min_val = min(buckets)
+    max_val = max(buckets)
+    val_range = max_val - min_val
+
+    if val_range < 0.01:
+        # All values roughly the same — flat line at mid-height
+        return [0.5] * len(buckets)
+
+    return [(v - min_val) / val_range for v in buckets]
 
 
 def get_audio_duration(audio_file: Path) -> float | None:

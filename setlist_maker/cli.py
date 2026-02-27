@@ -71,8 +71,10 @@ from setlist_maker.editor import (
     run_editor,
 )
 from setlist_maker.processor import (
+    AudioAnalysis,
     FFmpegError,
     ProcessingConfig,
+    analyze_audio,
     check_ffmpeg,
     get_audio_duration,
     process_audio,
@@ -486,6 +488,75 @@ def format_duration(seconds: float) -> str:
     return f"{secs}s"
 
 
+SPARKLINE_CHARS = " ▁▂▃▄▅▆▇█"
+
+
+def render_sparkline(values: list[float]) -> str:
+    """Map normalized 0.0-1.0 values to sparkline characters."""
+    if not values:
+        return ""
+    return "".join(SPARKLINE_CHARS[min(int(v * 8) + 1, 8)] for v in values)
+
+
+def _format_change(before: float, after: float) -> str:
+    """Format a numeric change as +/- delta."""
+    delta = after - before
+    sign = "+" if delta >= 0 else ""
+    return f"{sign}{delta:.1f}"
+
+
+def print_processing_summary(before: AudioAnalysis, after: AudioAnalysis) -> None:
+    """Print a before/after processing summary with sparklines and loudness stats."""
+    print(f"\n{'═' * 60}")
+    print("  Processing Summary")
+    print(f"{'═' * 60}")
+
+    # Duration change
+    if before.duration and after.duration:
+        trimmed = before.duration - after.duration
+        before_dur = format_duration(before.duration)
+        after_dur = format_duration(after.duration)
+        line = f"  Duration:  {before_dur} → {after_dur}"
+        if trimmed > 1.0:
+            line += f"  (trimmed {format_duration(trimmed)})"
+        print(f"\n{line}")
+
+    # Size change
+    if before.size_bytes and after.size_bytes:
+        before_mb = before.size_bytes / (1024 * 1024)
+        after_mb = after.size_bytes / (1024 * 1024)
+        print(f"  Size:      {before_mb:.1f} MB → {after_mb:.1f} MB")
+
+    # Loudness stats
+    if before.loudness_i is not None and after.loudness_i is not None:
+        print("\n  Loudness:")
+        print(
+            f"    Before:  {before.loudness_i:>6.1f} LUFS  │"
+            f"  {before.true_peak:>5.1f} dBTP  │"
+            f"  LRA {before.loudness_range:>4.1f} LU"
+        )
+        print(
+            f"    After:   {after.loudness_i:>6.1f} LUFS  │"
+            f"  {after.true_peak:>5.1f} dBTP  │"
+            f"  LRA {after.loudness_range:>4.1f} LU"
+        )
+        print(
+            f"             {_format_change(before.loudness_i, after.loudness_i):>6}"
+            f"        "
+            f"{_format_change(before.true_peak, after.true_peak):>6}"
+            f"        "
+            f"{_format_change(before.loudness_range, after.loudness_range):>6}"
+        )
+
+    # Waveform sparklines
+    if before.waveform:
+        print(f"\n  Waveform (before):\n  {render_sparkline(before.waveform)}")
+    if after.waveform:
+        print(f"\n  Waveform (after):\n  {render_sparkline(after.waveform)}")
+
+    print(f"\n{'═' * 60}")
+
+
 def cmd_process(args: argparse.Namespace) -> None:
     """Handle the 'process' subcommand for audio processing."""
     # Verify FFmpeg is available
@@ -586,8 +657,14 @@ def cmd_process(args: argparse.Namespace) -> None:
         for i, stage in enumerate(active_stages, 1):
             print(f"  {i}. {stage.label}")
 
-    # Run processing
+    # Analyze input before processing
     print(f"\n{'─' * 60}")
+    print("Analyzing input audio...")
+    # For multiple files, analyze the first one as representative
+    analysis_input_file = input_files[0] if len(input_files) == 1 else None
+    before_analysis = analyze_audio(analysis_input_file) if analysis_input_file else None
+
+    # Run processing
     print("Processing audio...")
 
     try:
@@ -599,17 +676,22 @@ def cmd_process(args: argparse.Namespace) -> None:
         )
         print(f"\n✓ Output saved: {result_path}")
 
-        # Show output file info
-        output_duration = get_audio_duration(result_path)
-        if output_duration:
-            print(f"  Duration: {format_duration(output_duration)}")
-
-        output_size = result_path.stat().st_size
-        print(f"  Size: {output_size / (1024 * 1024):.1f} MB")
-
     except FFmpegError as e:
         print(f"\nError: {e}")
         sys.exit(1)
+
+    # Analyze output and print summary
+    print("Analyzing output audio...")
+    after_analysis = analyze_audio(result_path)
+
+    # If we didn't analyze input (multiple files), use total_duration and size
+    if before_analysis is None:
+        before_analysis = AudioAnalysis(
+            duration=total_duration if total_duration > 0 else None,
+            size_bytes=sum(f.stat().st_size for f in input_files),
+        )
+
+    print_processing_summary(before_analysis, after_analysis)
 
     # Chain to identification if requested
     if args.identify:
