@@ -77,6 +77,7 @@ from setlist_maker.processor import (
     get_audio_duration,
     process_audio,
 )
+from setlist_maker.stage_picker import Stage, run_stage_picker
 
 # Configuration
 SAMPLE_DURATION_MS = 30 * 1000  # 30 seconds in milliseconds
@@ -541,21 +542,49 @@ def cmd_process(args: argparse.Namespace) -> None:
         apply_normalization=not args.no_normalize,
     )
 
-    # Show processing stages
-    stages = []
+    # Build processing stages
+    stages: list[Stage] = []
     if len(input_files) > 1:
-        stages.append("Concatenate files")
-    if config.remove_silence:
-        stages.append("Remove leading silence")
-    if config.apply_compression:
-        stages.append("Apply compression")
-    if config.apply_normalization:
-        stages.append(f"Normalize loudness ({config.target_loudness} LUFS)")
-    stages.append(f"Export MP3 @ {config.bitrate}")
+        stages.append(Stage("concat", "Concatenate files"))
+    stages.append(Stage("silence", "Remove leading silence", config.remove_silence))
+    stages.append(Stage("compress", "Apply compression", config.apply_compression))
+    stages.append(
+        Stage(
+            "normalize",
+            f"Normalize loudness ({config.target_loudness} LUFS)",
+            config.apply_normalization,
+        )
+    )
+    stages.append(Stage("export", f"Export MP3 @ {config.bitrate}"))
 
-    print("\nProcessing stages:")
-    for i, stage in enumerate(stages, 1):
-        print(f"  {i}. {stage}")
+    # Show interactive picker if no --no-* flags were used
+    has_overrides = args.no_compress or args.no_normalize or args.no_silence_removal
+    if not has_overrides:
+        selected = run_stage_picker(stages)
+        if selected is None:
+            print("Cancelled.")
+            sys.exit(0)
+
+        # Update config from selection
+        config.remove_silence = "silence" in selected
+        config.apply_compression = "compress" in selected
+        config.apply_normalization = "normalize" in selected
+
+        # Show what was selected
+        print(f"\n{'─' * 60}")
+        active = [s for s in stages if s.key in selected]
+        if active:
+            print("Selected stages:")
+            for i, stage in enumerate(active, 1):
+                print(f"  {i}. {stage.label}")
+        else:
+            print("No stages selected.")
+            sys.exit(0)
+    else:
+        print("\nProcessing stages:")
+        active_stages = [s for s in stages if s.enabled]
+        for i, stage in enumerate(active_stages, 1):
+            print(f"  {i}. {stage.label}")
 
     # Run processing
     print(f"\n{'─' * 60}")
