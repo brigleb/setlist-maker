@@ -3,7 +3,7 @@ Audio Processor - FFmpeg-based audio processing for DJ set recordings.
 
 Provides functionality for:
     - Joining multiple audio files
-    - Removing leading silence
+    - Smart content-boundary trimming (leading/trailing noise removal)
     - Applying compression for broadcast
     - Normalizing loudness (LUFS)
     - Exporting as MP3 CBR
@@ -24,12 +24,25 @@ from pathlib import Path
 
 
 @dataclass
+class ContentBoundaries:
+    """Detected start/end of actual content (music) in an audio file."""
+
+    content_start: float  # seconds
+    content_end: float  # seconds
+    total_duration: float  # seconds
+
+
+@dataclass
 class ProcessingConfig:
     """Configuration for audio processing pipeline."""
 
-    # Silence removal
-    silence_threshold_db: float = -50.0
-    silence_duration: float = 0.1
+    # Content trimming
+    trim_threshold_db: float = -50.0
+    trim_chunk_duration: float = 5.0
+    trim_consecutive_chunks: int = 3
+    trim_padding_seconds: float = 2.0
+    fade_in_duration: float = 3.0
+    fade_out_duration: float = 3.0
 
     # Compression
     compressor_threshold_db: float = -18.0
@@ -46,7 +59,7 @@ class ProcessingConfig:
     bitrate: str = "192k"
 
     # Pipeline toggles
-    remove_silence: bool = True
+    trim_silence: bool = True
     apply_compression: bool = True
     apply_normalization: bool = True
 
@@ -105,25 +118,34 @@ def create_concat_file(input_files: list[Path], concat_path: Path) -> None:
             f.write(f"file '{escaped_path}'\n")
 
 
-def build_filter_chain(config: ProcessingConfig) -> str:
+def build_filter_chain(
+    config: ProcessingConfig,
+    boundaries: ContentBoundaries | None = None,
+) -> str:
     """
     Build the FFmpeg audio filter chain string.
 
     Args:
         config: Processing configuration.
+        boundaries: Detected content boundaries (for fade calculation).
 
     Returns:
         Filter chain string for FFmpeg -af parameter.
     """
     filters = []
 
-    # Silence removal filter
-    if config.remove_silence:
-        filters.append(
-            f"silenceremove=start_periods=1"
-            f":start_threshold={config.silence_threshold_db}dB"
-            f":start_duration={config.silence_duration}"
-        )
+    # Fade in/out (applied before compression so the ramp is natural)
+    if config.trim_silence and boundaries is not None:
+        content_duration = boundaries.content_end - boundaries.content_start
+        fade_in = min(config.fade_in_duration, content_duration / 2)
+        fade_out = min(config.fade_out_duration, content_duration / 2)
+
+        if fade_in > 0:
+            filters.append(f"afade=t=in:d={fade_in}")
+        if fade_out > 0:
+            # fade out starts relative to the trimmed content
+            fade_out_start = content_duration - fade_out
+            filters.append(f"afade=t=out:st={fade_out_start}:d={fade_out}")
 
     # Compressor filter
     if config.apply_compression:
@@ -141,6 +163,166 @@ def build_filter_chain(config: ProcessingConfig) -> str:
         )
 
     return ",".join(filters)
+
+
+def _get_sample_rate(audio_file: Path) -> int:
+    """Get the sample rate of an audio file using ffprobe."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=sample_rate",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(audio_file),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return int(result.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        pass
+    return 44100  # safe default
+
+
+def detect_content_boundaries(
+    audio_file: Path,
+    threshold_db: float = -50.0,
+    chunk_duration: float = 5.0,
+    required_consecutive: int = 3,
+    padding_seconds: float = 2.0,
+    verbose: bool = False,
+) -> ContentBoundaries:
+    """
+    Detect where actual content (music) starts and ends in an audio file.
+
+    Uses FFmpeg astats to compute RMS levels in fixed-size chunks, then walks
+    forward/backward to find runs of consecutive above-threshold chunks.
+
+    Args:
+        audio_file: Path to the audio file to analyze.
+        threshold_db: RMS threshold in dB — chunks above this are "content".
+        chunk_duration: Duration of each analysis chunk in seconds.
+        required_consecutive: How many consecutive above-threshold chunks needed.
+        padding_seconds: Extra seconds to keep before/after detected boundaries.
+        verbose: Print debug info.
+
+    Returns:
+        ContentBoundaries with detected start/end times.
+    """
+    total_duration = get_audio_duration(audio_file)
+    if total_duration is None or total_duration <= 0:
+        return ContentBoundaries(content_start=0.0, content_end=0.0, total_duration=0.0)
+
+    # For very short files, reduce consecutive requirement
+    num_possible_chunks = int(total_duration / chunk_duration)
+    effective_consecutive = min(required_consecutive, max(1, num_possible_chunks))
+
+    # Get sample rate to compute astats reset value
+    sample_rate = _get_sample_rate(audio_file)
+    reset_samples = int(sample_rate * chunk_duration)
+
+    # Run astats with reset to get per-chunk RMS values
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-i",
+            str(audio_file),
+            "-af",
+            f"astats=metadata=1:reset={reset_samples}"
+            f",ametadata=print:key=lavfi.astats.Overall.RMS_level",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=3600,
+    )
+
+    if result.returncode != 0:
+        # Fallback: don't trim
+        return ContentBoundaries(
+            content_start=0.0, content_end=total_duration, total_duration=total_duration
+        )
+
+    # Parse RMS values from stderr
+    rms_pattern = re.compile(r"RMS_level=(-?[\d.]+|-inf)")
+    rms_values = []
+    for m in rms_pattern.finditer(result.stderr):
+        val = m.group(1)
+        rms_values.append(float("-inf") if val == "-inf" else float(val))
+
+    if not rms_values:
+        return ContentBoundaries(
+            content_start=0.0, content_end=total_duration, total_duration=total_duration
+        )
+
+    # Average into chunk-sized buckets (astats may emit more than one value per chunk)
+    expected_chunks = max(1, int(total_duration / chunk_duration))
+    values_per_chunk = max(1, len(rms_values) // expected_chunks)
+    chunk_rms: list[float] = []
+    for i in range(0, len(rms_values), values_per_chunk):
+        bucket = [v for v in rms_values[i : i + values_per_chunk] if v != float("-inf")]
+        if bucket:
+            chunk_rms.append(sum(bucket) / len(bucket))
+        else:
+            chunk_rms.append(float("-inf"))
+
+    if verbose:
+        for i, rms in enumerate(chunk_rms):
+            t = i * chunk_duration
+            marker = ">>>" if rms > threshold_db else "   "
+            print(f"  {marker} {t:7.1f}s  {rms:>7.1f} dB")
+
+    # Walk forward to find first run of N consecutive above-threshold chunks
+    content_start_chunk = 0
+    run = 0
+    for i, rms in enumerate(chunk_rms):
+        if rms > threshold_db:
+            run += 1
+            if run >= effective_consecutive:
+                content_start_chunk = i - effective_consecutive + 1
+                break
+        else:
+            run = 0
+    else:
+        # No content detected — return full duration (safety)
+        return ContentBoundaries(
+            content_start=0.0, content_end=total_duration, total_duration=total_duration
+        )
+
+    # Walk backward to find last run of N consecutive above-threshold chunks
+    content_end_chunk = len(chunk_rms) - 1
+    run = 0
+    for i in range(len(chunk_rms) - 1, -1, -1):
+        if chunk_rms[i] > threshold_db:
+            run += 1
+            if run >= effective_consecutive:
+                content_end_chunk = i + effective_consecutive - 1
+                break
+        else:
+            run = 0
+
+    # Convert chunk indices to seconds with padding
+    content_start = max(0.0, content_start_chunk * chunk_duration - padding_seconds)
+    content_end = min(total_duration, (content_end_chunk + 1) * chunk_duration + padding_seconds)
+
+    if verbose:
+        print(f"  Content: {content_start:.1f}s – {content_end:.1f}s (of {total_duration:.1f}s)")
+
+    return ContentBoundaries(
+        content_start=content_start,
+        content_end=content_end,
+        total_duration=total_duration,
+    )
 
 
 def process_audio(
@@ -189,24 +371,81 @@ def process_audio(
     # Ensure output directory exists
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build FFmpeg command
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
 
-        # Build the command
-        cmd = ["ffmpeg", "-y"]  # -y to overwrite output
-
-        if len(input_files) == 1:
-            # Single file input
-            cmd.extend(["-i", str(input_files[0].absolute())])
-        else:
-            # Multiple files - use concat demuxer
+        # Determine the analysis input file
+        if len(input_files) > 1:
+            # Multiple files: concat to lossless temp WAV first (needed for analysis)
             concat_file = temp_path / "filelist.txt"
             create_concat_file(input_files, concat_file)
-            cmd.extend(["-f", "concat", "-safe", "0", "-i", str(concat_file)])
+
+            if config.trim_silence:
+                # Concat to temp WAV for boundary analysis
+                concat_wav = temp_path / "concat.wav"
+                concat_cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(concat_file),
+                    "-c:a",
+                    "pcm_s16le",
+                    str(concat_wav),
+                ]
+                if verbose:
+                    print(f"Concatenating to temp WAV: {' '.join(concat_cmd)}")
+                result = subprocess.run(
+                    concat_cmd, capture_output=not verbose, text=True, timeout=3600
+                )
+                if result.returncode != 0:
+                    error_msg = result.stderr if not verbose else "See output above"
+                    raise FFmpegError(f"FFmpeg concat failed:\n{error_msg}")
+                analysis_file = concat_wav
+            else:
+                analysis_file = None
+        else:
+            analysis_file = input_files[0]
+
+        # Detect content boundaries if trimming is enabled
+        boundaries = None
+        if config.trim_silence and analysis_file is not None:
+            boundaries = detect_content_boundaries(
+                audio_file=analysis_file,
+                threshold_db=config.trim_threshold_db,
+                chunk_duration=config.trim_chunk_duration,
+                required_consecutive=config.trim_consecutive_chunks,
+                padding_seconds=config.trim_padding_seconds,
+                verbose=verbose,
+            )
+
+        # Build the final encoding command
+        cmd = ["ffmpeg", "-y"]
+
+        # Add seeking args if we have boundaries
+        if boundaries is not None:
+            cmd.extend(["-ss", str(boundaries.content_start)])
+
+        if len(input_files) == 1:
+            cmd.extend(["-i", str(input_files[0].absolute())])
+        else:
+            if config.trim_silence:
+                # Use the already-concatenated WAV
+                cmd.extend(["-i", str(analysis_file)])
+            else:
+                concat_file = temp_path / "filelist.txt"
+                create_concat_file(input_files, concat_file)
+                cmd.extend(["-f", "concat", "-safe", "0", "-i", str(concat_file)])
+
+        if boundaries is not None:
+            duration = boundaries.content_end - boundaries.content_start
+            cmd.extend(["-t", str(duration)])
 
         # Add filter chain if any filters are enabled
-        filter_chain = build_filter_chain(config)
+        filter_chain = build_filter_chain(config, boundaries)
         if filter_chain:
             cmd.extend(["-af", filter_chain])
 

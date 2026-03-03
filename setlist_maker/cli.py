@@ -608,7 +608,7 @@ def cmd_process(args: argparse.Namespace) -> None:
     config = ProcessingConfig(
         target_loudness=args.loudness,
         bitrate=args.bitrate,
-        remove_silence=not args.no_silence_removal,
+        trim_silence=not args.no_silence_removal,
         apply_compression=not args.no_compress,
         apply_normalization=not args.no_normalize,
     )
@@ -617,7 +617,7 @@ def cmd_process(args: argparse.Namespace) -> None:
     stages: list[Stage] = []
     if len(input_files) > 1:
         stages.append(Stage("concat", "Concatenate files"))
-    stages.append(Stage("silence", "Remove leading silence", config.remove_silence))
+    stages.append(Stage("trim", "Trim silence & noise", config.trim_silence))
     stages.append(Stage("compress", "Apply compression", config.apply_compression))
     stages.append(
         Stage(
@@ -637,7 +637,7 @@ def cmd_process(args: argparse.Namespace) -> None:
             sys.exit(0)
 
         # Update config from selection
-        config.remove_silence = "silence" in selected
+        config.trim_silence = "trim" in selected
         config.apply_compression = "compress" in selected
         config.apply_normalization = "normalize" in selected
 
