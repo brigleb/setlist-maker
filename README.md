@@ -145,7 +145,7 @@ setlist-maker my_set_tracklist.md
 
 ### Chapter Markers & Artwork (`chapters`)
 
-After identifying and editing a tracklist, embed it as navigable chapter markers in the MP3 — with per-chapter artwork fetched from Shazam/iTunes:
+After identifying and editing a tracklist, embed it as navigable chapter markers in the MP3 — with per-chapter artwork fetched automatically:
 
 ```bash
 # Embed chapters (auto-detects the audio file from tracklist name)
@@ -160,7 +160,7 @@ setlist-maker chapters my_set_tracklist.md --no-artwork
 
 This writes ID3v2 CHAP/CTOC frames into the MP3. Podcast players (Apple Podcasts, Overcast, Pocket Casts, etc.) and VLC will show a chapter list with timestamps, titles, and artwork for each track.
 
-For each track, artwork is fetched from the Shazam cover art URL saved during identification. If that fails, it falls back to the iTunes Search API. Each chapter image gets an MTV-style lower-third overlay with the artist and title.
+For each track, artwork is fetched using a waterfall of sources: Shazam CDN, iTunes, Deezer, and MusicBrainz/Cover Art Archive. Remix tags and featuring info are automatically stripped for smarter search fallbacks. Each chapter image gets an MTV-style lower-third overlay with the artist and title.
 
 ### Learning from Corrections
 
