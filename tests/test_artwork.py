@@ -8,12 +8,16 @@ from PIL import Image, ImageDraw, ImageFont
 from setlist_maker.artwork import (
     CHAPTER_IMAGE_SIZE,
     MAX_IMAGE_BYTES,
+    _clean_query,
     _compress_to_jpeg,
     _create_fallback_background,
     _draw_text_fitted,
     create_chapter_image,
+    fetch_artwork,
     resize_cover_art_url,
+    search_deezer_artwork,
     search_itunes_artwork,
+    search_musicbrainz_artwork,
 )
 
 
@@ -184,3 +188,264 @@ class TestDrawTextFitted:
         # Very long text that won't fit
         _draw_text_fitted(draw, 10, 10, "A" * 500, font, 100, (255, 255, 255))
         # Should not raise
+
+
+class TestCleanQuery:
+    """Tests for _clean_query."""
+
+    def test_strips_parenthetical_remix(self):
+        assert _clean_query("Track Name (Original Mix)") == "Track Name"
+
+    def test_strips_bracket_edit(self):
+        assert _clean_query("Title [Radio Edit]") == "Title"
+
+    def test_strips_featuring_feat_dot(self):
+        assert _clean_query("Artist feat. Someone") == "Artist"
+
+    def test_strips_featuring_ft(self):
+        assert _clean_query("Artist ft Someone Else") == "Artist"
+
+    def test_strips_featuring_full_word(self):
+        assert _clean_query("Artist featuring Another") == "Artist"
+
+    def test_strips_multiple_tags(self):
+        assert _clean_query("Track (Remix) [Extended]") == "Track"
+
+    def test_leaves_clean_text_unchanged(self):
+        assert _clean_query("Clean Title") == "Clean Title"
+
+    def test_handles_empty_string(self):
+        assert _clean_query("") == ""
+
+
+class TestSearchDeezerArtwork:
+    """Tests for search_deezer_artwork."""
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_returns_artwork_url(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = (
+            b'{"data": [{"album": {"cover_xl": '
+            b'"https://e-cdns-images.dzcdn.net/images/cover/abc/1000x1000-000000-80-0-0.jpg"}}]}'
+        )
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        result = search_deezer_artwork("Daft Punk", "One More Time", 600)
+
+        assert result is not None
+        assert "600x600" in result
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_falls_back_to_cover_big(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = (
+            b'{"data": [{"album": {"cover_big": '
+            b'"https://e-cdns-images.dzcdn.net/images/cover/abc/500x500-000000-80-0-0.jpg"}}]}'
+        )
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        result = search_deezer_artwork("Artist", "Title", 600)
+
+        assert result is not None
+        assert "600x600" in result
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_returns_none_on_empty_results(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"data": []}'
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        result = search_deezer_artwork("Unknown", "Track")
+        assert result is None
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_returns_none_on_network_error(self, mock_urlopen):
+        mock_urlopen.side_effect = Exception("Network error")
+
+        result = search_deezer_artwork("Artist", "Title")
+        assert result is None
+
+
+class TestSearchMusicbrainzArtwork:
+    """Tests for search_musicbrainz_artwork."""
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_returns_cover_art_url(self, mock_urlopen):
+        # First call: MusicBrainz recording search
+        mb_response = MagicMock()
+        mb_response.read.return_value = b'{"recordings": [{"releases": [{"id": "abc-123"}]}]}'
+        mb_response.__enter__ = lambda s: s
+        mb_response.__exit__ = MagicMock(return_value=False)
+
+        # Second call: Cover Art Archive redirect
+        caa_response = MagicMock()
+        caa_response.url = "https://archive.org/download/mbid-abc-123/front-500.jpg"
+        caa_response.__enter__ = lambda s: s
+        caa_response.__exit__ = MagicMock(return_value=False)
+
+        mock_urlopen.side_effect = [mb_response, caa_response]
+
+        result = search_musicbrainz_artwork("Daft Punk", "One More Time")
+
+        assert result == "https://archive.org/download/mbid-abc-123/front-500.jpg"
+        assert mock_urlopen.call_count == 2
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_returns_none_on_no_recordings(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"recordings": []}'
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        result = search_musicbrainz_artwork("Unknown", "Track")
+        assert result is None
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_returns_none_on_no_releases(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"recordings": [{"releases": []}]}'
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_response
+
+        result = search_musicbrainz_artwork("Artist", "Title")
+        assert result is None
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_returns_none_on_mb_network_error(self, mock_urlopen):
+        mock_urlopen.side_effect = Exception("Network error")
+
+        result = search_musicbrainz_artwork("Artist", "Title")
+        assert result is None
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_returns_none_on_caa_error(self, mock_urlopen):
+        # MusicBrainz succeeds
+        mb_response = MagicMock()
+        mb_response.read.return_value = b'{"recordings": [{"releases": [{"id": "abc-123"}]}]}'
+        mb_response.__enter__ = lambda s: s
+        mb_response.__exit__ = MagicMock(return_value=False)
+
+        # Cover Art Archive fails
+        mock_urlopen.side_effect = [mb_response, Exception("404 Not Found")]
+
+        result = search_musicbrainz_artwork("Artist", "Title")
+        assert result is None
+
+
+class TestFetchArtworkWaterfall:
+    """Tests for fetch_artwork strategy waterfall."""
+
+    @patch("setlist_maker.artwork.download_image")
+    def test_tries_shazam_resized_first(self, mock_download):
+        mock_download.return_value = b"image-data"
+
+        result = fetch_artwork(
+            "Artist", "Title", coverart_url="https://cdn.shazam.com/400x400bb.jpg"
+        )
+
+        assert result == b"image-data"
+        # Should have been called with resized URL
+        call_url = mock_download.call_args[0][0]
+        assert "600x600bb" in call_url
+
+    @patch("setlist_maker.artwork.download_image")
+    def test_falls_back_to_shazam_original(self, mock_download):
+        original_url = "https://cdn.shazam.com/art.jpg"
+        mock_download.side_effect = [None, b"image-data"]
+
+        result = fetch_artwork("Artist", "Title", coverart_url=original_url)
+
+        assert result == b"image-data"
+        assert mock_download.call_count == 2
+
+    @patch("setlist_maker.artwork.search_itunes_artwork")
+    @patch("setlist_maker.artwork.download_image")
+    def test_falls_back_to_itunes(self, mock_download, mock_itunes):
+        mock_itunes.return_value = "https://itunes.example.com/art.jpg"
+        mock_download.side_effect = [None, None, b"image-data"]
+
+        result = fetch_artwork("Artist", "Title", coverart_url="https://cdn.shazam.com/art.jpg")
+
+        assert result == b"image-data"
+        mock_itunes.assert_called_once()
+
+    @patch("setlist_maker.artwork.search_itunes_artwork")
+    @patch("setlist_maker.artwork.download_image")
+    def test_tries_cleaned_itunes_when_different(self, mock_download, mock_itunes):
+        mock_itunes.side_effect = [None, "https://itunes.example.com/cleaned.jpg"]
+        mock_download.side_effect = [b"image-data"]
+
+        result = fetch_artwork("Artist feat. Someone", "Title (Original Mix)")
+
+        assert result == b"image-data"
+        assert mock_itunes.call_count == 2
+        # Second call should use cleaned query
+        second_call_args = mock_itunes.call_args_list[1]
+        assert "feat." not in second_call_args[0][0]
+        assert "Original Mix" not in second_call_args[0][1]
+
+    @patch("setlist_maker.artwork.search_itunes_artwork")
+    @patch("setlist_maker.artwork.download_image")
+    def test_skips_cleaned_itunes_when_same(self, mock_download, mock_itunes):
+        mock_itunes.return_value = None
+        mock_download.return_value = None
+
+        with (
+            patch("setlist_maker.artwork.search_deezer_artwork", return_value=None),
+            patch("setlist_maker.artwork.search_musicbrainz_artwork", return_value=None),
+        ):
+            result = fetch_artwork("Clean Artist", "Clean Title")
+
+        assert result is None
+        # iTunes should only be called once since clean == original
+        mock_itunes.assert_called_once()
+
+    @patch("setlist_maker.artwork.search_deezer_artwork")
+    @patch("setlist_maker.artwork.search_itunes_artwork")
+    @patch("setlist_maker.artwork.download_image")
+    def test_falls_back_to_deezer(self, mock_download, mock_itunes, mock_deezer):
+        mock_itunes.return_value = None
+        mock_deezer.return_value = "https://deezer.example.com/art.jpg"
+        mock_download.side_effect = [b"image-data"]
+
+        result = fetch_artwork("Artist", "Title")
+
+        assert result == b"image-data"
+        mock_deezer.assert_called_once()
+
+    @patch("setlist_maker.artwork.search_musicbrainz_artwork")
+    @patch("setlist_maker.artwork.search_deezer_artwork")
+    @patch("setlist_maker.artwork.search_itunes_artwork")
+    @patch("setlist_maker.artwork.download_image")
+    def test_falls_back_to_musicbrainz(self, mock_download, mock_itunes, mock_deezer, mock_mb):
+        mock_itunes.return_value = None
+        mock_deezer.return_value = None
+        mock_mb.return_value = "https://archive.org/art.jpg"
+        mock_download.side_effect = [b"image-data"]
+
+        result = fetch_artwork("Artist", "Title")
+
+        assert result == b"image-data"
+        mock_mb.assert_called_once()
+
+    @patch("setlist_maker.artwork.search_musicbrainz_artwork")
+    @patch("setlist_maker.artwork.search_deezer_artwork")
+    @patch("setlist_maker.artwork.search_itunes_artwork")
+    @patch("setlist_maker.artwork.download_image")
+    def test_returns_none_when_all_fail(self, mock_download, mock_itunes, mock_deezer, mock_mb):
+        mock_itunes.return_value = None
+        mock_deezer.return_value = None
+        mock_mb.return_value = None
+        mock_download.return_value = None
+
+        result = fetch_artwork("Artist", "Title")
+
+        assert result is None

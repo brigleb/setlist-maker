@@ -3,7 +3,7 @@ Artwork fetching and chapter image generation.
 
 Provides functionality for:
     - Downloading cover art from URLs (Shazam CDN)
-    - Searching iTunes as a fallback for cover art
+    - Searching iTunes, Deezer, and MusicBrainz as fallbacks for cover art
     - Generating MTV-style lower-third overlay images for chapter markers
 """
 
@@ -103,6 +103,113 @@ def resize_cover_art_url(url: str, size: int = 600) -> str:
     return re.sub(r"\d+x\d+(?=bb|cc)", f"{size}x{size}", url)
 
 
+def _clean_query(text: str) -> str:
+    """
+    Strip remix tags, featuring info, and parenthetical/bracket noise from a string.
+
+    Examples:
+        "Track Name (Original Mix)" → "Track Name"
+        "Artist feat. Someone" → "Artist"
+        "Title [Radio Edit]" → "Title"
+    """
+    # Remove parenthetical and bracketed suffixes: (Original Mix), [Radio Edit], etc.
+    cleaned = re.sub(r"\s*[\(\[][^)\]]*[\)\]]", "", text)
+    # Remove featuring info: feat., ft., featuring
+    cleaned = re.sub(r"\s+(?:feat\.?|ft\.?|featuring)\s+.*", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
+def search_deezer_artwork(artist: str, title: str, size: int = 600) -> str | None:
+    """
+    Search the Deezer API for album artwork.
+
+    Args:
+        artist: Artist name.
+        title: Track title.
+        size: Desired image size in pixels.
+
+    Returns:
+        Artwork URL at the requested size, or None if not found.
+    """
+    query = f'artist:"{artist}" track:"{title}"'
+    params = urllib.parse.urlencode({"q": query})
+    url = f"https://api.deezer.com/search?{params}"
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "setlist-maker/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            data = json.loads(response.read())
+
+        if data.get("data") and len(data["data"]) > 0:
+            album = data["data"][0].get("album", {})
+            # Prefer cover_xl (1000x1000), fall back to cover_big (500x500)
+            artwork_url = album.get("cover_xl") or album.get("cover_big")
+            if artwork_url:
+                # Deezer URLs use /{dim}x{dim}- pattern for resizing
+                return re.sub(r"/\d+x\d+-", f"/{size}x{size}-", artwork_url)
+    except Exception as e:
+        logger.debug("Deezer artwork search failed for '%s %s': %s", artist, title, e)
+
+    return None
+
+
+def search_musicbrainz_artwork(artist: str, title: str) -> str | None:
+    """
+    Search MusicBrainz for a recording and fetch its cover art from Cover Art Archive.
+
+    Two-step lookup:
+        1. Search MusicBrainz for the recording to get a release ID.
+        2. Request the front cover from Cover Art Archive.
+
+    Args:
+        artist: Artist name.
+        title: Track title.
+
+    Returns:
+        Cover art image URL, or None if not found.
+    """
+    # Step 1: Search MusicBrainz for the recording
+    mb_query = f'artist:"{artist}" AND recording:"{title}"'
+    params = urllib.parse.urlencode({"query": mb_query, "fmt": "json", "limit": "1"})
+    mb_url = f"https://musicbrainz.org/ws/2/recording?{params}"
+
+    headers = {
+        "User-Agent": "setlist-maker/1.0 (https://github.com/brigleb/setlist-maker)",
+        "Accept": "application/json",
+    }
+
+    try:
+        req = urllib.request.Request(mb_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as response:
+            data = json.loads(response.read())
+
+        recordings = data.get("recordings", [])
+        if not recordings:
+            return None
+
+        releases = recordings[0].get("releases", [])
+        if not releases:
+            return None
+
+        release_id = releases[0].get("id")
+        if not release_id:
+            return None
+    except Exception as e:
+        logger.debug("MusicBrainz search failed for '%s %s': %s", artist, title, e)
+        return None
+
+    # Step 2: Get front cover from Cover Art Archive
+    caa_url = f"https://coverartarchive.org/release/{release_id}/front-500"
+    try:
+        req = urllib.request.Request(caa_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as response:
+            # Cover Art Archive redirects to the actual image URL
+            return response.url
+    except Exception as e:
+        logger.debug("Cover Art Archive lookup failed for release %s: %s", release_id, e)
+        return None
+
+
 def fetch_artwork(
     artist: str,
     title: str,
@@ -110,7 +217,10 @@ def fetch_artwork(
     size: int = CHAPTER_IMAGE_SIZE,
 ) -> bytes | None:
     """
-    Fetch cover art for a track, trying saved URL first, then iTunes.
+    Fetch cover art for a track using a waterfall of sources.
+
+    Tries in order: Shazam CDN (resized), Shazam CDN (original), iTunes exact,
+    iTunes cleaned query (if different), Deezer, MusicBrainz + Cover Art Archive.
 
     Args:
         artist: Artist name.
@@ -121,24 +231,45 @@ def fetch_artwork(
     Returns:
         Raw image bytes, or None if not found.
     """
-    # Try saved Shazam URL first
+    # Build the strategy list: (description, url_fetcher) pairs
+    strategies: list[tuple[str, callable]] = []
+
     if coverart_url:
         resized_url = resize_cover_art_url(coverart_url, size)
-        data = download_image(resized_url)
-        if data:
-            return data
-        # Try original URL if resize didn't work
-        data = download_image(coverart_url)
-        if data:
-            return data
+        strategies.append(("Shazam CDN (resized)", lambda: resized_url))
+        strategies.append(("Shazam CDN (original)", lambda: coverart_url))
 
-    # Fallback to iTunes Search API
-    itunes_url = search_itunes_artwork(artist, title, size)
-    if itunes_url:
-        data = download_image(itunes_url)
-        if data:
-            return data
+    strategies.append(("iTunes exact", lambda: search_itunes_artwork(artist, title, size)))
 
+    # Only add cleaned iTunes query if it differs from the original
+    cleaned_artist = _clean_query(artist)
+    cleaned_title = _clean_query(title)
+    if cleaned_artist != artist or cleaned_title != title:
+        strategies.append(
+            (
+                "iTunes cleaned",
+                lambda: search_itunes_artwork(cleaned_artist, cleaned_title, size),
+            )
+        )
+
+    strategies.append(("Deezer", lambda: search_deezer_artwork(artist, title, size)))
+    strategies.append(
+        (
+            "MusicBrainz",
+            lambda: search_musicbrainz_artwork(artist, title),
+        )
+    )
+
+    for description, get_url in strategies:
+        url = get_url()
+        if url:
+            data = download_image(url)
+            if data:
+                logger.debug("Artwork found via %s for '%s - %s'", description, artist, title)
+                return data
+            logger.debug("Artwork download failed via %s for '%s - %s'", description, artist, title)
+
+    logger.debug("No artwork found for '%s - %s'", artist, title)
     return None
 
 
