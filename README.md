@@ -185,6 +185,26 @@ setlist-maker recording.mp3 --no-learn
 
 Progress is automatically saved, so if interrupted you can resume where you left off.
 
+## Development
+
+Requires **Python 3.10–3.13**. (Python 3.14 is not yet supported — a native
+dependency, `shazamio_core`, has no compatible wheel and crashes on import.)
+
+```bash
+git clone https://github.com/brigleb/setlist-maker.git
+cd setlist-maker
+
+# Create a virtualenv on a supported Python and install with dev extras
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Lint and test
+ruff check .
+ruff format --check .
+pytest
+```
+
 ## License
 
 MIT

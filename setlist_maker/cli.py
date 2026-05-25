@@ -8,10 +8,10 @@ Supports single files, multiple files, or entire directories.
 
 Features:
     - Automatic track identification via Shazam
-    - Audio processing: join files, remove silence, compress, normalize
     - Interactive TUI editor for reviewing and correcting results
     - Learns from your corrections to improve future identifications
     - Resume interrupted processing sessions
+    - Embed chapter markers and per-track artwork into MP3s
 
 Requirements:
     pip install setlist-maker
@@ -22,29 +22,21 @@ You also need ffmpeg installed on your system:
     Windows: download from ffmpeg.org and add to PATH
 
 Usage:
-    # Process audio file and open interactive editor
+    # Identify tracks and open the interactive editor
     setlist-maker recording.mp3 --edit
+
+    # Identify without opening the editor
+    setlist-maker recording.mp3
 
     # Edit an existing tracklist
     setlist-maker tracklist.md
 
-    # Process without opening editor
-    setlist-maker recording.mp3
-
-    # Multiple files
+    # Multiple files or a whole directory
     setlist-maker set1.mp3 set2.mp3 set3.mp3
-
-    # With options
     setlist-maker /path/to/sets/ --delay 20 --output-dir ./tracklists/
 
-    # Process and combine audio files
-    setlist-maker process part1.wav part2.wav -o "My Set.mp3"
-
-    # Process with custom settings
-    setlist-maker process *.wav -o output.mp3 --loudness -14 --bitrate 320k
-
-    # Process and identify tracks
-    setlist-maker process *.wav -o output.mp3 --identify --edit
+    # Embed chapter markers and artwork into an MP3
+    setlist-maker chapters recording_tracklist.md
 """
 
 import argparse
