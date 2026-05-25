@@ -70,16 +70,6 @@ from setlist_maker.editor import (
     parse_markdown_tracklist,
     run_editor,
 )
-from setlist_maker.processor import (
-    AudioAnalysis,
-    FFmpegError,
-    ProcessingConfig,
-    analyze_audio,
-    check_ffmpeg,
-    get_audio_duration,
-    process_audio,
-)
-from setlist_maker.stage_picker import Stage, run_stage_picker
 
 # Configuration
 SAMPLE_DURATION_MS = 30 * 1000  # 30 seconds in milliseconds
@@ -476,247 +466,6 @@ async def process_batch(
     return results
 
 
-def format_duration(seconds: float) -> str:
-    """Format duration in seconds to human-readable string."""
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    if hours > 0:
-        return f"{hours}h {minutes}m {secs}s"
-    elif minutes > 0:
-        return f"{minutes}m {secs}s"
-    return f"{secs}s"
-
-
-SPARKLINE_CHARS = " ▁▂▃▄▅▆▇█"
-
-
-def render_sparkline(values: list[float]) -> str:
-    """Map normalized 0.0-1.0 values to sparkline characters."""
-    if not values:
-        return ""
-    return "".join(SPARKLINE_CHARS[min(int(v * 8) + 1, 8)] for v in values)
-
-
-def _format_change(before: float, after: float) -> str:
-    """Format a numeric change as +/- delta."""
-    delta = after - before
-    sign = "+" if delta >= 0 else ""
-    return f"{sign}{delta:.1f}"
-
-
-def print_processing_summary(before: AudioAnalysis, after: AudioAnalysis) -> None:
-    """Print a before/after processing summary with sparklines and loudness stats."""
-    print(f"\n{'═' * 60}")
-    print("  Processing Summary")
-    print(f"{'═' * 60}")
-
-    # Duration change
-    if before.duration and after.duration:
-        trimmed = before.duration - after.duration
-        before_dur = format_duration(before.duration)
-        after_dur = format_duration(after.duration)
-        line = f"  Duration:  {before_dur} → {after_dur}"
-        if trimmed > 1.0:
-            line += f"  (trimmed {format_duration(trimmed)})"
-        print(f"\n{line}")
-
-    # Size change
-    if before.size_bytes and after.size_bytes:
-        before_mb = before.size_bytes / (1024 * 1024)
-        after_mb = after.size_bytes / (1024 * 1024)
-        print(f"  Size:      {before_mb:.1f} MB → {after_mb:.1f} MB")
-
-    # Loudness stats
-    if before.loudness_i is not None and after.loudness_i is not None:
-        print("\n  Loudness:")
-        print(
-            f"    Before:  {before.loudness_i:>6.1f} LUFS  │"
-            f"  {before.true_peak:>5.1f} dBTP  │"
-            f"  LRA {before.loudness_range:>4.1f} LU"
-        )
-        print(
-            f"    After:   {after.loudness_i:>6.1f} LUFS  │"
-            f"  {after.true_peak:>5.1f} dBTP  │"
-            f"  LRA {after.loudness_range:>4.1f} LU"
-        )
-        print(
-            f"             {_format_change(before.loudness_i, after.loudness_i):>6}"
-            f"        "
-            f"{_format_change(before.true_peak, after.true_peak):>6}"
-            f"        "
-            f"{_format_change(before.loudness_range, after.loudness_range):>6}"
-        )
-
-    # Waveform sparklines
-    if before.waveform:
-        print(f"\n  Waveform (before):\n  {render_sparkline(before.waveform)}")
-    if after.waveform:
-        print(f"\n  Waveform (after):\n  {render_sparkline(after.waveform)}")
-
-    print(f"\n{'═' * 60}")
-
-
-def cmd_process(args: argparse.Namespace) -> None:
-    """Handle the 'process' subcommand for audio processing."""
-    # Verify FFmpeg is available
-    if not check_ffmpeg():
-        print("Error: FFmpeg not found. Please install it:")
-        print("  macOS: brew install ffmpeg")
-        print("  Ubuntu/Debian: sudo apt install ffmpeg")
-        print("  Windows: download from ffmpeg.org")
-        sys.exit(1)
-
-    # Gather input files
-    input_files = []
-    for path_str in args.inputs:
-        path = Path(path_str)
-        if path.is_file():
-            if path.suffix.lower() in AUDIO_EXTENSIONS:
-                input_files.append(path)
-            else:
-                print(f"Warning: Skipping non-audio file: {path}")
-        else:
-            print(f"Warning: File not found: {path}")
-
-    if not input_files:
-        print("Error: No valid audio files found.")
-        print(f"Supported formats: {', '.join(sorted(AUDIO_EXTENSIONS))}")
-        sys.exit(1)
-
-    # Display input files
-    print(f"\n{'=' * 60}")
-    print("Audio Processing Pipeline")
-    print(f"{'=' * 60}")
-    print(f"\nInput files ({len(input_files)}):")
-    total_duration = 0.0
-    for f in input_files:
-        duration = get_audio_duration(f)
-        if duration:
-            total_duration += duration
-            print(f"  - {f.name} ({format_duration(duration)})")
-        else:
-            print(f"  - {f.name}")
-
-    if total_duration > 0:
-        print(f"\nTotal input duration: {format_duration(total_duration)}")
-
-    output_path = Path(args.output)
-    print(f"\nOutput: {output_path}")
-
-    # Build processing config
-    config = ProcessingConfig(
-        target_loudness=args.loudness,
-        bitrate=args.bitrate,
-        remove_silence=not args.no_silence_removal,
-        apply_compression=not args.no_compress,
-        apply_normalization=not args.no_normalize,
-    )
-
-    # Build processing stages
-    stages: list[Stage] = []
-    if len(input_files) > 1:
-        stages.append(Stage("concat", "Concatenate files"))
-    stages.append(Stage("silence", "Remove leading silence", config.remove_silence))
-    stages.append(Stage("compress", "Apply compression", config.apply_compression))
-    stages.append(
-        Stage(
-            "normalize",
-            f"Normalize loudness ({config.target_loudness} LUFS)",
-            config.apply_normalization,
-        )
-    )
-    stages.append(Stage("export", f"Export MP3 @ {config.bitrate}"))
-
-    # Show interactive picker if no --no-* flags were used
-    has_overrides = args.no_compress or args.no_normalize or args.no_silence_removal
-    if not has_overrides:
-        selected = run_stage_picker(stages)
-        if selected is None:
-            print("Cancelled.")
-            sys.exit(0)
-
-        # Update config from selection
-        config.remove_silence = "silence" in selected
-        config.apply_compression = "compress" in selected
-        config.apply_normalization = "normalize" in selected
-
-        # Show what was selected
-        print(f"\n{'─' * 60}")
-        active = [s for s in stages if s.key in selected]
-        if active:
-            print("Selected stages:")
-            for i, stage in enumerate(active, 1):
-                print(f"  {i}. {stage.label}")
-        else:
-            print("No stages selected.")
-            sys.exit(0)
-    else:
-        print("\nProcessing stages:")
-        active_stages = [s for s in stages if s.enabled]
-        for i, stage in enumerate(active_stages, 1):
-            print(f"  {i}. {stage.label}")
-
-    # Analyze input before processing
-    print(f"\n{'─' * 60}")
-    print("Analyzing input audio...")
-    # For multiple files, analyze the first one as representative
-    analysis_input_file = input_files[0] if len(input_files) == 1 else None
-    before_analysis = analyze_audio(analysis_input_file) if analysis_input_file else None
-
-    # Run processing
-    print("Processing audio...")
-
-    try:
-        result_path = process_audio(
-            input_files=input_files,
-            output_file=output_path,
-            config=config,
-            verbose=args.verbose if hasattr(args, "verbose") else False,
-        )
-        print(f"\n✓ Output saved: {result_path}")
-
-    except FFmpegError as e:
-        print(f"\nError: {e}")
-        sys.exit(1)
-
-    # Analyze output and print summary
-    print("Analyzing output audio...")
-    after_analysis = analyze_audio(result_path)
-
-    # If we didn't analyze input (multiple files), use total_duration and size
-    if before_analysis is None:
-        before_analysis = AudioAnalysis(
-            duration=total_duration if total_duration > 0 else None,
-            size_bytes=sum(f.stat().st_size for f in input_files),
-        )
-
-    print_processing_summary(before_analysis, after_analysis)
-
-    # Chain to identification if requested
-    if args.identify:
-        print(f"\n{'=' * 60}")
-        print("Track Identification")
-        print(f"{'=' * 60}")
-
-        corrections_db = CorrectionsDB() if not args.no_learn else None
-
-        result = asyncio.run(
-            process_single_file(
-                audio_path=result_path,
-                output_dir=result_path.parent,
-                delay_seconds=args.delay,
-                resume=True,
-                corrections_db=corrections_db,
-            )
-        )
-
-        if result and args.edit:
-            tracklist, tracklist_path = result
-            print(f"\nOpening interactive editor for: {tracklist.source_file}")
-            run_editor(tracklist, tracklist_path, use_corrections=not args.no_learn)
-
-
 def cmd_identify(args: argparse.Namespace) -> None:
     """Handle the 'identify' subcommand (default behavior)."""
     # Check if we're editing an existing markdown file
@@ -928,10 +677,6 @@ Examples:
   %(prog)s recording.mp3 --edit                   # Process and open editor
   %(prog)s tracklist.md                           # Edit existing tracklist
 
-  # Process audio files
-  %(prog)s process part1.wav part2.wav -o set.mp3 # Join and process files
-  %(prog)s process *.wav -o out.mp3 --identify    # Process and identify tracks
-
   # Embed chapter markers and artwork into MP3
   %(prog)s chapters recording_tracklist.md        # Auto-detect audio file
   %(prog)s chapters tracklist.md --audio set.mp3  # Specify audio file
@@ -941,98 +686,6 @@ Examples:
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # 'process' subcommand - audio processing pipeline
-    # ─────────────────────────────────────────────────────────────────────────
-    process_parser = subparsers.add_parser(
-        "process",
-        help="Process and combine audio files (join, compress, normalize)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s part1.wav part2.wav -o "My Set.mp3"
-  %(prog)s *.wav -o output.mp3 --loudness -14 --bitrate 320k
-  %(prog)s *.wav -o output.mp3 --identify --edit
-""",
-    )
-
-    process_parser.add_argument(
-        "inputs",
-        nargs="+",
-        help="Input audio files to process (joined in order specified)",
-    )
-
-    process_parser.add_argument(
-        "-o",
-        "--output",
-        required=True,
-        help="Output file path (MP3)",
-    )
-
-    process_parser.add_argument(
-        "--loudness",
-        type=float,
-        default=-16.0,
-        help="Target loudness in LUFS (default: -16)",
-    )
-
-    process_parser.add_argument(
-        "--bitrate",
-        default="192k",
-        help="Output bitrate (default: 192k)",
-    )
-
-    process_parser.add_argument(
-        "--no-compress",
-        action="store_true",
-        help="Skip compression stage",
-    )
-
-    process_parser.add_argument(
-        "--no-normalize",
-        action="store_true",
-        help="Skip loudness normalization stage",
-    )
-
-    process_parser.add_argument(
-        "--no-silence-removal",
-        action="store_true",
-        help="Skip leading silence removal",
-    )
-
-    process_parser.add_argument(
-        "--identify",
-        action="store_true",
-        help="Run Shazam identification after processing",
-    )
-
-    process_parser.add_argument(
-        "-e",
-        "--edit",
-        action="store_true",
-        help="Open interactive editor after identification (requires --identify)",
-    )
-
-    process_parser.add_argument(
-        "-d",
-        "--delay",
-        type=int,
-        default=DEFAULT_DELAY_SECONDS,
-        help=f"Delay between Shazam API calls (default: {DEFAULT_DELAY_SECONDS})",
-    )
-
-    process_parser.add_argument(
-        "--no-learn",
-        action="store_true",
-        help="Disable learning from corrections",
-    )
-
-    process_parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Show FFmpeg output",
-    )
 
     # ─────────────────────────────────────────────────────────────────────────
     # 'identify' subcommand - track identification (also default behavior)
@@ -1129,7 +782,7 @@ Examples:
     if len(sys.argv) > 1:
         first_arg = sys.argv[1]
         # If first arg is not a known subcommand and not a flag, insert 'identify'
-        if first_arg not in ("process", "identify", "chapters", "-h", "--help", "-v", "--version"):
+        if first_arg not in ("identify", "chapters", "-h", "--help", "-v", "--version"):
             sys.argv.insert(1, "identify")
 
     args = parser.parse_args()
@@ -1140,9 +793,7 @@ Examples:
         sys.exit(0)
 
     # Route to appropriate handler
-    if args.command == "process":
-        cmd_process(args)
-    elif args.command == "identify":
+    if args.command == "identify":
         cmd_identify(args)
     elif args.command == "chapters":
         cmd_chapters(args)

@@ -7,7 +7,6 @@ You just played a 2-hour set and can't remember half the tracks you played. Setl
 ## Features
 
 - Identify tracks via Shazam across full-length recordings
-- Join, compress, and normalize audio with a single command
 - Review and correct results in an interactive TUI editor
 - Embed chapter markers and artwork into MP3s for podcast players
 - Learns from your corrections to improve future runs
@@ -94,31 +93,10 @@ setlist-maker /path/to/sets/ --delay 20 --output-dir ./tracklists/
 setlist-maker tracklist.md
 ```
 
-### Audio Processing (`process`)
-
-If your set is split across multiple files or needs cleanup before identification:
-
-```bash
-# Join multiple recordings into one
-setlist-maker process part1.wav part2.wav part3.wav -o "My Set.mp3"
-
-# Custom loudness and bitrate
-setlist-maker process *.wav -o output.mp3 --loudness -14 --bitrate 320k
-
-# Process and identify tracks in one go
-setlist-maker process *.wav -o output.mp3 --identify --edit
-
-# Skip specific processing stages
-setlist-maker process recording.wav -o output.mp3 --no-compress --no-normalize
-```
-
-The processing pipeline runs these stages in order:
-
-1. Concatenate input files (in order specified)
-2. Remove leading silence (-50dB threshold)
-3. Apply compression (-18dB threshold, 3:1 ratio)
-4. Normalize loudness (-16 LUFS, -1.5 dBTP)
-5. Export as MP3 CBR (192kbps default)
+> **Note:** Setlist Maker expects a single, finished audio file. If your set is
+> split across multiple files or needs cleanup (joining, compression, loudness
+> normalization), do that in your audio editor of choice first, then run
+> `identify` on the result.
 
 ### Interactive Editor
 
@@ -172,20 +150,6 @@ setlist-maker recording.mp3 --no-learn
 ```
 
 ## Options
-
-### Process Command
-
-| Option | Description |
-|--------|-------------|
-| `-o, --output` | Output file path (required) |
-| `--loudness` | Target loudness in LUFS (default: -16) |
-| `--bitrate` | Output bitrate (default: 192k) |
-| `--no-compress` | Skip compression stage |
-| `--no-normalize` | Skip loudness normalization |
-| `--no-silence-removal` | Skip leading silence removal |
-| `--identify` | Run Shazam identification after processing |
-| `-e, --edit` | Open editor after identification |
-| `--verbose` | Show FFmpeg output |
 
 ### Identify Command
 

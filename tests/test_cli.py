@@ -6,7 +6,6 @@ from setlist_maker.cli import (
     AUDIO_EXTENSIONS,
     _load_tracklist_with_artwork_urls,
     deduplicate_tracklist,
-    format_duration,
     format_timestamp,
     get_audio_files,
     load_progress,
@@ -42,26 +41,6 @@ class TestFormatTimestamp:
         """Test formatting large values."""
         # 10 hours, 30 minutes, 45 seconds
         assert format_timestamp(37845) == "10:30:45"
-
-
-class TestFormatDuration:
-    """Tests for format_duration function."""
-
-    def test_seconds_only(self):
-        """Test formatting seconds."""
-        assert format_duration(45) == "45s"
-        assert format_duration(0) == "0s"
-
-    def test_minutes_and_seconds(self):
-        """Test formatting minutes and seconds."""
-        assert format_duration(90) == "1m 30s"
-        assert format_duration(125.5) == "2m 5s"
-
-    def test_hours(self):
-        """Test formatting with hours."""
-        assert format_duration(3600) == "1h 0m 0s"
-        assert format_duration(3661) == "1h 1m 1s"
-        assert format_duration(7325.9) == "2h 2m 5s"
 
 
 class TestGetAudioFiles:

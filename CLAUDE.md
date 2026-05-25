@@ -35,10 +35,10 @@ pytest
 
 ## Architecture
 
-Three-module CLI application:
+CLI application with the following modules:
 
 ### `setlist_maker/cli.py` - Main CLI with subcommands
-- **Entry point:** `main()` with subcommand routing (`process`, `identify`)
+- **Entry point:** `main()` with subcommand routing (`identify`, `chapters`)
 - **Backward compatible:** Running without subcommand defaults to `identify` behavior
 - **Audio identification:** Uses `pydub` to slice audio into 30-second chunks
 - **Track identification:** Uses `shazamio` async library with exponential backoff retry for rate limits
@@ -50,19 +50,10 @@ Key constants at top of `cli.py`:
 - `DEFAULT_DELAY_SECONDS = 15` (between API calls)
 - `AUDIO_EXTENSIONS` (supported formats)
 
-### `setlist_maker/processor.py` - FFmpeg-based audio processing
-- **ProcessingConfig:** Dataclass with all processing parameters (silence threshold, compression, loudness targets)
-- **process_audio():** Full pipeline: concat → silence removal → compress → normalize → MP3 export
-- **build_filter_chain():** Constructs FFmpeg `-af` filter string
-- **create_concat_file():** Generates filelist.txt for FFmpeg concat demuxer
-- **get_audio_duration():** Uses ffprobe to get file duration
-- **analyze_loudness():** Uses FFmpeg loudnorm filter to analyze loudness statistics
-
-Default processing settings:
-- Silence removal: -50dB threshold
-- Compression: -18dB threshold, 3:1 ratio
-- Loudness: -16 LUFS, -1.5 dBTP
-- Output: MP3 CBR 192kbps
+### `setlist_maker/chapters.py` + `setlist_maker/artwork.py` - Chapter markers & artwork
+- **embed_chapters():** Writes ID3v2 CHAP/CTOC frames into an MP3 for podcast players
+- **fetch_artwork():** Waterfall lookup across Shazam CDN, iTunes, Deezer, MusicBrainz/Cover Art Archive
+- **create_chapter_image():** Builds per-chapter artwork with an MTV-style lower-third overlay
 
 ### `setlist_maker/editor.py` - Interactive TUI editor
 - **TracklistEditor:** Textual app providing spreadsheet-like interface
