@@ -91,7 +91,13 @@ setlist-maker /path/to/sets/ --delay 20 --output-dir ./tracklists/
 
 # Edit an existing tracklist
 setlist-maker tracklist.md
+
+# The whole pipeline in one go: identify, edit, then embed chapters
+setlist-maker recording.mp3 --edit --chapters
 ```
+
+Every run writes both a markdown tracklist and a JSON sidecar (the JSON carries
+each track's Shazam cover-art URL, so the `chapters` command can reuse it later).
 
 > **Note:** Setlist Maker expects a single, finished audio file. If your set is
 > split across multiple files or needs cleanup (joining, compression, loudness
@@ -136,6 +142,14 @@ setlist-maker chapters my_set_tracklist.md --audio my_set.mp3
 setlist-maker chapters my_set_tracklist.md --no-artwork
 ```
 
+You can also skip the separate step and chain chapter embedding directly onto
+`identify` with `--chapters` (it runs after the editor closes, if `--edit` is
+used). Chapters require an MP3; non-MP3 inputs are skipped with a notice.
+
+```bash
+setlist-maker my_set.mp3 --edit --chapters
+```
+
 This writes ID3v2 CHAP/CTOC frames into the MP3. Podcast players (Apple Podcasts, Overcast, Pocket Casts, etc.) and VLC will show a chapter list with timestamps, titles, and artwork for each track.
 
 For each track, artwork is fetched using a waterfall of sources: Shazam CDN, iTunes, Deezer, and MusicBrainz/Cover Art Archive. Remix tags and featuring info are automatically stripped for smarter search fallbacks. Each chapter image gets an MTV-style lower-third overlay with the artist and title.
@@ -156,6 +170,8 @@ setlist-maker recording.mp3 --no-learn
 | Option | Description |
 |--------|-------------|
 | `-e, --edit` | Open interactive editor after processing |
+| `--chapters` | Embed chapter markers and artwork into each MP3 after identifying (and editing) |
+| `--no-artwork` | With `--chapters`, embed chapter markers only (skip artwork fetching) |
 | `-o, --output-dir` | Output directory for tracklist files (default: same as input) |
 | `-d, --delay` | Delay in seconds between API calls (default: 15) |
 | `--no-resume` | Start fresh instead of resuming from previous progress |

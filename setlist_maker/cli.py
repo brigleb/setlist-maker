@@ -58,6 +58,42 @@ from setlist_maker.editor import (
 from setlist_maker.identify import DEFAULT_DELAY_SECONDS, process_batch
 
 
+def _chain_chapters_after_identify(
+    results: list[tuple[Tracklist, Path]],
+    audio_files: list[Path],
+    fetch_art: bool,
+) -> None:
+    """
+    Embed chapters into each processed MP3 after `identify --chapters`.
+
+    Reloads each tracklist from its saved files so any edits made in the
+    editor (and the JSON sidecar's cover-art URLs) are picked up.
+    """
+    audio_by_name = {f.name: f for f in audio_files}
+
+    for _tracklist, output_path in results:
+        tracklist, _urls = _load_tracklist_with_artwork_urls(output_path)
+        audio_path = audio_by_name.get(tracklist.source_file) or find_audio_file(output_path)
+
+        if not audio_path or not audio_path.exists():
+            print(f"\nSkipping chapters for {tracklist.source_file}: audio file not found.")
+            continue
+        if audio_path.suffix.lower() != ".mp3":
+            print(
+                f"\nSkipping chapters for {audio_path.name}: chapter markers require an MP3 "
+                f"(got {audio_path.suffix})."
+            )
+            continue
+        if not any(not t.is_unidentified for t in tracklist.tracks if not t.rejected):
+            print(f"\nSkipping chapters for {audio_path.name}: no identified tracks.")
+            continue
+
+        print(f"\n{'=' * 60}")
+        print(f"Embedding chapters into: {audio_path.name}")
+        print(f"{'=' * 60}")
+        embed_chapters_for_tracklist(tracklist, audio_path, fetch_art=fetch_art)
+
+
 def cmd_identify(args: argparse.Namespace) -> None:
     """Handle the 'identify' subcommand (default behavior)."""
     # Check if we're editing an existing markdown file
@@ -74,6 +110,11 @@ def cmd_identify(args: argparse.Namespace) -> None:
                 sys.exit(1)
             print(f"Loaded {len(tracklist.tracks)} tracks from {tracklist.source_file}")
             run_editor(tracklist, input_path, use_corrections=not args.no_learn)
+
+            if args.chapters:
+                _chain_chapters_after_identify(
+                    [(tracklist, input_path)], audio_files=[], fetch_art=not args.no_artwork
+                )
             return
 
     # Gather all audio files
@@ -91,7 +132,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir) if args.output_dir else None
 
     # Run the batch processor
-    asyncio.run(
+    results = asyncio.run(
         process_batch(
             audio_files=audio_files,
             output_dir=output_dir,
@@ -101,6 +142,10 @@ def cmd_identify(args: argparse.Namespace) -> None:
             use_corrections=not args.no_learn,
         )
     )
+
+    # Optionally chain into chapter embedding
+    if args.chapters:
+        _chain_chapters_after_identify(results, audio_files, fetch_art=not args.no_artwork)
 
 
 def _load_tracklist_with_artwork_urls(
@@ -153,48 +198,26 @@ def _load_tracklist_with_artwork_urls(
     return tracklist, coverart_urls
 
 
-def cmd_chapters(args: argparse.Namespace) -> None:
-    """Handle the 'chapters' subcommand for embedding chapter markers."""
-    tracklist_path = Path(args.tracklist)
+def embed_chapters_for_tracklist(
+    tracklist: Tracklist,
+    audio_path: Path,
+    fetch_art: bool = True,
+) -> None:
+    """
+    Embed chapter markers (and, optionally, artwork) into an MP3 for a tracklist.
 
-    if not tracklist_path.exists():
-        print(f"Error: Tracklist file not found: {tracklist_path}")
-        sys.exit(1)
-
-    # Load tracklist with any saved artwork URLs
-    print(f"Loading tracklist: {tracklist_path.name}")
-    tracklist, coverart_urls = _load_tracklist_with_artwork_urls(tracklist_path)
-
+    Shared by the `chapters` command and the `identify --chapters` chain.
+    Assumes audio_path is a validated, existing MP3 and the tracklist has at
+    least one identified track.
+    """
     # Get all non-rejected tracks (including unidentified) for chapter timing
     chapter_tracks = [t for t in tracklist.tracks if not t.rejected]
-    if not any(not t.is_unidentified for t in chapter_tracks):
-        print("Error: No identified tracks found in tracklist.")
-        sys.exit(1)
-
-    print(f"  Found {len(chapter_tracks)} tracks")
-
-    # Find the audio file
-    if args.audio:
-        audio_path = Path(args.audio)
-    else:
-        audio_path = find_audio_file(tracklist_path)
-
-    if not audio_path or not audio_path.exists():
-        print("Error: Could not find the audio file.")
-        print("  Use --audio to specify the MP3 file path.")
-        sys.exit(1)
-
-    if audio_path.suffix.lower() != ".mp3":
-        print(f"Error: Chapter markers require an MP3 file, got: {audio_path.suffix}")
-        sys.exit(1)
-
-    print(f"  Audio file: {audio_path.name}")
 
     # Fetch artwork and generate chapter images
     chapter_images: dict[int, bytes] = {}
     episode_image: bytes | None = None
 
-    if not args.no_artwork:
+    if fetch_art:
         print(f"\n{'─' * 60}")
         print("Fetching artwork...")
 
@@ -243,8 +266,8 @@ def cmd_chapters(args: argparse.Namespace) -> None:
     embed_chapters(
         audio_path=audio_path,
         tracks=chapter_tracks,
-        chapter_images=chapter_images if not args.no_artwork else None,
-        episode_image=episode_image if not args.no_artwork else None,
+        chapter_images=chapter_images if fetch_art else None,
+        episode_image=episode_image if fetch_art else None,
     )
 
     print(f"\n  Embedded {len(chapter_tracks)} chapter(s) into {audio_path.name}")
@@ -256,6 +279,46 @@ def cmd_chapters(args: argparse.Namespace) -> None:
     print(f"\n{'=' * 60}")
     print("Done! Chapter markers embedded successfully.")
     print(f"{'=' * 60}")
+
+
+def cmd_chapters(args: argparse.Namespace) -> None:
+    """Handle the 'chapters' subcommand for embedding chapter markers."""
+    tracklist_path = Path(args.tracklist)
+
+    if not tracklist_path.exists():
+        print(f"Error: Tracklist file not found: {tracklist_path}")
+        sys.exit(1)
+
+    # Load tracklist with any saved artwork URLs
+    print(f"Loading tracklist: {tracklist_path.name}")
+    tracklist, _coverart_urls = _load_tracklist_with_artwork_urls(tracklist_path)
+
+    # Require at least one identified track to build a meaningful chapter list
+    if not any(not t.is_unidentified for t in tracklist.tracks if not t.rejected):
+        print("Error: No identified tracks found in tracklist.")
+        sys.exit(1)
+
+    chapter_count = len([t for t in tracklist.tracks if not t.rejected])
+    print(f"  Found {chapter_count} tracks")
+
+    # Find the audio file
+    if args.audio:
+        audio_path = Path(args.audio)
+    else:
+        audio_path = find_audio_file(tracklist_path)
+
+    if not audio_path or not audio_path.exists():
+        print("Error: Could not find the audio file.")
+        print("  Use --audio to specify the MP3 file path.")
+        sys.exit(1)
+
+    if audio_path.suffix.lower() != ".mp3":
+        print(f"Error: Chapter markers require an MP3 file, got: {audio_path.suffix}")
+        sys.exit(1)
+
+    print(f"  Audio file: {audio_path.name}")
+
+    embed_chapters_for_tracklist(tracklist, audio_path, fetch_art=not args.no_artwork)
 
 
 def main():
@@ -290,6 +353,7 @@ Examples:
 Examples:
   %(prog)s recording.mp3
   %(prog)s recording.mp3 --edit
+  %(prog)s recording.mp3 --edit --chapters   # identify, edit, then embed chapters
   %(prog)s set1.mp3 set2.mp3 set3.mp3
   %(prog)s /path/to/dj_sets/ -o ./tracklists/
 """,
@@ -320,6 +384,19 @@ Examples:
         "--edit",
         action="store_true",
         help="Open interactive editor after processing",
+    )
+
+    identify_parser.add_argument(
+        "--chapters",
+        action="store_true",
+        help="Embed chapter markers and artwork into each MP3 after identifying "
+        "(and editing, if --edit is also used)",
+    )
+
+    identify_parser.add_argument(
+        "--no-artwork",
+        action="store_true",
+        help="With --chapters, embed chapter markers only (skip artwork fetching)",
     )
 
     identify_parser.add_argument(

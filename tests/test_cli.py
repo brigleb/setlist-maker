@@ -1,8 +1,51 @@
 """Tests for setlist_maker.cli module."""
 
 import json
+from unittest.mock import patch
 
-from setlist_maker.cli import _load_tracklist_with_artwork_urls
+from setlist_maker.cli import (
+    _chain_chapters_after_identify,
+    _load_tracklist_with_artwork_urls,
+)
+from setlist_maker.editor import Track, Tracklist
+
+
+class TestChainChaptersAfterIdentify:
+    """Tests for the identify --chapters chaining guard logic."""
+
+    def _write_tracklist(self, temp_dir, source_file):
+        """Write a markdown + JSON sidecar for a one-track tracklist."""
+        tracklist = Tracklist(
+            source_file=source_file,
+            tracks=[Track(timestamp=0, artist="Artist", title="Track")],
+            generated_on="2026-01-01 00:00",
+        )
+        md_path = temp_dir / "set_tracklist.md"
+        md_path.write_text(tracklist.to_markdown())
+        (temp_dir / "set_tracklist.json").write_text(json.dumps(tracklist.to_json()))
+        return tracklist, md_path
+
+    def test_embeds_for_mp3(self, temp_dir):
+        """An MP3 input triggers chapter embedding."""
+        mp3 = temp_dir / "set.mp3"
+        mp3.write_bytes(b"fake")
+        tracklist, md_path = self._write_tracklist(temp_dir, "set.mp3")
+
+        with patch("setlist_maker.cli.embed_chapters_for_tracklist") as mock_embed:
+            _chain_chapters_after_identify([(tracklist, md_path)], [mp3], fetch_art=False)
+            mock_embed.assert_called_once()
+
+    def test_skips_non_mp3(self, temp_dir, capsys):
+        """A non-MP3 input is skipped with a clear message, not embedded."""
+        wav = temp_dir / "set.wav"
+        wav.write_bytes(b"fake")
+        tracklist, md_path = self._write_tracklist(temp_dir, "set.wav")
+
+        with patch("setlist_maker.cli.embed_chapters_for_tracklist") as mock_embed:
+            _chain_chapters_after_identify([(tracklist, md_path)], [wav], fetch_art=False)
+            mock_embed.assert_not_called()
+
+        assert "require an MP3" in capsys.readouterr().out
 
 
 class TestLoadTracklistWithArtworkUrls:

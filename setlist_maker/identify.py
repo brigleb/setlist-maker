@@ -220,12 +220,15 @@ async def process_single_file(
     print("\n  Processing complete. Generating tracklist...")
     tracklist = results_to_tracklist(raw_results, audio_path.name, corrections_db)
 
-    # Generate markdown output
-    markdown = tracklist.to_markdown()
-
-    # Write output
+    # Write markdown plus a JSON sidecar. The JSON carries each track's
+    # Shazam cover-art URL, which the chapters command relies on, so it is
+    # always written here -- not only when the editor saves.
     with open(output_path, "w") as f:
-        f.write(markdown)
+        f.write(tracklist.to_markdown())
+
+    json_path = output_path.with_suffix(".json")
+    with open(json_path, "w") as f:
+        json.dump(tracklist.to_json(), f, indent=2)
 
     print(f"  Saved: {output_path}")
     print(f"  Found {len(tracklist.tracks)} unique tracks")

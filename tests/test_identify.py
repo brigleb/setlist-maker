@@ -1,11 +1,14 @@
 """Tests for setlist_maker.identify module."""
 
+import asyncio
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from setlist_maker.editor import CorrectionsDB
 from setlist_maker.identify import (
     deduplicate_tracklist,
     load_progress,
+    process_single_file,
     results_to_tracklist,
     save_progress,
 )
@@ -250,3 +253,53 @@ class TestResultsToTracklist:
         # Should be in expected format
         assert "-" in tracklist.generated_on
         assert ":" in tracklist.generated_on
+
+
+class TestProcessSingleFileOutput:
+    """Tests for the files written by process_single_file."""
+
+    def test_writes_markdown_and_json_sidecar(self, temp_dir):
+        """identify always writes a JSON sidecar carrying cover-art URLs."""
+        audio_path = temp_dir / "set.mp3"
+        audio_path.write_bytes(b"fake audio")
+
+        # Two identical samples -> one identified track survives dedup, and it
+        # carries a Shazam cover-art URL that must land in the JSON sidecar.
+        fake_track = {
+            "artist": "Artist",
+            "title": "Track",
+            "coverart_url": "https://example.com/art.jpg",
+            "shazam_url": None,
+            "album": None,
+        }
+        slices = [(0, MagicMock()), (30, MagicMock())]
+
+        with (
+            patch("setlist_maker.identify.load_audio", return_value=MagicMock()),
+            patch("setlist_maker.identify.slice_audio", return_value=slices),
+            patch("setlist_maker.identify.Shazam", return_value=MagicMock()),
+            patch(
+                "setlist_maker.identify.identify_sample_with_retry",
+                new=AsyncMock(return_value=fake_track),
+            ),
+        ):
+            result = asyncio.run(
+                process_single_file(
+                    audio_path=audio_path,
+                    output_dir=temp_dir,
+                    delay_seconds=0,
+                    resume=False,
+                )
+            )
+
+        assert result is not None
+        md_path = temp_dir / "set_tracklist.md"
+        json_path = temp_dir / "set_tracklist.json"
+        assert md_path.exists()
+        assert json_path.exists()
+
+        data = json.loads(json_path.read_text())
+        assert data[0]["coverart_url"] == "https://example.com/art.jpg"
+
+        # Progress file is cleaned up on success
+        assert not (temp_dir / "set_progress.json").exists()
