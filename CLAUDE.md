@@ -37,18 +37,27 @@ pytest
 
 CLI application with the following modules:
 
-### `setlist_maker/cli.py` - Main CLI with subcommands
+### `setlist_maker/cli.py` - Argparse entry point & command handlers
 - **Entry point:** `main()` with subcommand routing (`identify`, `chapters`)
 - **Backward compatible:** Running without subcommand defaults to `identify` behavior
-- **Audio identification:** Uses `pydub` to slice audio into 30-second chunks
-- **Track identification:** Uses `shazamio` async library with exponential backoff retry for rate limits
-- **Deduplication:** `deduplicate_tracklist()` removes singleton matches and collapses consecutive identical tracks
-- **Progress persistence:** JSON progress files enable resuming interrupted runs
+- **Thin layer:** Owns argparse setup and the `cmd_identify` / `cmd_chapters` handlers,
+  delegating real work to the modules below.
 
-Key constants at top of `cli.py`:
-- `SAMPLE_DURATION_MS = 30000` (30-second slices)
+### `setlist_maker/audio.py` - Audio discovery, loading, slicing
+- **get_audio_files():** Expands files/directories into the list of audio files to process
+- **load_audio() / slice_audio():** Uses `pydub` to load and slice into 30-second chunks
+- `SAMPLE_DURATION_MS = 30000`; `AUDIO_EXTENSIONS` lives in `__init__.py`
+
+### `setlist_maker/shazam_client.py` - Shazam recognition
+- **identify_sample_with_retry():** Wraps `shazamio` with exponential-backoff retry for rate limits
+- Constants: `MAX_RETRIES`, `INITIAL_BACKOFF`
+
+### `setlist_maker/identify.py` - Identification pipeline
+- **process_batch() / process_single_file():** Orchestrate slicing → recognition → output
+- **deduplicate_tracklist():** Removes singleton matches and collapses consecutive identical tracks
+- **results_to_tracklist():** Applies corrections and builds a `Tracklist`
+- **Progress persistence:** `save_progress()` / `load_progress()` JSON files enable resuming
 - `DEFAULT_DELAY_SECONDS = 15` (between API calls)
-- `AUDIO_EXTENSIONS` (supported formats)
 
 ### `setlist_maker/chapters.py` + `setlist_maker/artwork.py` - Chapter markers & artwork
 - **embed_chapters():** Writes ID3v2 CHAP/CTOC frames into an MP3 for podcast players
