@@ -146,6 +146,26 @@ class TestTracklist:
         data = tracklist.to_json()
         assert data == []
 
+    def test_to_markdown_includes_summary(self, sample_tracklist):
+        """Summary paragraph is rendered before the listing, with a blank line."""
+        sample_tracklist.summary = "A propulsive big-beat set with funk-laced breaks."
+        md = sample_tracklist.to_markdown()
+        lines = md.split("\n")
+
+        summary_idx = lines.index(sample_tracklist.summary)
+        first_track_idx = next(i for i, ln in enumerate(lines) if ln.startswith("1. "))
+        # Summary comes before the listing, separated by a blank line.
+        assert summary_idx < first_track_idx
+        assert lines[summary_idx + 1] == ""
+
+    def test_to_markdown_omits_summary_when_absent(self, sample_tracklist):
+        """No summary means no extra prose lines are emitted."""
+        assert sample_tracklist.summary is None
+        md = sample_tracklist.to_markdown()
+        # The only lines before the first track are the header/date block.
+        before = md.split("1. ", 1)[0]
+        assert before.count("\n\n") == 2  # after the title and after the date
+
 
 class TestParseMarkdownTracklist:
     """Tests for parse_markdown_tracklist function."""
@@ -210,6 +230,34 @@ class TestParseMarkdownTracklist:
             assert parsed_track.artist == orig.artist
             assert parsed_track.title == orig.title
             assert parsed_track.timestamp == orig.timestamp
+
+    def test_parse_summary(self):
+        """A prose paragraph between the date and listing is parsed as the summary."""
+        md = """# Tracklist: mix.mp3
+
+*Generated on 2026-01-31 20:00*
+
+A driving techno set with dub-inflected low end and hypnotic, minimal arrangements.
+
+1. **Artist** - Song (0:00)
+"""
+        tracklist = parse_markdown_tracklist(md)
+        assert tracklist.summary == (
+            "A driving techno set with dub-inflected low end and hypnotic, "
+            "minimal arrangements."
+        )
+        assert len(tracklist.tracks) == 1
+
+    def test_summary_roundtrip(self, sample_tracklist):
+        """A summary survives to_markdown -> parse_markdown_tracklist."""
+        sample_tracklist.summary = "A propulsive big-beat set with funk-laced breaks."
+        parsed = parse_markdown_tracklist(sample_tracklist.to_markdown())
+        assert parsed.summary == sample_tracklist.summary
+
+    def test_parse_no_summary(self, sample_markdown):
+        """Markdown without a summary parses to summary=None."""
+        tracklist = parse_markdown_tracklist(sample_markdown)
+        assert tracklist.summary is None
 
 
 class TestCorrectionsDB:
