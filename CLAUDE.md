@@ -55,7 +55,7 @@ CLI application with the following modules:
 - Constants: `MAX_RETRIES`, `INITIAL_BACKOFF`
 
 ### `setlist_maker/identify.py` - Identification pipeline
-- **process_batch() / process_single_file():** Orchestrate slicing → recognition → output
+- **process_single_file():** Orchestrates slicing → recognition → dedup → summary → output
 - **deduplicate_tracklist():** Fuzzy-clusters matches (normalizes remix/feat/edit tags so metadata
   drift for one track collapses), smooths isolated single-sample outliers (A B A / A None A → A),
   drops low-confidence singletons while keeping confident short tracks, then collapses consecutive
@@ -65,6 +65,13 @@ CLI application with the following modules:
 - **results_to_tracklist():** Applies corrections and builds a `Tracklist`
 - **Progress persistence:** `save_progress()` / `load_progress()` JSON files enable resuming
 - `DEFAULT_DELAY_SECONDS = 15` (between API calls)
+
+### `setlist_maker/summary.py` - Playlist summary generation
+- **generate_summary():** Shells out to the Claude CLI (`claude -p --strict-mcp-config`) from a
+  throwaway temp dir to produce a one-paragraph set description. Best-effort: returns `None`
+  (warns and continues) if the CLI is missing, errors, times out, or returns nothing. On by
+  default; suppressed by `identify --no-summary`. The result is stored on `Tracklist.summary`,
+  rendered by `to_markdown()`, and recovered by `parse_markdown_tracklist()` for editor round-trips.
 
 ### `setlist_maker/chapters.py` + `setlist_maker/artwork.py` - Chapter markers & artwork
 - **embed_chapters():** Writes ID3v2 CHAP/CTOC frames into an MP3 for podcast players

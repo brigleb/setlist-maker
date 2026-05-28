@@ -27,6 +27,12 @@ sudo apt install ffmpeg
 # Windows — download from https://ffmpeg.org and add to PATH
 ```
 
+> **Optional:** if the [`claude` CLI](https://claude.com/claude-code) is installed and
+> authenticated, each tracklist is prefaced with a short, AI-generated paragraph
+> describing the set's genres, sound, and mood. It's on by default and degrades
+> gracefully — if `claude` isn't found the summary is simply skipped. Turn it off
+> with `--no-summary`.
+
 ### 2. Install Setlist Maker
 
 ```bash
@@ -51,6 +57,9 @@ A markdown tracklist with timestamps:
 # Tracklist: my_set.mp3
 
 *Generated on 2025-01-15 14:30*
+
+A propulsive late-night house set that leans on deep, dubby basslines and warm
+analog pads, building from hypnotic minimalism into brighter, vocal-driven peaks.
 
 1. **Artist One** - Track Title (0:00)
 2. **Artist Two** - Another Track (2:30)
@@ -170,6 +179,7 @@ setlist-maker recording.mp3 --no-learn
 | `-d, --delay` | Delay in seconds between API calls (default: 15) |
 | `--no-resume` | Start fresh instead of resuming from previous progress |
 | `--no-learn` | Disable learning from corrections |
+| `--no-summary` | Skip the Claude-generated playlist summary (on by default; requires the `claude` CLI) |
 
 ### Chapters Command
 
@@ -191,7 +201,8 @@ setlist-maker recording.mp3 --no-learn
 3. Runs each sample through Shazam
 4. Applies any learned corrections from previous sessions
 5. Deduplicates consecutive matches
-6. Outputs a markdown tracklist with timestamps (and JSON)
+6. Generates a one-paragraph set description via the `claude` CLI (unless `--no-summary`)
+7. Outputs a markdown tracklist with timestamps (and JSON)
 
 Progress is automatically saved, so if interrupted you can resume where you left off.
 
