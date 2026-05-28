@@ -11,6 +11,30 @@ MAX_RETRIES = 5
 INITIAL_BACKOFF = 30
 
 
+def estimate_confidence(result: dict) -> float:
+    """
+    Heuristic match-confidence score in [0, 1] for a Shazam result.
+
+    Shazam does not expose a single confidence number, so this combines two
+    weak signals: how well each fingerprint match aligns (low frequency skew
+    is better) and how many matches corroborate the same track. It is a
+    placeholder proxy -- good enough to rank matches and to tell a strong
+    one-off hit from a stray false positive -- not a calibrated probability.
+    """
+    matches = result.get("matches") or []
+    if not matches:
+        # A track was returned but with no match detail; stay neutral.
+        return 0.5
+
+    alignments = []
+    for m in matches:
+        freq_skew = abs(m.get("frequencyskew", 0) or 0)
+        alignments.append(max(0.0, 1.0 - freq_skew))
+    alignment = sum(alignments) / len(alignments)
+    corroboration = min(1.0, len(matches) / 3)
+    return round(0.5 * alignment + 0.5 * corroboration, 3)
+
+
 async def identify_sample_with_retry(
     shazam: Shazam, segment: AudioSegment, temp_dir: str, max_retries: int = MAX_RETRIES
 ) -> dict | None:
@@ -36,6 +60,7 @@ async def identify_sample_with_retry(
                     if track.get("sections")
                     else None,
                     "coverart_url": images.get("coverarthq") or images.get("coverart"),
+                    "confidence": estimate_confidence(result),
                 }
             return None
         except Exception as e:

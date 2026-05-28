@@ -1,13 +1,95 @@
 """Tests for setlist_maker.cli module."""
 
+import argparse
 import json
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from setlist_maker.cli import (
     _chain_chapters_after_identify,
     _load_tracklist_with_artwork_urls,
+    cmd_identify,
 )
 from setlist_maker.editor import Track, Tracklist
+from setlist_maker.identify import (
+    ARTIST_SIMILARITY_THRESHOLD,
+    SIMILARITY_THRESHOLD,
+    SINGLETON_CONFIDENCE_KEEP,
+)
+
+
+def _identify_args(**overrides):
+    """Build an argparse.Namespace with identify defaults, overridable per test."""
+    defaults = dict(
+        paths=["set.mp3"],
+        output_dir=None,
+        delay=0,
+        edit=False,
+        chapters=False,
+        no_artwork=False,
+        no_resume=False,
+        no_learn=False,
+        title_threshold=SIMILARITY_THRESHOLD,
+        artist_threshold=ARTIST_SIMILARITY_THRESHOLD,
+        singleton_confidence=SINGLETON_CONFIDENCE_KEEP,
+        no_smoothing=False,
+    )
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+class TestIdentifyTuningFlags:
+    """Tests that detection-tuning flags flow into the DedupConfig."""
+
+    def test_flags_build_dedup_config(self):
+        """Custom tuning flags are passed through to process_batch."""
+        args = _identify_args(
+            title_threshold=0.7,
+            artist_threshold=0.95,
+            singleton_confidence=0.4,
+            no_smoothing=True,
+        )
+
+        with (
+            patch("setlist_maker.cli.get_audio_files", return_value=[Path("set.mp3")]),
+            patch("setlist_maker.cli.process_batch", new=AsyncMock(return_value=[])) as mock_batch,
+        ):
+            cmd_identify(args)
+
+        config = mock_batch.call_args.kwargs["dedup_config"]
+        assert config.title_threshold == 0.7
+        assert config.artist_threshold == 0.95
+        assert config.singleton_confidence_keep == 0.4
+        assert config.smoothing is False
+
+    def test_defaults_when_flags_omitted(self):
+        """Without flags the config uses the module default thresholds."""
+        with (
+            patch("setlist_maker.cli.get_audio_files", return_value=[Path("set.mp3")]),
+            patch("setlist_maker.cli.process_batch", new=AsyncMock(return_value=[])) as mock_batch,
+        ):
+            cmd_identify(_identify_args())
+
+        config = mock_batch.call_args.kwargs["dedup_config"]
+        assert config.title_threshold == SIMILARITY_THRESHOLD
+        assert config.artist_threshold == ARTIST_SIMILARITY_THRESHOLD
+        assert config.singleton_confidence_keep == SINGLETON_CONFIDENCE_KEEP
+        assert config.smoothing is True
+
+    def test_out_of_range_threshold_exits(self, capsys):
+        """An out-of-range tuning value fails fast before any processing."""
+        with (
+            patch("setlist_maker.cli.get_audio_files") as mock_files,
+            patch("setlist_maker.cli.process_batch", new=AsyncMock()) as mock_batch,
+            pytest.raises(SystemExit),
+        ):
+            cmd_identify(_identify_args(title_threshold=1.5))
+
+        mock_files.assert_not_called()
+        mock_batch.assert_not_called()
+        assert "between 0.0 and 1.0" in capsys.readouterr().out
 
 
 class TestChainChaptersAfterIdentify:
