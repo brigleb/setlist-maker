@@ -31,6 +31,7 @@ def _identify_args(**overrides):
         no_artwork=False,
         no_resume=False,
         no_learn=True,  # disabled so these unit tests never touch the real corrections DB
+        no_summary=False,
         title_threshold=SIMILARITY_THRESHOLD,
         artist_threshold=ARTIST_SIMILARITY_THRESHOLD,
         singleton_confidence=SINGLETON_CONFIDENCE_KEEP,
@@ -93,6 +94,32 @@ class TestIdentifyTuningFlags:
         assert config.artist_threshold == ARTIST_SIMILARITY_THRESHOLD
         assert config.singleton_confidence_keep == SINGLETON_CONFIDENCE_KEEP
         assert config.smoothing is True
+
+    def test_summary_enabled_by_default(self):
+        """Without --no-summary, process_single_file is asked to generate one."""
+        with (
+            patch("setlist_maker.cli.get_audio_file", return_value=Path("set.mp3")),
+            patch(
+                "setlist_maker.cli.process_single_file",
+                new=AsyncMock(return_value=_dummy_result()),
+            ) as mock_process,
+        ):
+            cmd_identify(_identify_args())
+
+        assert mock_process.call_args.kwargs["summary"] is True
+
+    def test_no_summary_flag_disables_summary(self):
+        """--no-summary propagates as summary=False to process_single_file."""
+        with (
+            patch("setlist_maker.cli.get_audio_file", return_value=Path("set.mp3")),
+            patch(
+                "setlist_maker.cli.process_single_file",
+                new=AsyncMock(return_value=_dummy_result()),
+            ) as mock_process,
+        ):
+            cmd_identify(_identify_args(no_summary=True))
+
+        assert mock_process.call_args.kwargs["summary"] is False
 
     def test_out_of_range_threshold_exits(self, capsys):
         """An out-of-range tuning value fails fast before any processing."""

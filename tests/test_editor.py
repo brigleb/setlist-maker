@@ -243,8 +243,7 @@ A driving techno set with dub-inflected low end and hypnotic, minimal arrangemen
 """
         tracklist = parse_markdown_tracklist(md)
         assert tracklist.summary == (
-            "A driving techno set with dub-inflected low end and hypnotic, "
-            "minimal arrangements."
+            "A driving techno set with dub-inflected low end and hypnotic, minimal arrangements."
         )
         assert len(tracklist.tracks) == 1
 
