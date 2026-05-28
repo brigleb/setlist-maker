@@ -4,6 +4,7 @@ from setlist_maker.editor import (
     CorrectionsDB,
     Track,
     Tracklist,
+    TracklistEditor,
     parse_markdown_tracklist,
 )
 
@@ -349,3 +350,41 @@ class TestCorrectionsDB:
 
         db = CorrectionsDB(db_path=db_path)
         assert db.corrections == {}
+
+
+class TestResolveAudioPath:
+    """Tests for TracklistEditor._resolve_audio_path() (no DOM required)."""
+
+    def _editor(self, output_path, audio_path=None):
+        tracklist = Tracklist(
+            source_file="set.mp3", tracks=[Track(timestamp=0, artist="", title="")]
+        )
+        return TracklistEditor(tracklist, output_path, corrections_db=None, audio_path=audio_path)
+
+    def test_uses_explicit_audio_path_when_it_exists(self, temp_dir):
+        audio = temp_dir / "set.mp3"
+        audio.write_bytes(b"x")
+        md = temp_dir / "set_tracklist.md"
+        editor = self._editor(md, audio_path=audio)
+        assert editor._resolve_audio_path() == audio
+
+    def test_falls_back_to_discovery_when_no_explicit_path(self, temp_dir):
+        # Sibling audio file matching the markdown stem (minus _tracklist).
+        audio = temp_dir / "set.mp3"
+        audio.write_bytes(b"x")
+        md = temp_dir / "set_tracklist.md"
+        editor = self._editor(md, audio_path=None)
+        assert editor._resolve_audio_path() == audio
+
+    def test_returns_none_when_unresolvable(self, temp_dir):
+        md = temp_dir / "set_tracklist.md"
+        editor = self._editor(md, audio_path=None)
+        assert editor._resolve_audio_path() is None
+
+    def test_ignores_explicit_path_that_does_not_exist(self, temp_dir):
+        # A stale/moved explicit path falls through to discovery (which also
+        # fails here), rather than being returned blindly.
+        missing = temp_dir / "moved" / "set.mp3"
+        md = temp_dir / "set_tracklist.md"
+        editor = self._editor(md, audio_path=missing)
+        assert editor._resolve_audio_path() is None

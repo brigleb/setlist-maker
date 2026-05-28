@@ -10,6 +10,7 @@ Provides a spreadsheet-like interface for:
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
 
 from setlist_maker import AUDIO_EXTENSIONS
+from setlist_maker.playback import PREVIEW_SECONDS, PlaybackController, playback_available
 
 
 @dataclass
@@ -360,6 +362,7 @@ class TracklistEditor(App[None]):
         Binding("s", "save", "Save"),
         Binding("space", "toggle_reject", "Reject/Accept"),
         Binding("enter", "edit_track", "Edit"),
+        Binding("p", "play_pause", "Play/Stop"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("?", "show_help", "Help"),
@@ -370,12 +373,30 @@ class TracklistEditor(App[None]):
         tracklist: Tracklist,
         output_path: Path,
         corrections_db: "CorrectionsDB | None" = None,
+        audio_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.tracklist = tracklist
         self.output_path = output_path
         self.corrections_db = corrections_db
+        self.audio_path = audio_path
         self.unsaved_changes = False
+        self.playback = PlaybackController()
+        self.playback_enabled = False  # set in on_mount once capability is known
+        self._playing_row: int | None = None
+        self._playing_since: float | None = None  # monotonic clock when play started
+
+    def _resolve_audio_path(self) -> Path | None:
+        """Locate the source audio for previewing track segments.
+
+        Prefers the path threaded in from the CLI (the fresh-identify case);
+        falls back to discovering a sibling of the markdown file (the
+        edit-an-existing-.md case). Returns None if neither resolves, so a
+        moved/renamed file degrades gracefully rather than erroring.
+        """
+        if self.audio_path is not None and self.audio_path.exists():
+            return self.audio_path
+        return find_audio_file(self.output_path)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -383,10 +404,11 @@ class TracklistEditor(App[None]):
             with Horizontal(id="info-bar"):
                 yield Label(f"File: {self.tracklist.source_file}")
                 yield Label(f"Tracks: {len(self.tracklist.tracks)}")
+                yield Label(id="playback-label")
                 yield Label(id="status-label")
             yield DataTable(id="track-table")
         yield Static(
-            "[Space] Reject/Accept  [Enter] Edit  [S] Save  [Q] Quit  [?] Help",
+            "[Space] Reject/Accept  [Enter] Edit  [P] Play/Stop  [S] Save  [Q] Quit  [?] Help",
             id="help-bar",
         )
         yield Footer()
@@ -405,6 +427,44 @@ class TracklistEditor(App[None]):
 
         # Populate rows
         self._refresh_table()
+
+        # Decide once whether previews can be heard here: ffplay on PATH and a
+        # supported platform (macOS). This is a cheap PATH/platform check with
+        # no subprocess, so it is safe to run inline on mount. Then poll
+        # playback state so the now-playing readout clears itself when a preview
+        # ends on its own.
+        self.playback_enabled = playback_available()
+        self.set_interval(0.5, self._tick_playback)
+
+    # ffplay exits 0 within ~1s on an unreadable file or a seek past the end of
+    # the recording, so a near-instant stop means the preview never really
+    # played rather than that it finished its window.
+    _MIN_AUDIBLE_SECONDS = 1.5
+
+    def _tick_playback(self) -> None:
+        """Refresh the now-playing readout; clear it when playback stops."""
+        label = self.query_one("#playback-label", Label)
+        if self.playback.is_playing() and self._playing_row is not None:
+            elapsed = min(int(self.playback.elapsed()), PREVIEW_SECONDS)
+            track_num = self._playing_row + 1
+            label.update(f"[green]▶ Track {track_num}  {elapsed}s/{PREVIEW_SECONDS}s[/]")
+        else:
+            # A row was previewing but ffplay has stopped on its own. Manual
+            # stops (toggle, navigation, edit, unmount) clear _playing_row
+            # themselves, so reaching here with it still set means a natural
+            # exit -- flag it if it happened too fast to have been heard.
+            if self._playing_row is not None:
+                since = self._playing_since
+                self._playing_row = None
+                self._playing_since = None
+                if since is not None and (time.monotonic() - since) < self._MIN_AUDIBLE_SECONDS:
+                    self.notify(
+                        "Could not preview this segment (unreadable audio or "
+                        "a timestamp past the end of the recording).",
+                        title="Preview failed",
+                        severity="warning",
+                    )
+            label.update("")
 
     def _refresh_table(self) -> None:
         """Refresh the table contents from the tracklist."""
@@ -466,6 +526,10 @@ class TracklistEditor(App[None]):
         result = self._get_current_track()
         if result:
             idx, track = result
+            # Stop any preview explicitly; the table refresh below would only
+            # stop it as an incidental cursor side effect (and not at all when
+            # rejecting row 0), so be deliberate about it.
+            self._stop_playback()
             track.rejected = not track.rejected
             self.unsaved_changes = True
             self._refresh_table()
@@ -473,15 +537,67 @@ class TracklistEditor(App[None]):
             table = self.query_one("#track-table", DataTable)
             table.move_cursor(row=idx)
 
+    def action_play_pause(self) -> None:
+        """Preview the current track's 30s window, or stop if it's playing.
+
+        Lets you listen to an unknown track before editing it. Plays the
+        recording from the track's start timestamp via a non-blocking ffplay
+        subprocess; pressing again (on the same row) stops it.
+        """
+        if not self.playback_enabled:
+            self.notify(
+                "Playback unavailable: ffplay (ffmpeg) not found or no audio output here.",
+                title="No playback",
+                severity="warning",
+            )
+            return
+
+        result = self._get_current_track()
+        if not result:
+            return
+        idx, track = result
+
+        # Toggle off if this same row is already previewing.
+        if self.playback.is_playing() and self._playing_row == idx:
+            self._stop_playback()
+            self._tick_playback()
+            return
+
+        audio_path = self._resolve_audio_path()
+        if audio_path is None:
+            self.notify(
+                "Audio file not found next to the tracklist; cannot preview.",
+                title="No audio",
+                severity="warning",
+            )
+            return
+
+        self.playback.play(audio_path, track.timestamp)
+        self._playing_row = idx
+        self._playing_since = time.monotonic()
+        self._tick_playback()
+
     def action_edit_track(self) -> None:
         """Open edit dialog for current track."""
         result = self._get_current_track()
         if result:
             idx, track = result
+            # Stop any preview so audio doesn't keep playing under the modal.
+            self._stop_playback()
             self.push_screen(
                 EditTrackScreen(track.artist, track.title),
                 callback=lambda r: self._on_edit_complete(idx, r),
             )
+
+    def _stop_playback(self) -> None:
+        """Stop any active preview and clear the now-playing state."""
+        self.playback.stop()
+        self._playing_row = None
+        self._playing_since = None
+
+    def on_unmount(self) -> None:
+        """Ensure no ffplay process outlives the editor."""
+        self._stop_playback()
 
     def _on_edit_complete(self, idx: int, result: tuple[str, str] | None) -> None:
         """Handle edit dialog completion."""
@@ -554,10 +670,21 @@ class TracklistEditor(App[None]):
         table = self.query_one("#track-table", DataTable)
         table.action_cursor_up()
 
+    @on(DataTable.RowHighlighted)
+    def _on_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Stop any preview when the cursor leaves the playing row.
+
+        Fires for both arrow-key and j/k navigation (DataTable posts this on
+        any cursor move), so a preview never keeps playing for a row you have
+        scrolled away from.
+        """
+        if self._playing_row is not None and event.cursor_row != self._playing_row:
+            self._stop_playback()
+
     def action_show_help(self) -> None:
         """Show help information."""
         self.notify(
-            "↑↓/jk: Navigate | Space: Reject | Enter: Edit | S: Save | Q: Quit",
+            "↑↓/jk: Navigate | Space: Reject | Enter: Edit | P: Play/Stop | S: Save | Q: Quit",
             title="Keyboard Shortcuts",
         )
 
@@ -646,8 +773,15 @@ def run_editor(
     tracklist: Tracklist,
     output_path: Path,
     use_corrections: bool = True,
+    audio_path: Path | None = None,
 ) -> None:
-    """Run the interactive tracklist editor."""
+    """Run the interactive tracklist editor.
+
+    ``audio_path`` is the source recording, passed through when known (the
+    fresh-identify path) so track previews work without relying on filename
+    discovery; when omitted the editor falls back to finding a sibling of the
+    markdown file.
+    """
     corrections_db = CorrectionsDB() if use_corrections else None
 
     # Apply any known corrections
@@ -656,5 +790,5 @@ def run_editor(
         if applied > 0:
             print(f"Applied {applied} learned correction(s) from previous sessions.")
 
-    app = TracklistEditor(tracklist, output_path, corrections_db)
+    app = TracklistEditor(tracklist, output_path, corrections_db, audio_path=audio_path)
     app.run()
