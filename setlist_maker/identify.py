@@ -277,6 +277,7 @@ async def process_single_file(
     resume: bool = True,
     corrections_db: CorrectionsDB | None = None,
     dedup_config: DedupConfig | None = None,
+    summary: bool = True,
 ) -> tuple[Tracklist, Path] | None:
     """
     Process a single audio file and generate its tracklist.
@@ -345,14 +346,16 @@ async def process_single_file(
     tracklist = results_to_tracklist(raw_results, audio_path.name, corrections_db, dedup_config)
 
     # Add a one-paragraph playlist description ahead of the listing. Warns and
-    # continues if the Claude CLI is unavailable or the call fails.
-    print("  Generating playlist summary...")
-    summary_lines = [
-        f"{t.artist} - {t.title}"
-        for t in tracklist.tracks
-        if not t.rejected and not t.is_unidentified
-    ]
-    tracklist.summary = generate_summary(summary_lines)
+    # continues if the Claude CLI is unavailable or the call fails. Disabled
+    # with `identify --no-summary`.
+    if summary:
+        print("  Generating playlist summary...")
+        summary_lines = [
+            f"{t.artist} - {t.title}"
+            for t in tracklist.tracks
+            if not t.rejected and not t.is_unidentified
+        ]
+        tracklist.summary = generate_summary(summary_lines)
 
     # Write markdown plus a JSON sidecar. The JSON carries each track's
     # Shazam cover-art URL, which the chapters command relies on, so it is

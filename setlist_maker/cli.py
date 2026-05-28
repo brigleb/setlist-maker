@@ -152,6 +152,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
             resume=not args.no_resume,
             corrections_db=corrections_db,
             dedup_config=dedup_config,
+            summary=not args.no_summary,
         )
     )
 
@@ -430,6 +431,13 @@ Examples:
         "--no-learn",
         action="store_true",
         help="Disable learning from corrections",
+    )
+
+    identify_parser.add_argument(
+        "--no-summary",
+        action="store_true",
+        help="Skip the Claude-generated playlist summary paragraph "
+        "(on by default; requires the 'claude' CLI)",
     )
 
     # Deduplication tuning (see DedupConfig in identify.py)
