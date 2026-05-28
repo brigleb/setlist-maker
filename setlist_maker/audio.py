@@ -22,27 +22,25 @@ def format_timestamp(seconds: int) -> str:
         return f"{minutes}:{secs:02d}"
 
 
-def get_audio_files(paths: list[str]) -> list[Path]:
+def get_audio_file(path_str: str) -> Path | None:
     """
-    Given a list of paths (files or directories), return all audio files to process.
-    """
-    audio_files = []
+    Validate a single audio file path.
 
-    for path_str in paths:
-        path = Path(path_str)
-        if path.is_dir():
-            # Get all audio files in directory (non-recursive)
-            for file in sorted(path.iterdir()):
-                if file.is_file() and file.suffix.lower() in AUDIO_EXTENSIONS:
-                    audio_files.append(file)
-        elif path.is_file():
-            if path.suffix.lower() in AUDIO_EXTENSIONS:
-                audio_files.append(path)
-            else:
-                print(f"Warning: Skipping non-audio file: {path}")
-        else:
-            print(f"Warning: Path not found: {path}")
-    return audio_files
+    Returns the Path if it is an existing, supported audio file; otherwise
+    prints an error and returns None.
+    """
+    path = Path(path_str)
+    if not path.exists():
+        print(f"Error: Path not found: {path}")
+        return None
+    if not path.is_file():
+        print(f"Error: Not a file: {path}")
+        return None
+    if path.suffix.lower() not in AUDIO_EXTENSIONS:
+        print(f"Error: Not a supported audio file: {path}")
+        print(f"Supported formats: {', '.join(sorted(AUDIO_EXTENSIONS))}")
+        return None
+    return path
 
 
 def load_audio(filepath: Path) -> AudioSegment:

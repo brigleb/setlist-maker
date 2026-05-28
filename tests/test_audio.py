@@ -1,7 +1,7 @@
 """Tests for setlist_maker.audio module."""
 
 from setlist_maker import AUDIO_EXTENSIONS
-from setlist_maker.audio import format_timestamp, get_audio_files
+from setlist_maker.audio import format_timestamp, get_audio_file
 
 
 class TestFormatTimestamp:
@@ -32,57 +32,37 @@ class TestFormatTimestamp:
         assert format_timestamp(37845) == "10:30:45"
 
 
-class TestGetAudioFiles:
-    """Tests for get_audio_files function."""
+class TestGetAudioFile:
+    """Tests for get_audio_file function."""
 
-    def test_single_file(self, sample_audio_files, temp_dir):
-        """Test getting a single audio file."""
-        files = get_audio_files([str(sample_audio_files[0])])
-        assert len(files) == 1
-        assert files[0].name == "track1.mp3"
+    def test_single_file(self, sample_audio_files):
+        """Test validating a single audio file."""
+        result = get_audio_file(str(sample_audio_files[0]))
+        assert result is not None
+        assert result.name == "track1.mp3"
 
-    def test_multiple_files(self, sample_audio_files):
-        """Test getting multiple audio files."""
-        paths = [str(f) for f in sample_audio_files]
-        files = get_audio_files(paths)
-        assert len(files) == 3
+    def test_directory_rejected(self, temp_dir, capsys):
+        """A directory is not a file and is rejected."""
+        result = get_audio_file(str(temp_dir))
+        assert result is None
+        assert "Not a file" in capsys.readouterr().out
 
-    def test_directory(self, sample_audio_files, temp_dir):
-        """Test getting files from a directory."""
-        files = get_audio_files([str(temp_dir)])
-        # Should find all 3 audio files, not the txt file
-        assert len(files) == 3
-
-    def test_filters_non_audio(self, temp_dir, capsys):
-        """Test that non-audio files are filtered out."""
+    def test_non_audio_rejected(self, temp_dir, capsys):
+        """A non-audio file is rejected with a clear message."""
         txt_file = temp_dir / "readme.txt"
         txt_file.write_text("not audio")
 
-        files = get_audio_files([str(txt_file)])
+        result = get_audio_file(str(txt_file))
 
-        assert len(files) == 0
-        captured = capsys.readouterr()
-        assert "Skipping non-audio file" in captured.out
+        assert result is None
+        assert "Not a supported audio file" in capsys.readouterr().out
 
     def test_nonexistent_path(self, capsys):
-        """Test handling of nonexistent paths."""
-        files = get_audio_files(["/nonexistent/path.mp3"])
+        """Test handling of a nonexistent path."""
+        result = get_audio_file("/nonexistent/path.mp3")
 
-        assert len(files) == 0
-        captured = capsys.readouterr()
-        assert "Path not found" in captured.out
-
-    def test_mixed_valid_invalid(self, sample_audio_files, temp_dir, capsys):
-        """Test mix of valid and invalid paths."""
-        paths = [
-            str(sample_audio_files[0]),
-            "/nonexistent.mp3",
-            str(temp_dir / "readme.txt"),
-        ]
-        files = get_audio_files(paths)
-
-        assert len(files) == 1
-        assert files[0].name == "track1.mp3"
+        assert result is None
+        assert "Path not found" in capsys.readouterr().out
 
     def test_supported_extensions(self):
         """Test that AUDIO_EXTENSIONS includes common formats."""

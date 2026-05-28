@@ -158,6 +158,91 @@ class TestDeduplicateTracklist:
         deduped = deduplicate_tracklist([])
         assert deduped == []
 
+    def test_fuzzy_merges_version_drift(self):
+        """Metadata drift (edit/feat tags) for one track collapses to one entry."""
+        results = [
+            (0, {"artist": "Daft Punk", "title": "Around the World"}),
+            (30, {"artist": "Daft Punk", "title": "Around the World - Radio Edit"}),
+            (60, {"artist": "Daft Punk feat. Pharrell", "title": "Around the World (Remix)"}),
+        ]
+
+        deduped = deduplicate_tracklist(results)
+
+        assert len(deduped) == 1
+        assert deduped[0][1]["title"] == "Around the World"
+
+    def test_fuzzy_keeps_different_songs_same_artist(self):
+        """Two different songs by the same artist are not merged."""
+        results = [
+            (0, {"artist": "Daft Punk", "title": "Around the World"}),
+            (30, {"artist": "Daft Punk", "title": "Around the World"}),
+            (60, {"artist": "Daft Punk", "title": "Harder Better Faster Stronger"}),
+            (90, {"artist": "Daft Punk", "title": "Harder Better Faster Stronger"}),
+        ]
+
+        deduped = deduplicate_tracklist(results)
+
+        assert len(deduped) == 2
+        assert deduped[0][1]["title"] == "Around the World"
+        assert deduped[1][1]["title"] == "Harder Better Faster Stronger"
+
+    def test_smooths_transient_misdetection(self):
+        """An isolated misfire flanked by the same track is corrected (A B A -> A)."""
+        results = [
+            (0, {"artist": "Artist", "title": "Long Song"}),
+            (30, {"artist": "Artist", "title": "Long Song"}),
+            (60, {"artist": "Wrong", "title": "Misfire"}),  # transient outlier
+            (90, {"artist": "Artist", "title": "Long Song"}),
+            (120, {"artist": "Artist", "title": "Long Song"}),
+        ]
+
+        deduped = deduplicate_tracklist(results)
+
+        # The misfire is absorbed into the surrounding long song: one entry, no gap.
+        assert len(deduped) == 1
+        assert deduped[0][1]["title"] == "Long Song"
+
+    def test_smooths_dropout_within_song(self):
+        """A single unidentified sample inside a song does not create a gap."""
+        results = [
+            (0, {"artist": "Artist", "title": "Song"}),
+            (30, {"artist": "Artist", "title": "Song"}),
+            (60, None),  # single dropout
+            (90, {"artist": "Artist", "title": "Song"}),
+            (120, {"artist": "Artist", "title": "Song"}),
+        ]
+
+        deduped = deduplicate_tracklist(results)
+
+        assert len(deduped) == 1
+        assert deduped[0][1]["title"] == "Song"
+
+    def test_confident_singleton_is_kept(self):
+        """A lone match survives when Shazam was confident (a real short track)."""
+        results = [
+            (0, {"artist": "A", "title": "Long", "confidence": 0.9}),
+            (30, {"artist": "A", "title": "Long", "confidence": 0.9}),
+            (60, {"artist": "B", "title": "Short Interlude", "confidence": 0.95}),
+        ]
+
+        deduped = deduplicate_tracklist(results)
+
+        titles = [info["title"] for _, info in deduped if info]
+        assert "Short Interlude" in titles
+
+    def test_low_confidence_singleton_is_dropped(self):
+        """A lone low-confidence match is treated as a stray false positive."""
+        results = [
+            (0, {"artist": "A", "title": "Long", "confidence": 0.9}),
+            (30, {"artist": "A", "title": "Long", "confidence": 0.9}),
+            (60, {"artist": "B", "title": "Stray", "confidence": 0.2}),
+        ]
+
+        deduped = deduplicate_tracklist(results)
+
+        titles = [info["title"] for _, info in deduped if info]
+        assert "Stray" not in titles
+
 
 class TestResultsToTracklist:
     """Tests for results_to_tracklist function."""

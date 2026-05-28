@@ -80,14 +80,8 @@ setlist-maker recording.mp3 --edit
 # Identify without opening the editor
 setlist-maker recording.mp3
 
-# Multiple files
-setlist-maker set1.mp3 set2.mp3 set3.mp3
-
-# Entire folder
-setlist-maker /path/to/dj_sets/
-
 # Custom delay between API calls and output directory
-setlist-maker /path/to/sets/ --delay 20 --output-dir ./tracklists/
+setlist-maker recording.mp3 --delay 20 --output-dir ./tracklists/
 
 # Edit an existing tracklist
 setlist-maker tracklist.md
