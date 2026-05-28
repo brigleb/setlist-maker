@@ -3,6 +3,8 @@
 import asyncio
 import json
 import re
+import shutil
+import sys
 import tempfile
 from collections import Counter
 from dataclasses import dataclass
@@ -270,6 +272,55 @@ def load_progress(filepath: Path) -> list:
     return []
 
 
+_ANSI_GREEN = "\033[32m"
+_ANSI_DIM = "\033[2m"
+_ANSI_RESET = "\033[0m"
+
+
+def format_progress_line(
+    index: int,
+    total: int,
+    time_str: str,
+    track_info: dict | None,
+    *,
+    width: int = 80,
+    color: bool = False,
+) -> str:
+    """Render one compact status line for a processed sample.
+
+    Layout is ``[idx/total]  M:SS  <glyph> <conf>  Artist - Title``: the counter
+    and timestamp are right-aligned so rows line up, and the track label is
+    truncated so the line never exceeds ``width`` (and therefore never wraps).
+    On a terminal (``color=True``) the glyphs are Unicode and the line is
+    colorized; otherwise it stays plain ASCII, safe for piped/redirected output.
+    """
+    counter = f"[{index:>{len(str(total))}}/{total}]"
+    time_col = f"{time_str:>7}"
+    found_glyph, miss_glyph, ellipsis = ("✓", "·", "…") if color else ("+", "-", "...")
+
+    if track_info is None:
+        line = f"  {counter} {time_col}  {miss_glyph}  not identified"
+        return f"{_ANSI_DIM}{line}{_ANSI_RESET}" if color else line
+
+    conf = track_info.get("confidence")
+    conf_str = f"{round(conf * 100):>3d}%" if conf is not None else " -- "
+    label = f"{track_info.get('artist', '')} - {track_info.get('title', '')}"
+
+    # Truncate the label so the visible line stays within `width`. Color codes
+    # are zero-width, so measuring the plain prefix is correct either way.
+    prefix = f"  {counter} {time_col}  {found_glyph}  {conf_str}  "
+    avail = max(1, width - len(prefix))
+    if len(label) > avail:
+        label = label[: max(0, avail - len(ellipsis))].rstrip() + ellipsis
+
+    if color:
+        return (
+            f"  {counter} {time_col}  {_ANSI_GREEN}{found_glyph}{_ANSI_RESET}  "
+            f"{_ANSI_DIM}{conf_str}{_ANSI_RESET}  {label}"
+        )
+    return f"  {counter} {time_col}  {found_glyph}  {conf_str}  {label}"
+
+
 async def process_single_file(
     audio_path: Path,
     output_dir: Path | None,
@@ -318,19 +369,34 @@ async def process_single_file(
     # Initialize Shazam
     shazam = Shazam()
 
-    # Process each slice
+    # Process each slice. Each sample gets a single compact status line. On a
+    # terminal we print a transient "identifying" marker and overwrite it in
+    # place with the result, so the line stays responsive without scrolling;
+    # piped/redirected output just receives the final line, no escape codes.
+    live = sys.stdout.isatty()
+    term_width = shutil.get_terminal_size(fallback=(80, 24)).columns
+
     total_slices = len(slices)
+    idx_width = len(str(total_slices))
     with tempfile.TemporaryDirectory() as temp_dir:
         for i, (timestamp, segment) in enumerate(slices[start_index:], start_index + 1):
             time_str = format_timestamp(timestamp)
-            print(f"  [{i}/{total_slices}] Sample at {time_str}")
+
+            if live:
+                marker = f"  [{i:>{idx_width}}/{total_slices}] {time_str:>7}  …  identifying"
+                sys.stdout.write(f"\r\033[K{marker}")
+                sys.stdout.flush()
 
             track_info = await identify_sample_with_retry(shazam, segment, temp_dir)
 
-            if track_info:
-                print(f"  Found: {track_info['artist']} - {track_info['title']}")
+            line = format_progress_line(
+                i, total_slices, time_str, track_info, width=term_width, color=live
+            )
+            if live:
+                sys.stdout.write(f"\r\033[K{line}\n")
+                sys.stdout.flush()
             else:
-                print("  Not identified")
+                print(line)
 
             raw_results.append((timestamp, track_info))
 

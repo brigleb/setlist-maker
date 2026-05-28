@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from setlist_maker.editor import CorrectionsDB
 from setlist_maker.identify import (
     deduplicate_tracklist,
+    format_progress_line,
     load_progress,
     process_single_file,
     results_to_tracklist,
@@ -388,3 +389,60 @@ class TestProcessSingleFileOutput:
 
         # Progress file is cleaned up on success
         assert not (temp_dir / "set_progress.json").exists()
+
+
+class TestFormatProgressLine:
+    """Tests for the compact per-sample status line."""
+
+    def test_found_is_single_line_with_confidence(self):
+        """A match renders one ASCII line with glyph, confidence, and label."""
+        info = {"artist": "Giorgio Moroder", "title": "Midnight Express", "confidence": 0.87}
+        line = format_progress_line(20, 62, "9:30", info, width=80, color=False)
+
+        assert "\n" not in line
+        assert "\033[" not in line  # no ANSI when color=False
+        assert "[20/62]" in line
+        assert "9:30" in line
+        assert "87%" in line
+        assert "+" in line
+        assert "Giorgio Moroder - Midnight Express" in line
+
+    def test_not_identified_line(self):
+        """A miss renders one line and never claims a track."""
+        line = format_progress_line(19, 62, "9:00", None, width=80, color=False)
+
+        assert "\n" not in line
+        assert "[19/62]" in line
+        assert "not identified" in line
+
+    def test_counter_is_right_aligned_to_total_width(self):
+        """Early indices are padded so the counter column lines up."""
+        line = format_progress_line(3, 100, "0:30", None, width=80, color=False)
+        assert "[  3/100]" in line
+
+    def test_long_label_truncated_to_width(self):
+        """An over-long label is truncated with an ellipsis and never wraps."""
+        info = {
+            "artist": "A Very Long Artist Name",
+            "title": "An Equally Long Title",
+            "confidence": 0.5,
+        }
+        width = 40
+        line = format_progress_line(1, 9, "0:00", info, width=width, color=False)
+
+        assert len(line) <= width
+        assert line.endswith("...")
+
+    def test_color_adds_ansi_and_unicode_glyph(self):
+        """Terminal mode colorizes the line and uses the check glyph."""
+        info = {"artist": "X", "title": "Y", "confidence": 0.9}
+        line = format_progress_line(1, 9, "0:00", info, width=80, color=True)
+
+        assert "\033[32m" in line  # green
+        assert "✓" in line
+
+    def test_missing_confidence_does_not_crash(self):
+        """A result without a confidence key still renders cleanly."""
+        info = {"artist": "X", "title": "Y"}
+        line = format_progress_line(1, 9, "0:00", info, width=80, color=False)
+        assert "X - Y" in line
