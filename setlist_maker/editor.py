@@ -69,6 +69,7 @@ class Tracklist:
     source_file: str
     tracks: list[Track] = field(default_factory=list)
     generated_on: str | None = None
+    summary: str | None = None
 
     def to_markdown(self) -> str:
         """Generate markdown output from the tracklist."""
@@ -78,6 +79,10 @@ class Tracklist:
             f"*Generated on {self.generated_on or datetime.now().strftime('%Y-%m-%d %H:%M')}*",
             "",
         ]
+
+        if self.summary:
+            lines.append(self.summary)
+            lines.append("")
 
         track_num = 1
         for track in self.tracks:
@@ -141,6 +146,26 @@ def parse_markdown_tracklist(content: str) -> Tracklist:
         r")\s*"
         r"\((\d+:\d+(?::\d+)?)\)"  # (MM:SS) or (H:MM:SS)
     )
+
+    # Parse the optional summary paragraph: contiguous prose lines sitting
+    # between the "*Generated on*" line and the first numbered track.
+    summary_lines: list[str] = []
+    seen_generated = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("*Generated on"):
+            seen_generated = True
+            continue
+        if not seen_generated:
+            continue
+        if track_pattern.match(stripped):
+            break
+        if stripped:
+            summary_lines.append(stripped)
+        elif summary_lines:
+            break
+    if summary_lines:
+        tracklist.summary = " ".join(summary_lines)
 
     for line in lines:
         match = track_pattern.match(line.strip())
