@@ -14,7 +14,7 @@ from setlist_maker.audio import (
     load_audio,
     slice_audio,
 )
-from setlist_maker.editor import CorrectionsDB, Track, Tracklist, run_editor
+from setlist_maker.editor import CorrectionsDB, Track, Tracklist
 from setlist_maker.shazam_client import identify_sample_with_retry
 
 DEFAULT_DELAY_SECONDS = 15  # Pause between API calls
@@ -238,57 +238,3 @@ async def process_single_file(
         progress_path.unlink()
 
     return tracklist, output_path
-
-
-async def process_batch(
-    audio_files: list[Path],
-    output_dir: Path | None,
-    delay_seconds: int,
-    resume: bool = True,
-    open_editor: bool = False,
-    use_corrections: bool = True,
-) -> list[tuple[Tracklist, Path]]:
-    """Process multiple audio files in sequence."""
-    corrections_db = CorrectionsDB() if use_corrections else None
-
-    total_files = len(audio_files)
-    print(f"\n{'#' * 60}")
-    print(f"# Batch Processing: {total_files} file(s)")
-    print(f"# Delay between samples: {delay_seconds} seconds")
-    if output_dir:
-        print(f"# Output directory: {output_dir}")
-    if use_corrections:
-        print("# Learning mode: enabled (corrections will be remembered)")
-    print(f"{'#' * 60}")
-
-    results = []
-    for idx, file in enumerate(audio_files, 1):
-        print(f"\n[File {idx}/{total_files}]")
-        result = await process_single_file(
-            audio_path=file,
-            output_dir=output_dir,
-            delay_seconds=delay_seconds,
-            resume=resume,
-            corrections_db=corrections_db,
-        )
-
-        if result:
-            tracklist, output_path = result
-            results.append((tracklist, output_path))
-            print(f"\n{'─' * 40}")
-            # Print the tracklist
-            print(tracklist.to_markdown())
-        else:
-            print(f"\n  Warning: Failed to process {file.name}")
-
-    print(f"\n{'#' * 60}")
-    print(f"# Batch complete! Processed {total_files} file(s)")
-    print(f"{'#' * 60}")
-
-    # Open editor for the last processed file if requested
-    if open_editor and results:
-        tracklist, output_path = results[-1]
-        print(f"\nOpening interactive editor for: {tracklist.source_file}")
-        run_editor(tracklist, output_path, use_corrections=use_corrections)
-
-    return results

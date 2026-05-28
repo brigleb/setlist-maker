@@ -31,10 +31,6 @@ Usage:
     # Edit an existing tracklist
     setlist-maker tracklist.md
 
-    # Multiple files or a whole directory
-    setlist-maker set1.mp3 set2.mp3 set3.mp3
-    setlist-maker /path/to/sets/ --delay 20 --output-dir ./tracklists/
-
     # Embed chapter markers and artwork into an MP3
     setlist-maker chapters recording_tracklist.md
 """
@@ -45,107 +41,108 @@ import json
 import sys
 from pathlib import Path
 
-from setlist_maker import AUDIO_EXTENSIONS, __version__
+from setlist_maker import __version__
 from setlist_maker.artwork import create_chapter_image, fetch_artwork
-from setlist_maker.audio import get_audio_files
+from setlist_maker.audio import get_audio_file
 from setlist_maker.chapters import embed_chapters
 from setlist_maker.editor import (
+    CorrectionsDB,
     Tracklist,
     find_audio_file,
     parse_markdown_tracklist,
     run_editor,
 )
-from setlist_maker.identify import DEFAULT_DELAY_SECONDS, process_batch
+from setlist_maker.identify import DEFAULT_DELAY_SECONDS, process_single_file
 
 
 def _chain_chapters_after_identify(
-    results: list[tuple[Tracklist, Path]],
-    audio_files: list[Path],
+    output_path: Path,
+    audio_path: Path | None,
     fetch_art: bool,
 ) -> None:
     """
-    Embed chapters into each processed MP3 after `identify --chapters`.
+    Embed chapters into the processed MP3 after `identify --chapters`.
 
-    Reloads each tracklist from its saved files so any edits made in the
+    Reloads the tracklist from its saved files so any edits made in the
     editor (and the JSON sidecar's cover-art URLs) are picked up.
     """
-    audio_by_name = {f.name: f for f in audio_files}
+    tracklist, _urls = _load_tracklist_with_artwork_urls(output_path)
+    if audio_path is None or not audio_path.exists():
+        audio_path = find_audio_file(output_path)
 
-    for _tracklist, output_path in results:
-        tracklist, _urls = _load_tracklist_with_artwork_urls(output_path)
-        audio_path = audio_by_name.get(tracklist.source_file) or find_audio_file(output_path)
+    if not audio_path or not audio_path.exists():
+        print(f"\nSkipping chapters for {tracklist.source_file}: audio file not found.")
+        return
+    if audio_path.suffix.lower() != ".mp3":
+        print(
+            f"\nSkipping chapters for {audio_path.name}: chapter markers require an MP3 "
+            f"(got {audio_path.suffix})."
+        )
+        return
+    if not any(not t.is_unidentified for t in tracklist.tracks if not t.rejected):
+        print(f"\nSkipping chapters for {audio_path.name}: no identified tracks.")
+        return
 
-        if not audio_path or not audio_path.exists():
-            print(f"\nSkipping chapters for {tracklist.source_file}: audio file not found.")
-            continue
-        if audio_path.suffix.lower() != ".mp3":
-            print(
-                f"\nSkipping chapters for {audio_path.name}: chapter markers require an MP3 "
-                f"(got {audio_path.suffix})."
-            )
-            continue
-        if not any(not t.is_unidentified for t in tracklist.tracks if not t.rejected):
-            print(f"\nSkipping chapters for {audio_path.name}: no identified tracks.")
-            continue
-
-        print(f"\n{'=' * 60}")
-        print(f"Embedding chapters into: {audio_path.name}")
-        print(f"{'=' * 60}")
-        embed_chapters_for_tracklist(tracklist, audio_path, fetch_art=fetch_art)
+    print(f"\n{'=' * 60}")
+    print(f"Embedding chapters into: {audio_path.name}")
+    print(f"{'=' * 60}")
+    embed_chapters_for_tracklist(tracklist, audio_path, fetch_art=fetch_art)
 
 
 def cmd_identify(args: argparse.Namespace) -> None:
     """Handle the 'identify' subcommand (default behavior)."""
-    # Check if we're editing an existing markdown file
-    if len(args.paths) == 1:
-        input_path = Path(args.paths[0])
-        if input_path.suffix.lower() == ".md" and input_path.is_file():
-            # Edit existing tracklist
-            print(f"Opening tracklist for editing: {input_path.name}")
-            with open(input_path) as f:
-                content = f.read()
-            tracklist = parse_markdown_tracklist(content)
-            if not tracklist.tracks:
-                print("Error: Could not parse tracklist from markdown file.")
-                sys.exit(1)
-            print(f"Loaded {len(tracklist.tracks)} tracks from {tracklist.source_file}")
-            run_editor(tracklist, input_path, use_corrections=not args.no_learn)
+    input_path = Path(args.path)
 
-            if args.chapters:
-                _chain_chapters_after_identify(
-                    [(tracklist, input_path)], audio_files=[], fetch_art=not args.no_artwork
-                )
-            return
+    # Editing an existing markdown tracklist
+    if input_path.suffix.lower() == ".md" and input_path.is_file():
+        print(f"Opening tracklist for editing: {input_path.name}")
+        with open(input_path) as f:
+            content = f.read()
+        tracklist = parse_markdown_tracklist(content)
+        if not tracklist.tracks:
+            print("Error: Could not parse tracklist from markdown file.")
+            sys.exit(1)
+        print(f"Loaded {len(tracklist.tracks)} tracks from {tracklist.source_file}")
+        run_editor(tracklist, input_path, use_corrections=not args.no_learn)
 
-    # Gather all audio files
-    audio_files = get_audio_files(args.paths)
-    if not audio_files:
-        print("Error: No audio files found to process.")
-        print(f"Supported formats: {', '.join(sorted(AUDIO_EXTENSIONS))}")
+        if args.chapters:
+            _chain_chapters_after_identify(input_path, None, fetch_art=not args.no_artwork)
+        return
+
+    # Identify a single audio file
+    audio_path = get_audio_file(args.path)
+    if not audio_path:
         sys.exit(1)
 
-    print(f"Found {len(audio_files)} audio file(s) to process:")
-    for f in audio_files:
-        print(f"  - {f.name}")
+    print(f"Processing: {audio_path.name}")
 
-    # Set up output directory
     output_dir = Path(args.output_dir) if args.output_dir else None
+    corrections_db = CorrectionsDB() if not args.no_learn else None
 
-    # Run the batch processor
-    results = asyncio.run(
-        process_batch(
-            audio_files=audio_files,
+    result = asyncio.run(
+        process_single_file(
+            audio_path=audio_path,
             output_dir=output_dir,
             delay_seconds=args.delay,
             resume=not args.no_resume,
-            open_editor=args.edit,
-            use_corrections=not args.no_learn,
+            corrections_db=corrections_db,
         )
     )
 
-    # Optionally chain into chapter embedding
+    if not result:
+        print(f"\nError: Failed to process {audio_path.name}")
+        sys.exit(1)
+
+    tracklist, output_path = result
+    print(f"\n{'─' * 40}")
+    print(tracklist.to_markdown())
+
+    if args.edit:
+        print(f"\nOpening interactive editor for: {tracklist.source_file}")
+        run_editor(tracklist, output_path, use_corrections=not args.no_learn)
+
     if args.chapters:
-        _chain_chapters_after_identify(results, audio_files, fetch_art=not args.no_artwork)
+        _chain_chapters_after_identify(output_path, audio_path, fetch_art=not args.no_artwork)
 
 
 def _load_tracklist_with_artwork_urls(
@@ -328,8 +325,8 @@ def main():
         epilog="""
 Examples:
   # Identify tracks in audio
-  %(prog)s recording.mp3                          # Process single file
-  %(prog)s recording.mp3 --edit                   # Process and open editor
+  %(prog)s recording.mp3                          # Identify tracks
+  %(prog)s recording.mp3 --edit                   # Identify and open editor
   %(prog)s tracklist.md                           # Edit existing tracklist
 
   # Embed chapter markers and artwork into MP3
@@ -354,15 +351,13 @@ Examples:
   %(prog)s recording.mp3
   %(prog)s recording.mp3 --edit
   %(prog)s recording.mp3 --edit --chapters   # identify, edit, then embed chapters
-  %(prog)s set1.mp3 set2.mp3 set3.mp3
-  %(prog)s /path/to/dj_sets/ -o ./tracklists/
+  %(prog)s recording.mp3 -o ./tracklists/
 """,
     )
 
     identify_parser.add_argument(
-        "paths",
-        nargs="+",
-        help="Audio file(s), directory, or markdown tracklist to edit",
+        "path",
+        help="A single audio file, or a markdown tracklist to edit",
     )
 
     identify_parser.add_argument(

@@ -29,20 +29,20 @@ class TestChainChaptersAfterIdentify:
         """An MP3 input triggers chapter embedding."""
         mp3 = temp_dir / "set.mp3"
         mp3.write_bytes(b"fake")
-        tracklist, md_path = self._write_tracklist(temp_dir, "set.mp3")
+        _tracklist, md_path = self._write_tracklist(temp_dir, "set.mp3")
 
         with patch("setlist_maker.cli.embed_chapters_for_tracklist") as mock_embed:
-            _chain_chapters_after_identify([(tracklist, md_path)], [mp3], fetch_art=False)
+            _chain_chapters_after_identify(md_path, mp3, fetch_art=False)
             mock_embed.assert_called_once()
 
     def test_skips_non_mp3(self, temp_dir, capsys):
         """A non-MP3 input is skipped with a clear message, not embedded."""
         wav = temp_dir / "set.wav"
         wav.write_bytes(b"fake")
-        tracklist, md_path = self._write_tracklist(temp_dir, "set.wav")
+        _tracklist, md_path = self._write_tracklist(temp_dir, "set.wav")
 
         with patch("setlist_maker.cli.embed_chapters_for_tracklist") as mock_embed:
-            _chain_chapters_after_identify([(tracklist, md_path)], [wav], fetch_art=False)
+            _chain_chapters_after_identify(md_path, wav, fetch_art=False)
             mock_embed.assert_not_called()
 
         assert "require an MP3" in capsys.readouterr().out
