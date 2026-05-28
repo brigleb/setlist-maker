@@ -346,19 +346,63 @@ def cmd_chapters(args: argparse.Namespace) -> None:
 
 
 def main():
+    # Short aliases keep the help epilog's f-string lines within the line limit
+    # while still sourcing every default from its canonical constant.
+    d_delay = DEFAULT_DELAY_SECONDS
+    d_title = SIMILARITY_THRESHOLD
+    d_artist = ARTIST_SIMILARITY_THRESHOLD
+    d_single = SINGLETON_CONFIDENCE_KEEP
+
     parser = argparse.ArgumentParser(
+        prog="setlist-maker",
         description="Generate tracklists from DJ sets or long audio recordings using Shazam.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Identify tracks in audio
-  %(prog)s recording.mp3                          # Identify tracks
-  %(prog)s recording.mp3 --edit                   # Identify and open editor
-  %(prog)s tracklist.md                           # Edit existing tracklist
+        epilog=f"""\
+Setlist Maker samples a long recording every 30 seconds, identifies each slice
+with Shazam, and writes a timestamped markdown tracklist (plus a JSON sidecar).
 
-  # Embed chapter markers and artwork into MP3
-  %(prog)s chapters recording_tracklist.md        # Auto-detect audio file
-  %(prog)s chapters tracklist.md --audio set.mp3  # Specify audio file
+Typical workflow
+  1. Identify + review   %(prog)s my_set.mp3 --edit
+  2. ...or all at once   %(prog)s my_set.mp3 --edit --chapters
+  3. Add chapters later  %(prog)s chapters my_set_tracklist.md
+
+  Run an audio file through `identify` to get the tracklist, open the editor
+  with --edit to fix any misses (corrections are remembered next time), then
+  embed chapter markers + cover artwork into the MP3 for podcast players.
+
+Commands
+  identify <audio | tracklist.md>   Identify tracks  (default; may be omitted)
+  chapters <tracklist.md>           Embed chapter markers + artwork into an MP3
+
+identify options
+  -e, --edit                  Open the interactive editor after processing
+  -o, --output-dir DIR        Where to write tracklist files (default: beside input)
+  -d, --delay SECONDS         Pause between Shazam calls (default: {d_delay})
+      --chapters              Embed chapters + artwork after identifying (and editing)
+      --no-artwork            With --chapters, embed markers only (skip artwork)
+      --no-resume             Ignore saved progress and start fresh
+      --no-learn              Don't read or save corrections
+      --no-summary            Skip the Claude-generated set summary (on by default)
+  detection tuning
+      --title-threshold N       Title similarity 0-1 to merge matches (default: {d_title})
+      --artist-threshold N      Artist similarity 0-1 to merge matches (default: {d_artist})
+      --singleton-confidence N  Min confidence 0-1 to keep a 1-sample track (default: {d_single})
+      --no-smoothing            Don't smooth isolated single-sample outliers (A B A -> A)
+
+chapters options
+      --audio FILE            MP3 path (auto-detected from the tracklist name if omitted)
+      --no-artwork            Embed chapter markers only (skip artwork)
+
+global options
+  -h, --help                  Show help; use `%(prog)s identify -h` for full detail
+  -v, --version               Show version
+
+Examples
+  %(prog)s recording.mp3                       Identify tracks
+  %(prog)s recording.mp3 --edit                Identify, then open the editor
+  %(prog)s recording.mp3 --edit --chapters     Identify, edit, then add chapters
+  %(prog)s tracklist.md                        Edit an existing tracklist
+  %(prog)s chapters recording_tracklist.md     Add chapters to the matching MP3
 """,
     )
 
