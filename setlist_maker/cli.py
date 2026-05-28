@@ -52,7 +52,14 @@ from setlist_maker.editor import (
     parse_markdown_tracklist,
     run_editor,
 )
-from setlist_maker.identify import DEFAULT_DELAY_SECONDS, process_single_file
+from setlist_maker.identify import (
+    ARTIST_SIMILARITY_THRESHOLD,
+    DEFAULT_DELAY_SECONDS,
+    SIMILARITY_THRESHOLD,
+    SINGLETON_CONFIDENCE_KEEP,
+    DedupConfig,
+    process_single_file,
+)
 
 
 def _chain_chapters_after_identify(
@@ -109,6 +116,16 @@ def cmd_identify(args: argparse.Namespace) -> None:
             _chain_chapters_after_identify(input_path, None, fetch_art=not args.no_artwork)
         return
 
+    # Validate deduplication tuning flags up front so a bad value fails fast
+    for name, value in (
+        ("--title-threshold", args.title_threshold),
+        ("--artist-threshold", args.artist_threshold),
+        ("--singleton-confidence", args.singleton_confidence),
+    ):
+        if not 0.0 <= value <= 1.0:
+            print(f"Error: {name} must be between 0.0 and 1.0 (got {value}).")
+            sys.exit(1)
+
     # Identify a single audio file
     audio_path = get_audio_file(args.path)
     if not audio_path:
@@ -119,6 +136,14 @@ def cmd_identify(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir) if args.output_dir else None
     corrections_db = CorrectionsDB() if not args.no_learn else None
 
+    # Build deduplication tuning config from flags (validated above)
+    dedup_config = DedupConfig(
+        title_threshold=args.title_threshold,
+        artist_threshold=args.artist_threshold,
+        singleton_confidence_keep=args.singleton_confidence,
+        smoothing=not args.no_smoothing,
+    )
+
     result = asyncio.run(
         process_single_file(
             audio_path=audio_path,
@@ -126,6 +151,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
             delay_seconds=args.delay,
             resume=not args.no_resume,
             corrections_db=corrections_db,
+            dedup_config=dedup_config,
         )
     )
 
@@ -404,6 +430,38 @@ Examples:
         "--no-learn",
         action="store_true",
         help="Disable learning from corrections",
+    )
+
+    # Deduplication tuning (see DedupConfig in identify.py)
+    tuning_group = identify_parser.add_argument_group("detection tuning")
+    tuning_group.add_argument(
+        "--title-threshold",
+        type=float,
+        default=SIMILARITY_THRESHOLD,
+        metavar="0.0-1.0",
+        help="Title similarity (0-1) required to merge two matches as the same "
+        f"track (default: {SIMILARITY_THRESHOLD}); lower merges more aggressively",
+    )
+    tuning_group.add_argument(
+        "--artist-threshold",
+        type=float,
+        default=ARTIST_SIMILARITY_THRESHOLD,
+        metavar="0.0-1.0",
+        help="Artist similarity (0-1) required to merge two matches as the same "
+        f"track (default: {ARTIST_SIMILARITY_THRESHOLD}); keeps different artists apart",
+    )
+    tuning_group.add_argument(
+        "--singleton-confidence",
+        type=float,
+        default=SINGLETON_CONFIDENCE_KEEP,
+        metavar="0.0-1.0",
+        help="Min Shazam confidence (0-1) to keep a track seen in only one sample "
+        f"(default: {SINGLETON_CONFIDENCE_KEEP}); higher drops more one-off matches",
+    )
+    tuning_group.add_argument(
+        "--no-smoothing",
+        action="store_true",
+        help="Disable smoothing of isolated single-sample outliers (A B A -> A)",
     )
 
     # ─────────────────────────────────────────────────────────────────────────
