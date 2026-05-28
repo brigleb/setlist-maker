@@ -166,7 +166,12 @@ def cmd_identify(args: argparse.Namespace) -> None:
 
     if args.edit:
         print(f"\nOpening interactive editor for: {tracklist.source_file}")
-        run_editor(tracklist, output_path, use_corrections=not args.no_learn)
+        run_editor(
+            tracklist,
+            output_path,
+            use_corrections=not args.no_learn,
+            audio_path=audio_path,
+        )
 
     if args.chapters:
         _chain_chapters_after_identify(output_path, audio_path, fetch_art=not args.no_artwork)
