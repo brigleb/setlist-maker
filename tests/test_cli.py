@@ -23,14 +23,14 @@ from setlist_maker.identify import (
 def _identify_args(**overrides):
     """Build an argparse.Namespace with identify defaults, overridable per test."""
     defaults = dict(
-        paths=["set.mp3"],
+        path="set.mp3",
         output_dir=None,
         delay=0,
         edit=False,
         chapters=False,
         no_artwork=False,
         no_resume=False,
-        no_learn=False,
+        no_learn=True,  # disabled so these unit tests never touch the real corrections DB
         title_threshold=SIMILARITY_THRESHOLD,
         artist_threshold=ARTIST_SIMILARITY_THRESHOLD,
         singleton_confidence=SINGLETON_CONFIDENCE_KEEP,
@@ -40,11 +40,21 @@ def _identify_args(**overrides):
     return argparse.Namespace(**defaults)
 
 
+def _dummy_result():
+    """A minimal (Tracklist, output_path) tuple as returned by process_single_file."""
+    tracklist = Tracklist(
+        source_file="set.mp3",
+        tracks=[Track(timestamp=0, artist="Artist", title="Track")],
+        generated_on="2026-01-01 00:00",
+    )
+    return tracklist, Path("set_tracklist.md")
+
+
 class TestIdentifyTuningFlags:
     """Tests that detection-tuning flags flow into the DedupConfig."""
 
     def test_flags_build_dedup_config(self):
-        """Custom tuning flags are passed through to process_batch."""
+        """Custom tuning flags are passed through to process_single_file."""
         args = _identify_args(
             title_threshold=0.7,
             artist_threshold=0.95,
@@ -53,12 +63,15 @@ class TestIdentifyTuningFlags:
         )
 
         with (
-            patch("setlist_maker.cli.get_audio_files", return_value=[Path("set.mp3")]),
-            patch("setlist_maker.cli.process_batch", new=AsyncMock(return_value=[])) as mock_batch,
+            patch("setlist_maker.cli.get_audio_file", return_value=Path("set.mp3")),
+            patch(
+                "setlist_maker.cli.process_single_file",
+                new=AsyncMock(return_value=_dummy_result()),
+            ) as mock_process,
         ):
             cmd_identify(args)
 
-        config = mock_batch.call_args.kwargs["dedup_config"]
+        config = mock_process.call_args.kwargs["dedup_config"]
         assert config.title_threshold == 0.7
         assert config.artist_threshold == 0.95
         assert config.singleton_confidence_keep == 0.4
@@ -67,12 +80,15 @@ class TestIdentifyTuningFlags:
     def test_defaults_when_flags_omitted(self):
         """Without flags the config uses the module default thresholds."""
         with (
-            patch("setlist_maker.cli.get_audio_files", return_value=[Path("set.mp3")]),
-            patch("setlist_maker.cli.process_batch", new=AsyncMock(return_value=[])) as mock_batch,
+            patch("setlist_maker.cli.get_audio_file", return_value=Path("set.mp3")),
+            patch(
+                "setlist_maker.cli.process_single_file",
+                new=AsyncMock(return_value=_dummy_result()),
+            ) as mock_process,
         ):
             cmd_identify(_identify_args())
 
-        config = mock_batch.call_args.kwargs["dedup_config"]
+        config = mock_process.call_args.kwargs["dedup_config"]
         assert config.title_threshold == SIMILARITY_THRESHOLD
         assert config.artist_threshold == ARTIST_SIMILARITY_THRESHOLD
         assert config.singleton_confidence_keep == SINGLETON_CONFIDENCE_KEEP
@@ -81,14 +97,14 @@ class TestIdentifyTuningFlags:
     def test_out_of_range_threshold_exits(self, capsys):
         """An out-of-range tuning value fails fast before any processing."""
         with (
-            patch("setlist_maker.cli.get_audio_files") as mock_files,
-            patch("setlist_maker.cli.process_batch", new=AsyncMock()) as mock_batch,
+            patch("setlist_maker.cli.get_audio_file") as mock_file,
+            patch("setlist_maker.cli.process_single_file", new=AsyncMock()) as mock_process,
             pytest.raises(SystemExit),
         ):
             cmd_identify(_identify_args(title_threshold=1.5))
 
-        mock_files.assert_not_called()
-        mock_batch.assert_not_called()
+        mock_file.assert_not_called()
+        mock_process.assert_not_called()
         assert "between 0.0 and 1.0" in capsys.readouterr().out
 
 
@@ -111,20 +127,20 @@ class TestChainChaptersAfterIdentify:
         """An MP3 input triggers chapter embedding."""
         mp3 = temp_dir / "set.mp3"
         mp3.write_bytes(b"fake")
-        tracklist, md_path = self._write_tracklist(temp_dir, "set.mp3")
+        _tracklist, md_path = self._write_tracklist(temp_dir, "set.mp3")
 
         with patch("setlist_maker.cli.embed_chapters_for_tracklist") as mock_embed:
-            _chain_chapters_after_identify([(tracklist, md_path)], [mp3], fetch_art=False)
+            _chain_chapters_after_identify(md_path, mp3, fetch_art=False)
             mock_embed.assert_called_once()
 
     def test_skips_non_mp3(self, temp_dir, capsys):
         """A non-MP3 input is skipped with a clear message, not embedded."""
         wav = temp_dir / "set.wav"
         wav.write_bytes(b"fake")
-        tracklist, md_path = self._write_tracklist(temp_dir, "set.wav")
+        _tracklist, md_path = self._write_tracklist(temp_dir, "set.wav")
 
         with patch("setlist_maker.cli.embed_chapters_for_tracklist") as mock_embed:
-            _chain_chapters_after_identify([(tracklist, md_path)], [wav], fetch_art=False)
+            _chain_chapters_after_identify(md_path, wav, fetch_art=False)
             mock_embed.assert_not_called()
 
         assert "require an MP3" in capsys.readouterr().out
