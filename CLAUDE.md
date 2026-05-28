@@ -1,10 +1,5 @@
 # CLAUDE.md
 
-## MANDATORY: Use td for Task Management
-
-You must run td usage --new-session at conversation start (or after /clear) to see current work.
-Use td usage -q for subsequent reads.
-
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
@@ -32,6 +27,7 @@ pytest
 ```
 
 **System dependency:** Requires ffmpeg installed (`brew install ffmpeg` / `apt install ffmpeg`).
+Its bundled `ffplay` also powers the editor's audio preview (macOS only).
 
 ## Architecture
 
@@ -83,6 +79,18 @@ CLI application with the following modules:
 - **EditTrackScreen:** Modal dialog for editing artist/title fields
 - **CorrectionsDB:** Persistent storage for user corrections (~/.config/setlist-maker/corrections.json)
 - **parse_markdown_tracklist():** Parses existing markdown files for editing
+- **Audio preview:** `p` previews the selected track's 30s window via `PlaybackController`
+  (see `playback.py`). `_resolve_audio_path()` locates the source audio (threaded in from the
+  CLI when known, else discovered beside the markdown). Playback stops on navigation/reject/edit
+  and on unmount; gated by `playback_enabled` (set once in `on_mount`)
+
+### `setlist_maker/playback.py` - Editor audio preview
+- **PlaybackController:** Drives a non-blocking `ffplay` subprocess (`play()` / `stop()` /
+  `is_playing()` / `elapsed()`), reaping the child on stop. Deliberately out-of-process: an
+  earlier in-process (`sounddevice`) version locked up Textual's event loop and was removed
+- **playback_available():** Capability gate — `ffplay` on PATH **and** macOS. `audio_output_available()`
+  is Darwin-only (playback is unsupported elsewhere; SSH is not special-cased). `PREVIEW_SECONDS = 30`
+- Seek/scrub within a track is a tracked follow-up (GitHub issue #10)
 
 Key classes:
 - `Track`: Dataclass representing a single track with timestamp, artist, title, rejected status
