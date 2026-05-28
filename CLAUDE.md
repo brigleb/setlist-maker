@@ -40,8 +40,14 @@ CLI application with the following modules:
   delegating real work to the modules below.
 
 ### `setlist_maker/audio.py` - Audio discovery, loading, slicing
-- **get_audio_files():** Expands files/directories into the list of audio files to process
+- **get_audio_file():** Validates a single path is an existing, supported audio file
 - **load_audio() / slice_audio():** Uses `pydub` to load and slice into 30-second chunks
+- **Decode-completeness guard:** `load_audio()` cross-checks the decoded length against
+  ffprobe's reported duration (`probe_duration_seconds()` → `verify_decode_complete()`) and
+  raises `TruncatedAudioError` on a large shortfall — the signature of a file still being
+  written or synced (e.g. iCloud) when read, where the OS reports the full size but only part
+  has materialized. Prevents silently producing a partial tracklist. Bypass with `identify
+  --allow-partial`. Tunables: `DECODE_SHORTFALL_REL_TOLERANCE`, `DECODE_SHORTFALL_MIN_GAP_SECONDS`
 - `SAMPLE_DURATION_MS = 30000`; `AUDIO_EXTENSIONS` lives in `__init__.py`
 
 ### `setlist_maker/shazam_client.py` - Shazam recognition

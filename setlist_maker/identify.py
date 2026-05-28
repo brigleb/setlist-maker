@@ -333,6 +333,7 @@ async def process_single_file(
     corrections_db: CorrectionsDB | None = None,
     dedup_config: DedupConfig | None = None,
     summary: bool = True,
+    allow_partial: bool = False,
 ) -> tuple[Tracklist, Path] | None:
     """
     Process a single audio file and generate its tracklist.
@@ -354,7 +355,7 @@ async def process_single_file(
 
     # Load audio and create slices
     try:
-        audio = load_audio(audio_path)
+        audio = load_audio(audio_path, allow_partial=allow_partial)
     except Exception as e:
         print(f"  Error: Failed to load audio: {e}")
         return None

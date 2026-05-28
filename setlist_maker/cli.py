@@ -153,6 +153,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
             corrections_db=corrections_db,
             dedup_config=dedup_config,
             summary=not args.no_summary,
+            allow_partial=args.allow_partial,
         )
     )
 
@@ -386,6 +387,7 @@ identify options
       --chapters              Embed chapters + artwork after identifying (and editing)
       --no-artwork            With --chapters, embed markers only (skip artwork)
       --no-resume             Ignore saved progress and start fresh
+      --allow-partial         Process even if far less audio decodes than reported
       --no-learn              Don't read or save corrections
       --no-summary            Skip the Claude-generated set summary (on by default)
   detection tuning
@@ -474,6 +476,14 @@ Examples:
         "--no-resume",
         action="store_true",
         help="Start fresh instead of resuming from previous progress",
+    )
+
+    identify_parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="Skip the decode-completeness check and process whatever decodes "
+        "(by default a file that decodes far shorter than it reports is rejected, "
+        "since it is usually still being written or synced)",
     )
 
     identify_parser.add_argument(

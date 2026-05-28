@@ -30,6 +30,7 @@ def _identify_args(**overrides):
         chapters=False,
         no_artwork=False,
         no_resume=False,
+        allow_partial=False,
         no_learn=True,  # disabled so these unit tests never touch the real corrections DB
         no_summary=False,
         title_threshold=SIMILARITY_THRESHOLD,
@@ -120,6 +121,32 @@ class TestIdentifyTuningFlags:
             cmd_identify(_identify_args(no_summary=True))
 
         assert mock_process.call_args.kwargs["summary"] is False
+
+    def test_allow_partial_off_by_default(self):
+        """Without --allow-partial, the decode-completeness guard stays enabled."""
+        with (
+            patch("setlist_maker.cli.get_audio_file", return_value=Path("set.mp3")),
+            patch(
+                "setlist_maker.cli.process_single_file",
+                new=AsyncMock(return_value=_dummy_result()),
+            ) as mock_process,
+        ):
+            cmd_identify(_identify_args())
+
+        assert mock_process.call_args.kwargs["allow_partial"] is False
+
+    def test_allow_partial_flag_propagates(self):
+        """--allow-partial propagates as allow_partial=True to process_single_file."""
+        with (
+            patch("setlist_maker.cli.get_audio_file", return_value=Path("set.mp3")),
+            patch(
+                "setlist_maker.cli.process_single_file",
+                new=AsyncMock(return_value=_dummy_result()),
+            ) as mock_process,
+        ):
+            cmd_identify(_identify_args(allow_partial=True))
+
+        assert mock_process.call_args.kwargs["allow_partial"] is True
 
     def test_out_of_range_threshold_exits(self, capsys):
         """An out-of-range tuning value fails fast before any processing."""
