@@ -59,8 +59,9 @@ CLI application with the following modules:
 - **deduplicate_tracklist():** Fuzzy-clusters matches (normalizes remix/feat/edit tags so metadata
   drift for one track collapses), smooths isolated single-sample outliers (A B A / A None A → A),
   drops low-confidence singletons while keeping confident short tracks, then collapses consecutive
-  identical tracks. Tunables: `SIMILARITY_THRESHOLD`, `ARTIST_SIMILARITY_THRESHOLD`,
-  `SINGLETON_CONFIDENCE_KEEP`
+  identical tracks. Tunables live in `DedupConfig` (defaults: `SIMILARITY_THRESHOLD`,
+  `ARTIST_SIMILARITY_THRESHOLD`, `SINGLETON_CONFIDENCE_KEEP`) and are exposed as `identify`
+  flags: `--title-threshold`, `--artist-threshold`, `--singleton-confidence`, `--no-smoothing`
 - **results_to_tracklist():** Applies corrections and builds a `Tracklist`
 - **Progress persistence:** `save_progress()` / `load_progress()` JSON files enable resuming
 - `DEFAULT_DELAY_SECONDS = 15` (between API calls)

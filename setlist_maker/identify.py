@@ -5,6 +5,7 @@ import json
 import re
 import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -37,6 +38,17 @@ ARTIST_SIMILARITY_THRESHOLD = 0.9
 # this confident; otherwise it is treated as a stray false positive.
 SINGLETON_CONFIDENCE_KEEP = 0.6
 
+
+@dataclass
+class DedupConfig:
+    """Tunable knobs for deduplicate_tracklist (exposed as CLI flags)."""
+
+    title_threshold: float = SIMILARITY_THRESHOLD
+    artist_threshold: float = ARTIST_SIMILARITY_THRESHOLD
+    singleton_confidence_keep: float = SINGLETON_CONFIDENCE_KEEP
+    smoothing: bool = True
+
+
 # Tokens that describe a *version* of a track rather than its identity. Stripped
 # before comparison so "Song" and "Song - Radio Edit" cluster together.
 _VERSION_TOKENS_RE = re.compile(
@@ -68,19 +80,22 @@ def _normalized_key(track_info: dict) -> tuple[str, str]:
 
 
 def _assign_cluster(
-    key: tuple[str, str], clusters: list[tuple[str, str]], title_threshold: float
+    key: tuple[str, str],
+    clusters: list[tuple[str, str]],
+    title_threshold: float,
+    artist_threshold: float,
 ) -> tuple[str, str]:
     """Return the representative key for `key`, fuzzily matched against clusters.
 
-    Greedy and order-preserving: a cluster matches when the artist is a near
-    exact match and the title is within `title_threshold`; the first such
+    Greedy and order-preserving: a cluster matches when the artist is within
+    `artist_threshold` and the title is within `title_threshold`; the first such
     cluster wins, otherwise `key` becomes a new cluster representative.
     """
     artist, title = key
     for representative in clusters:
         rep_artist, rep_title = representative
         if (
-            SequenceMatcher(None, artist, rep_artist).ratio() >= ARTIST_SIMILARITY_THRESHOLD
+            SequenceMatcher(None, artist, rep_artist).ratio() >= artist_threshold
             and SequenceMatcher(None, title, rep_title).ratio() >= title_threshold
         ):
             return representative
@@ -104,8 +119,7 @@ def _smooth_sequence(seq: list[tuple[str, str] | None]) -> list[tuple[str, str] 
 
 def deduplicate_tracklist(
     raw_results: list[tuple[int, dict | None]],
-    similarity_threshold: float = SIMILARITY_THRESHOLD,
-    smoothing: bool = True,
+    config: DedupConfig | None = None,
 ) -> list[tuple[int, dict | None]]:
     """
     Filter and deduplicate track matches.
@@ -116,6 +130,9 @@ def deduplicate_tracklist(
     3. Drop singletons unless Shazam was confident (a real short track).
     4. Collapse consecutive identical matches, preserving unidentified gaps.
     """
+    if config is None:
+        config = DedupConfig()
+
     # 1. Assign every identified sample to a fuzzy cluster, remembering the
     #    highest-confidence metadata seen for each cluster as its representative.
     clusters: list[tuple[str, str]] = []
@@ -130,7 +147,10 @@ def deduplicate_tracklist(
             continue
 
         representative = _assign_cluster(
-            _normalized_key(track_info), clusters, similarity_threshold
+            _normalized_key(track_info),
+            clusters,
+            config.title_threshold,
+            config.artist_threshold,
         )
         seq.append(representative)
 
@@ -142,7 +162,7 @@ def deduplicate_tracklist(
             cluster_meta[representative] = track_info
 
     # 2. Smooth transient outliers.
-    if smoothing:
+    if config.smoothing:
         seq = _smooth_sequence(seq)
 
     # 3. Confidence-aware singleton removal.
@@ -150,7 +170,7 @@ def deduplicate_tracklist(
     for i, rep in enumerate(seq):
         if rep is not None and counts[rep] == 1:
             confidence = cluster_meta[rep].get("confidence") or 0
-            if confidence < SINGLETON_CONFIDENCE_KEEP:
+            if confidence < config.singleton_confidence_keep:
                 seq[i] = None
 
     # 4. Collapse consecutive identical clusters, preserving unidentified gaps.
@@ -182,6 +202,7 @@ def results_to_tracklist(
     raw_results: list[tuple[int, dict | None]],
     source_filename: str,
     corrections_db: CorrectionsDB | None = None,
+    dedup_config: DedupConfig | None = None,
 ) -> Tracklist:
     """
     Convert raw Shazam results to a Tracklist object.
@@ -204,7 +225,7 @@ def results_to_tracklist(
         raw_results = corrected_results
 
     # Deduplicate
-    deduped = deduplicate_tracklist(raw_results)
+    deduped = deduplicate_tracklist(raw_results, dedup_config)
 
     # Convert to Track objects
     tracks = []
@@ -254,6 +275,7 @@ async def process_single_file(
     delay_seconds: int,
     resume: bool = True,
     corrections_db: CorrectionsDB | None = None,
+    dedup_config: DedupConfig | None = None,
 ) -> tuple[Tracklist, Path] | None:
     """
     Process a single audio file and generate its tracklist.
@@ -319,7 +341,7 @@ async def process_single_file(
 
     # Convert to Tracklist with corrections applied
     print("\n  Processing complete. Generating tracklist...")
-    tracklist = results_to_tracklist(raw_results, audio_path.name, corrections_db)
+    tracklist = results_to_tracklist(raw_results, audio_path.name, corrections_db, dedup_config)
 
     # Write markdown plus a JSON sidecar. The JSON carries each track's
     # Shazam cover-art URL, which the chapters command relies on, so it is
@@ -348,6 +370,7 @@ async def process_batch(
     resume: bool = True,
     open_editor: bool = False,
     use_corrections: bool = True,
+    dedup_config: DedupConfig | None = None,
 ) -> list[tuple[Tracklist, Path]]:
     """Process multiple audio files in sequence."""
     corrections_db = CorrectionsDB() if use_corrections else None
@@ -371,6 +394,7 @@ async def process_batch(
             delay_seconds=delay_seconds,
             resume=resume,
             corrections_db=corrections_db,
+            dedup_config=dedup_config,
         )
 
         if result:
