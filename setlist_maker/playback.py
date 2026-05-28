@@ -20,17 +20,6 @@ PREVIEW_SECONDS = 30
 
 PLAYER = "ffplay"
 
-# Probes used to confirm a real audio sink exists on Linux before offering
-# playback (a headless box or container may have none). The first probe whose
-# binary is installed and that lists a device wins. Note `aplay -l` (lowercase)
-# enumerates actual sound *cards* and exits non-zero when there are none --
-# unlike `aplay -L`, which lists alsa.conf name hints (null/default/...) on any
-# host and would falsely report audio on a headless box.
-_LINUX_SINK_PROBES = (
-    ["pactl", "list", "sinks", "short"],
-    ["aplay", "-l"],
-)
-
 
 def player_path() -> str | None:
     """Return the path to the ``ffplay`` binary, or None if not installed."""
@@ -38,30 +27,14 @@ def player_path() -> str | None:
 
 
 def audio_output_available() -> bool:
-    """Best-effort check that an audio output device is reachable here.
+    """True on platforms where we support audio output.
 
-    On Linux a sink must be enumerable via PulseAudio/PipeWire (``pactl``) or
-    ALSA (``aplay``); a headless host with no device returns False. On macOS
-    (and anything else) we assume a device exists -- enumerating Core Audio is
-    overkill, and ffplay degrades on its own if it cannot open output.
+    Playback is supported only on macOS (the tool's target), where a usable
+    output device can be assumed. On every other platform we report no output
+    so the editor never offers a preview it cannot actually play -- and so the
+    capability check stays a cheap, non-blocking call with no subprocess probe.
     """
-    if platform.system() == "Linux":
-        return _linux_sink_present()
-    return True
-
-
-def _linux_sink_present() -> bool:
-    """True when at least one ALSA/PulseAudio output sink is listed."""
-    for cmd in _LINUX_SINK_PROBES:
-        if shutil.which(cmd[0]) is None:
-            continue
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if result.returncode == 0 and result.stdout.strip():
-            return True
-    return False
+    return platform.system() == "Darwin"
 
 
 def playback_available() -> bool:

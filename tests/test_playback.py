@@ -31,37 +31,18 @@ class TestAvailability:
         assert player_path() is None
 
     @patch("setlist_maker.playback.platform.system", return_value="Darwin")
-    def test_macos_assumes_audio_device(self, _system):
+    def test_macos_has_audio_output(self, _system):
         assert audio_output_available() is True
 
     @patch("setlist_maker.playback.platform.system", return_value="Linux")
-    @patch("setlist_maker.playback.shutil.which", return_value="/usr/bin/pactl")
-    @patch("setlist_maker.playback.subprocess.run")
-    def test_linux_sink_present(self, mock_run, _which, _system):
-        mock_run.return_value = MagicMock(returncode=0, stdout="0\talsa_output...\tRUNNING\n")
-        assert audio_output_available() is True
-
-    @patch("setlist_maker.playback.platform.system", return_value="Linux")
-    @patch("setlist_maker.playback.shutil.which", return_value="/usr/bin/pactl")
-    @patch("setlist_maker.playback.subprocess.run")
-    def test_linux_no_sink_when_empty(self, mock_run, _which, _system):
-        mock_run.return_value = MagicMock(returncode=0, stdout="   \n")
+    def test_non_macos_has_no_audio_output(self, _system):
+        # Playback is macOS-only; other platforms report no output so the editor
+        # never offers a preview it cannot play.
         assert audio_output_available() is False
 
-    @patch("setlist_maker.playback.platform.system", return_value="Linux")
-    @patch("setlist_maker.playback.subprocess.run")
-    def test_linux_alsa_probe_enumerates_hardware_not_namehints(self, mock_run, _system):
-        # When only ALSA is present, we must probe real cards (`aplay -l`, which
-        # exits non-zero with no soundcards), NOT the namehint listing
-        # (`aplay -L`, which lists `null`/`default` on any alsa-lib host and so
-        # falsely reports audio on a headless box).
-        def which(name):
-            return "/usr/bin/aplay" if name == "aplay" else None
-
-        with patch("setlist_maker.playback.shutil.which", side_effect=which):
-            mock_run.return_value = MagicMock(returncode=1, stdout="")  # no soundcards found
-            assert audio_output_available() is False
-            assert mock_run.call_args[0][0] == ["aplay", "-l"]
+    @patch("setlist_maker.playback.platform.system", return_value="Windows")
+    def test_windows_has_no_audio_output(self, _system):
+        assert audio_output_available() is False
 
     @patch("setlist_maker.playback.player_path", return_value="/usr/bin/ffplay")
     @patch("setlist_maker.playback.audio_output_available", return_value=True)

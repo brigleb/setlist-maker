@@ -428,18 +428,13 @@ class TracklistEditor(App[None]):
         # Populate rows
         self._refresh_table()
 
-        # Decide whether previews can be heard here (ffplay on PATH + an output
-        # device) off the event loop: the Linux sink probe shells out with a
-        # timeout, and running it inline could stall the UI at startup -- the
-        # same on-loop blocking that doomed the prior playback attempt. Until it
-        # resolves, playback_enabled stays False. Then poll playback state so
-        # the now-playing readout clears itself when a preview ends on its own.
-        self.run_worker(self._probe_playback, thread=True)
-        self.set_interval(0.5, self._tick_playback)
-
-    def _probe_playback(self) -> None:
-        """Capability probe (ffplay + audio device); runs in a worker thread."""
+        # Decide once whether previews can be heard here: ffplay on PATH and a
+        # supported platform (macOS). This is a cheap PATH/platform check with
+        # no subprocess, so it is safe to run inline on mount. Then poll
+        # playback state so the now-playing readout clears itself when a preview
+        # ends on its own.
         self.playback_enabled = playback_available()
+        self.set_interval(0.5, self._tick_playback)
 
     # ffplay exits 0 within ~1s on an unreadable file or a seek past the end of
     # the recording, so a near-instant stop means the preview never really
