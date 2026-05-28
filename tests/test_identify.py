@@ -141,6 +141,25 @@ class TestDeduplicateTracklist:
         assert deduped[1][1] is None
         assert deduped[2][1]["title"] == "Track 2"
 
+    def test_preserves_leading_unidentified_gap(self):
+        """An unidentified opener (before any identified track) is kept, not dropped."""
+        results = [
+            (0, None),
+            (30, None),
+            (60, None),
+            (90, {"artist": "Artist", "title": "Track"}),
+            (120, {"artist": "Artist", "title": "Track"}),
+        ]
+
+        deduped = deduplicate_tracklist(results)
+
+        # The leading gap should surface as an unidentified marker at the start,
+        # followed by the first identified track.
+        assert len(deduped) == 2
+        assert deduped[0][0] == 0
+        assert deduped[0][1] is None  # leading unidentified gap preserved
+        assert deduped[1][1]["title"] == "Track"
+
     def test_case_insensitive(self):
         """Test that deduplication is case-insensitive."""
         results = [

@@ -183,7 +183,11 @@ def deduplicate_tracklist(
 
     for timestamp, rep in zip(timestamps, seq):
         if rep is None:
-            if last_rep is not None and pending_unidentified is None:
+            # Open a gap marker on the first unidentified sample of a run. This
+            # fires for a leading run too (before any track is identified), so an
+            # unrecognizable opener surfaces as an unidentified entry rather than
+            # being silently dropped.
+            if pending_unidentified is None:
                 pending_unidentified = timestamp
             continue
 
