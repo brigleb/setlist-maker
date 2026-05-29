@@ -108,6 +108,13 @@ CLI application with the following modules:
   recorded). The page sends existing rows by `index` (not array position, which
   inserts shift) and reloads after saving new tracks so re-save can't duplicate.
   Opened with `identify --web-edit` / `-w`; mutually exclusive with `--edit`.
+- **Editable set description:** the page renders `Tracklist.summary` as an always-on,
+  column-aligned `<textarea>` (empty shows an "add a description" placeholder). Its
+  text rides along in the `POST /api/save` body; `_handle_save()` forwards it as
+  `apply_edits(..., summary=...)`, which uses an `_UNSET` sentinel — an absent
+  `summary` key leaves `tracklist.summary` untouched (so older clients can't wipe it),
+  while a sent value is whitespace-normalized to one paragraph (blank/None clears it),
+  keeping the `to_markdown()` ↔ `parse_markdown_tracklist()` round-trip lossless.
 
 ### `setlist_maker/playback.py` - Editor audio preview
 - **PlaybackController:** Drives a non-blocking `ffplay` subprocess (`play()` / `stop()` /
