@@ -670,6 +670,18 @@ class TracklistEditor(App[None]):
         table = self.query_one("#track-table", DataTable)
         table.action_cursor_up()
 
+    @on(DataTable.RowSelected)
+    def _on_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Open the edit dialog when a row is activated with Enter.
+
+        The focused DataTable binds Enter to its own ``select_cursor`` action,
+        which shadows this app's ``enter`` -> ``edit_track`` binding (a focused
+        widget's bindings win over the app's). That action posts RowSelected,
+        so we hook it here to reach ``action_edit_track`` -- the app-level
+        binding only survives to label the footer hint.
+        """
+        self.action_edit_track()
+
     @on(DataTable.RowHighlighted)
     def _on_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Stop any preview when the cursor leaves the playing row.
