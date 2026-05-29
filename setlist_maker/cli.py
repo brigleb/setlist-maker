@@ -65,6 +65,7 @@ from setlist_maker.identify import (
     process_single_file,
     tracklist_output_path,
 )
+from setlist_maker.web_editor import run_web_editor
 
 
 def _chain_chapters_after_identify(
@@ -105,6 +106,10 @@ def cmd_identify(args: argparse.Namespace) -> None:
     """Handle the 'identify' subcommand (default behavior)."""
     input_path = Path(args.path)
 
+    if args.edit and args.web_edit:
+        print("Error: choose either --edit (terminal) or --web-edit (browser), not both.")
+        sys.exit(1)
+
     # Editing an existing markdown tracklist
     if input_path.suffix.lower() == ".md" and input_path.is_file():
         print(f"Opening tracklist for editing: {input_path.name}")
@@ -115,7 +120,8 @@ def cmd_identify(args: argparse.Namespace) -> None:
             print("Error: Could not parse tracklist from markdown file.")
             sys.exit(1)
         print(f"Loaded {len(tracklist.tracks)} tracks from {tracklist.source_file}")
-        run_editor(tracklist, input_path, use_corrections=not args.no_learn)
+        editor_fn = run_web_editor if args.web_edit else run_editor
+        editor_fn(tracklist, input_path, use_corrections=not args.no_learn)
 
         if args.chapters:
             _chain_chapters_after_identify(input_path, None, fetch_art=not args.no_artwork)
@@ -186,9 +192,11 @@ def cmd_identify(args: argparse.Namespace) -> None:
     print(f"\n{'─' * 40}")
     print(tracklist.to_markdown())
 
-    if args.edit:
-        print(f"\nOpening interactive editor for: {tracklist.source_file}")
-        run_editor(
+    if args.edit or args.web_edit:
+        editor_fn = run_web_editor if args.web_edit else run_editor
+        kind = "browser" if args.web_edit else "interactive"
+        print(f"\nOpening {kind} editor for: {tracklist.source_file}")
+        editor_fn(
             tracklist,
             output_path,
             use_corrections=not args.no_learn,
@@ -485,6 +493,15 @@ Examples:
         action="store_true",
         help="Open the editor after identifying — or directly on an existing "
         "tracklist for this audio, if one is found",
+    )
+
+    identify_parser.add_argument(
+        "-w",
+        "--web-edit",
+        action="store_true",
+        dest="web_edit",
+        help="Open the editor in your browser instead of the terminal "
+        "(cannot be combined with --edit)",
     )
 
     identify_parser.add_argument(

@@ -38,6 +38,7 @@ def _identify_args(**overrides):
         artist_threshold=ARTIST_SIMILARITY_THRESHOLD,
         singleton_confidence=SINGLETON_CONFIDENCE_KEEP,
         no_smoothing=False,
+        web_edit=False,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -405,3 +406,24 @@ class TestLoadTracklistWithArtworkUrls:
 
         assert tracklist.tracks[0].coverart_url is None
         assert urls == {}
+
+
+def test_web_edit_flag_opens_browser_editor():
+    """--web-edit routes to run_web_editor, not the TUI run_editor."""
+    args = _identify_args(web_edit=True)
+    with (
+        patch("setlist_maker.cli.get_audio_file", return_value=Path("set.mp3")),
+        patch("setlist_maker.cli.process_single_file", new=AsyncMock(return_value=_dummy_result())),
+        patch("setlist_maker.cli.run_web_editor") as mock_web,
+        patch("setlist_maker.cli.run_editor") as mock_tui,
+    ):
+        cmd_identify(args)
+    mock_web.assert_called_once()
+    mock_tui.assert_not_called()
+
+
+def test_edit_and_web_edit_together_errors():
+    """Passing both --edit and --web-edit exits with an error."""
+    args = _identify_args(edit=True, web_edit=True)
+    with pytest.raises(SystemExit):
+        cmd_identify(args)
