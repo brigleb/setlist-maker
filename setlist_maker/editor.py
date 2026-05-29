@@ -228,6 +228,18 @@ def find_audio_file(markdown_path: Path) -> Path | None:
     return None
 
 
+def resolve_audio_path(audio_path: Path | None, output_path: Path) -> Path | None:
+    """Locate the source audio for previewing track segments.
+
+    Prefers an explicitly-provided path (the fresh-identify case); falls back
+    to discovering a sibling of the markdown file. Returns None if neither
+    resolves, so a moved/renamed file degrades gracefully.
+    """
+    if audio_path is not None and audio_path.exists():
+        return audio_path
+    return find_audio_file(output_path)
+
+
 def save_tracklist(
     tracklist: Tracklist,
     output_path: Path,
@@ -404,16 +416,8 @@ class TracklistEditor(App[None]):
         self._playing_since: float | None = None  # monotonic clock when play started
 
     def _resolve_audio_path(self) -> Path | None:
-        """Locate the source audio for previewing track segments.
-
-        Prefers the path threaded in from the CLI (the fresh-identify case);
-        falls back to discovering a sibling of the markdown file (the
-        edit-an-existing-.md case). Returns None if neither resolves, so a
-        moved/renamed file degrades gracefully rather than erroring.
-        """
-        if self.audio_path is not None and self.audio_path.exists():
-            return self.audio_path
-        return find_audio_file(self.output_path)
+        """Locate the source audio for previewing track segments."""
+        return resolve_audio_path(self.audio_path, self.output_path)
 
     def compose(self) -> ComposeResult:
         yield Header()

@@ -376,6 +376,33 @@ def test_save_tracklist_writes_markdown_and_json(tmp_path):
     assert [t["artist"] for t in written] == ["A"]
 
 
+def test_resolve_audio_path_prefers_explicit(tmp_path):
+    """An explicit, existing audio path wins over sibling discovery."""
+    from setlist_maker.editor import resolve_audio_path
+
+    audio = tmp_path / "given.mp3"
+    audio.write_bytes(b"x")
+    out = tmp_path / "set_tracklist.md"
+    assert resolve_audio_path(audio, out) == audio
+
+
+def test_resolve_audio_path_falls_back_to_sibling(tmp_path):
+    """With no explicit path, it discovers a sibling of the markdown file."""
+    from setlist_maker.editor import resolve_audio_path
+
+    sibling = tmp_path / "set.mp3"
+    sibling.write_bytes(b"x")
+    out = tmp_path / "set_tracklist.md"
+    assert resolve_audio_path(None, out) == sibling
+
+
+def test_resolve_audio_path_none_when_missing(tmp_path):
+    """Returns None when nothing resolves."""
+    from setlist_maker.editor import resolve_audio_path
+
+    assert resolve_audio_path(None, tmp_path / "set_tracklist.md") is None
+
+
 class TestResolveAudioPath:
     """Tests for TracklistEditor._resolve_audio_path() (no DOM required)."""
 
