@@ -140,6 +140,8 @@ def test_post_save_writes_files_and_records_correction(sample_tracklist, tmp_pat
             res = json.loads(r.read())
 
     assert res["ok"] is True
+    assert res["rejected"] == 1  # the index-3 edit rejected one track
+    assert res["edited"] == 1  # the index-0 title change counts as edited
     md = (tmp_path / "set_tracklist.md").read_text()
     assert "One More Time" in md
     assert "Praise You" not in md  # rejected, excluded from output
