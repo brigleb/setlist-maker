@@ -352,6 +352,30 @@ class TestCorrectionsDB:
         assert db.corrections == {}
 
 
+def test_save_tracklist_writes_markdown_and_json(tmp_path):
+    """save_tracklist writes both the .md and the .json sidecar."""
+    from setlist_maker.editor import save_tracklist
+
+    tl = Tracklist(
+        source_file="set.mp3",
+        generated_on="2026-01-01 00:00",
+        tracks=[
+            Track(timestamp=0, artist="A", title="One"),
+            Track(timestamp=60, artist="B", title="Two", rejected=True),
+        ],
+    )
+    out = tmp_path / "set_tracklist.md"
+
+    save_tracklist(tl, out, corrections_db=None)
+
+    assert out.read_text() == tl.to_markdown()
+    import json as _json
+
+    written = _json.loads((tmp_path / "set_tracklist.json").read_text())
+    # rejected tracks are excluded from JSON output
+    assert [t["artist"] for t in written] == ["A"]
+
+
 class TestResolveAudioPath:
     """Tests for TracklistEditor._resolve_audio_path() (no DOM required)."""
 
