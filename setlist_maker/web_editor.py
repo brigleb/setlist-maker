@@ -14,7 +14,7 @@ from importlib.resources import files
 from pathlib import Path
 from urllib.parse import urlparse
 
-from setlist_maker.editor import CorrectionsDB, Tracklist
+from setlist_maker.editor import CorrectionsDB, Tracklist, save_tracklist
 
 
 def tracklist_to_api(tracklist: Tracklist) -> dict:
@@ -112,6 +112,28 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        path = urlparse(self.path).path
+        if path == "/api/save":
+            self._handle_save()
+        else:
+            self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _handle_save(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b"{}"
+        ctx = self._ctx
+        try:
+            edits = json.loads(raw).get("tracks", [])
+            apply_edits(ctx.tracklist, edits, ctx.corrections_db)
+            save_tracklist(ctx.tracklist, ctx.output_path, ctx.corrections_db)
+        except Exception as exc:  # surface to the page; keep state intact
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        rejected = sum(1 for t in ctx.tracklist.tracks if t.rejected)
+        edited = sum(1 for t in ctx.tracklist.tracks if t.was_corrected)
+        self._send_json({"ok": True, "rejected": rejected, "edited": edited})
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path

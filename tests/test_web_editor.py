@@ -107,3 +107,41 @@ def test_get_tracklist_returns_json(sample_tracklist, tmp_path):
             data = json.loads(r.read())
             assert data["source_file"] == "test_mix.mp3"
             assert len(data["tracks"]) == 4
+
+
+def test_post_save_writes_files_and_records_correction(sample_tracklist, tmp_path):
+    from setlist_maker.editor import CorrectionsDB
+    from setlist_maker.web_editor import EditorContext
+
+    db = CorrectionsDB(db_path=tmp_path / "corrections.json")
+    ctx = EditorContext(
+        tracklist=sample_tracklist,
+        output_path=tmp_path / "set_tracklist.md",
+        corrections_db=db,
+        audio_path=None,
+    )
+    payload = json.dumps(
+        {
+            "tracks": [
+                {"index": 0, "artist": "Daft Punk", "title": "One More Time", "rejected": False},
+                {"index": 3, "artist": "Fatboy Slim", "title": "Praise You", "rejected": True},
+            ]
+        }
+    ).encode()
+
+    with running_server(ctx) as base:
+        req = urllib.request.Request(
+            base + "/api/save",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            res = json.loads(r.read())
+
+    assert res["ok"] is True
+    md = (tmp_path / "set_tracklist.md").read_text()
+    assert "One More Time" in md
+    assert "Praise You" not in md  # rejected, excluded from output
+    assert (tmp_path / "set_tracklist.json").exists()
+    assert db.get_correction("Daft Punk", "Around the World") == ("Daft Punk", "One More Time")
