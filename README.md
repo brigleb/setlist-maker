@@ -130,6 +130,21 @@ setlist-maker my_set_tracklist.md
 | `Q` | Quit |
 | `?` | Show help |
 
+### Editing in the browser
+
+Prefer a point-and-click UI? Use `--web-edit` (`-w`) instead of `--edit`:
+
+```bash
+setlist-maker recording.mp3 --web-edit
+```
+
+This opens a small editor in your browser, served from a local-only
+(`127.0.0.1`) server. You can reject tracks, edit artist/title inline, and
+preview audio with a real scrubber (no ffplay/macOS requirement — it works
+anywhere a browser does). **Save** writes the same `.md` + `.json` outputs;
+**Done** closes the server and returns to the CLI (so `--web-edit --chapters`
+still chains). `--edit` and `--web-edit` cannot be combined.
+
 ### Chapter Markers & Artwork (`chapters`)
 
 After identifying and editing a tracklist, embed it as navigable chapter markers in the MP3 — with per-chapter artwork fetched automatically:

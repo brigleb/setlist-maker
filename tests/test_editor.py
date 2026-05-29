@@ -352,6 +352,57 @@ class TestCorrectionsDB:
         assert db.corrections == {}
 
 
+def test_save_tracklist_writes_markdown_and_json(tmp_path):
+    """save_tracklist writes both the .md and the .json sidecar."""
+    from setlist_maker.editor import save_tracklist
+
+    tl = Tracklist(
+        source_file="set.mp3",
+        generated_on="2026-01-01 00:00",
+        tracks=[
+            Track(timestamp=0, artist="A", title="One"),
+            Track(timestamp=60, artist="B", title="Two", rejected=True),
+        ],
+    )
+    out = tmp_path / "set_tracklist.md"
+
+    save_tracklist(tl, out, corrections_db=None)
+
+    assert out.read_text() == tl.to_markdown()
+    import json as _json
+
+    written = _json.loads((tmp_path / "set_tracklist.json").read_text())
+    # rejected tracks are excluded from JSON output
+    assert [t["artist"] for t in written] == ["A"]
+
+
+def test_resolve_audio_path_prefers_explicit(tmp_path):
+    """An explicit, existing audio path wins over sibling discovery."""
+    from setlist_maker.editor import resolve_audio_path
+
+    audio = tmp_path / "given.mp3"
+    audio.write_bytes(b"x")
+    out = tmp_path / "set_tracklist.md"
+    assert resolve_audio_path(audio, out) == audio
+
+
+def test_resolve_audio_path_falls_back_to_sibling(tmp_path):
+    """With no explicit path, it discovers a sibling of the markdown file."""
+    from setlist_maker.editor import resolve_audio_path
+
+    sibling = tmp_path / "set.mp3"
+    sibling.write_bytes(b"x")
+    out = tmp_path / "set_tracklist.md"
+    assert resolve_audio_path(None, out) == sibling
+
+
+def test_resolve_audio_path_none_when_missing(tmp_path):
+    """Returns None when nothing resolves."""
+    from setlist_maker.editor import resolve_audio_path
+
+    assert resolve_audio_path(None, tmp_path / "set_tracklist.md") is None
+
+
 class TestResolveAudioPath:
     """Tests for TracklistEditor._resolve_audio_path() (no DOM required)."""
 

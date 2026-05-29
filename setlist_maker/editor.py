@@ -228,6 +228,35 @@ def find_audio_file(markdown_path: Path) -> Path | None:
     return None
 
 
+def resolve_audio_path(audio_path: Path | None, output_path: Path) -> Path | None:
+    """Locate the source audio for previewing track segments.
+
+    Prefers an explicitly-provided path (the fresh-identify case); falls back
+    to discovering a sibling of the markdown file. Returns None if neither
+    resolves, so a moved/renamed file degrades gracefully.
+    """
+    if audio_path is not None and audio_path.exists():
+        return audio_path
+    return find_audio_file(output_path)
+
+
+def save_tracklist(
+    tracklist: Tracklist,
+    output_path: Path,
+    corrections_db: "CorrectionsDB | None" = None,
+) -> None:
+    """Write a tracklist to markdown + its JSON sidecar, and persist corrections.
+
+    Shared by the TUI editor and the web editor so both front ends produce
+    identical output and cannot drift apart.
+    """
+    output_path.write_text(tracklist.to_markdown())
+    json_path = output_path.with_suffix(".json")
+    json_path.write_text(json.dumps(tracklist.to_json(), indent=2))
+    if corrections_db:
+        corrections_db.save()
+
+
 class EditTrackScreen(ModalScreen[tuple[str, str] | None]):
     """Modal screen for editing a track's artist and title."""
 
@@ -387,16 +416,8 @@ class TracklistEditor(App[None]):
         self._playing_since: float | None = None  # monotonic clock when play started
 
     def _resolve_audio_path(self) -> Path | None:
-        """Locate the source audio for previewing track segments.
-
-        Prefers the path threaded in from the CLI (the fresh-identify case);
-        falls back to discovering a sibling of the markdown file (the
-        edit-an-existing-.md case). Returns None if neither resolves, so a
-        moved/renamed file degrades gracefully rather than erroring.
-        """
-        if self.audio_path is not None and self.audio_path.exists():
-            return self.audio_path
-        return find_audio_file(self.output_path)
+        """Locate the source audio for previewing track segments."""
+        return resolve_audio_path(self.audio_path, self.output_path)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -630,20 +651,7 @@ class TracklistEditor(App[None]):
 
     def action_save(self) -> None:
         """Save the tracklist to file."""
-        # Save markdown
-        markdown = self.tracklist.to_markdown()
-        with open(self.output_path, "w") as f:
-            f.write(markdown)
-
-        # Also save JSON version
-        json_path = self.output_path.with_suffix(".json")
-        with open(json_path, "w") as f:
-            json.dump(self.tracklist.to_json(), f, indent=2)
-
-        # Save corrections database
-        if self.corrections_db:
-            self.corrections_db.save()
-
+        save_tracklist(self.tracklist, self.output_path, self.corrections_db)
         self.unsaved_changes = False
         self._update_status()
         self.notify(f"Saved to {self.output_path}", title="Saved")
