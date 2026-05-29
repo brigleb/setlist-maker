@@ -149,6 +149,57 @@ def test_apply_edits_new_track_missing_timestamp_defaults_to_zero(sample_trackli
     assert sample_tracklist.tracks[1].artist == "A"
 
 
+def test_apply_edits_sets_summary(sample_tracklist):
+    from setlist_maker.web_editor import apply_edits
+
+    apply_edits(sample_tracklist, [], None, summary="A deep house journey.")
+    assert sample_tracklist.summary == "A deep house journey."
+
+
+def test_apply_edits_clears_summary_when_blank(sample_tracklist):
+    from setlist_maker.web_editor import apply_edits
+
+    sample_tracklist.summary = "Original."
+    apply_edits(sample_tracklist, [], None, summary="   ")
+    assert sample_tracklist.summary is None
+
+
+def test_apply_edits_clears_summary_when_none(sample_tracklist):
+    from setlist_maker.web_editor import apply_edits
+
+    sample_tracklist.summary = "Original."
+    apply_edits(sample_tracklist, [], None, summary=None)
+    assert sample_tracklist.summary is None
+
+
+def test_apply_edits_leaves_summary_unchanged_when_omitted(sample_tracklist):
+    from setlist_maker.web_editor import apply_edits
+
+    sample_tracklist.summary = "Original summary."
+    apply_edits(
+        sample_tracklist,
+        [{"index": 0, "artist": "Daft Punk", "title": "Around the World"}],
+        None,
+    )
+    assert sample_tracklist.summary == "Original summary."
+
+
+def test_apply_edits_normalizes_summary_whitespace(sample_tracklist):
+    from setlist_maker.web_editor import apply_edits
+
+    apply_edits(sample_tracklist, [], None, summary="Line one.\n\nLine two.   Extra")
+    assert sample_tracklist.summary == "Line one. Line two. Extra"
+
+
+def test_summary_round_trips_through_markdown(sample_tracklist):
+    from setlist_maker.editor import parse_markdown_tracklist
+    from setlist_maker.web_editor import apply_edits
+
+    apply_edits(sample_tracklist, [], None, summary="A sweaty warehouse set.")
+    reparsed = parse_markdown_tracklist(sample_tracklist.to_markdown())
+    assert reparsed.summary == "A sweaty warehouse set."
+
+
 def test_inserted_track_round_trips_through_markdown(sample_tracklist):
     """Insert -> to_markdown -> parse re-produces the track in chronological order."""
     from setlist_maker.editor import parse_markdown_tracklist

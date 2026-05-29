@@ -7,6 +7,7 @@ small JSON + audio API bound to loopback (``127.0.0.1``).
 """
 
 import json
+import re
 import threading
 import webbrowser
 from dataclasses import dataclass
@@ -63,10 +64,25 @@ def tracklist_to_api(tracklist: Tracklist) -> dict:
     }
 
 
+_UNSET = object()  # "summary not provided" — distinct from an empty/cleared summary
+
+
+def _normalize_summary(value: str | None) -> str | None:
+    """Collapse whitespace runs to single spaces; empty -> None.
+
+    Keeps the markdown round-trip lossless: parse_markdown_tracklist() joins
+    contiguous prose lines with spaces, so a single-paragraph summary reloads
+    byte-for-byte.
+    """
+    text = re.sub(r"\s+", " ", value or "").strip()
+    return text or None
+
+
 def apply_edits(
     tracklist: Tracklist,
     edits: list[dict],
     corrections_db: CorrectionsDB | None,
+    summary: object = _UNSET,
 ) -> None:
     """Apply per-track edits and rejections in place, recording corrections.
 
@@ -75,6 +91,9 @@ def apply_edits(
     by their stable ``index``; an edit with no ``index`` is a track the user
     inserted in the page, which is appended and re-sorted into chronological
     position. Inserted tracks are not Shazam corrections, so none is recorded.
+    An optional ``summary`` (when omitted, the tracklist summary is left
+    unchanged) replaces ``tracklist.summary``, normalized to a single
+    paragraph; blank/None clears it.
     """
     by_index = dict(enumerate(tracklist.tracks))
     inserted: list[Track] = []
@@ -117,6 +136,9 @@ def apply_edits(
     if inserted:
         tracklist.tracks.extend(inserted)
         tracklist.tracks.sort(key=lambda t: t.timestamp)  # stable: keeps load order on ties
+
+    if summary is not _UNSET:
+        tracklist.summary = _normalize_summary(summary)
 
 
 def _load_page() -> str:
