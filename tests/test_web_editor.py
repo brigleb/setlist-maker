@@ -226,6 +226,15 @@ def test_page_has_insert_affordance_and_time_field():
     assert "MM:SS" in html  # ...with an MM:SS placeholder
 
 
+def test_page_has_editable_summary():
+    """The description is an always-on textarea, has the empty-state placeholder,
+    and is included in the save payload."""
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    assert '<textarea id="summary"' in html
+    assert "Add a description for this set" in html  # empty-state placeholder
+    assert "summary: summaryEl.value" in html  # included in the POST /api/save body
+
+
 @contextmanager
 def running_server(ctx):
     """Start the web editor server on an ephemeral port in a background thread."""
