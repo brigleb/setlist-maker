@@ -415,6 +415,7 @@ Commands
 
 identify options
   -e, --edit                  Open the editor (on an existing tracklist if found)
+  -w, --web-edit              Open the editor in your browser instead of the TUI
   -o, --output-dir DIR        Where to write tracklist files (default: beside input)
   -d, --delay SECONDS         Pause between Shazam calls (default: {d_delay})
       --chapters              Embed chapters + artwork after identifying (and editing)

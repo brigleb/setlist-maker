@@ -90,6 +90,20 @@ CLI application with the following modules:
   CLI when known, else discovered beside the markdown). Playback stops on navigation/reject/edit
   and on unmount; gated by `playback_enabled` (set once in `on_mount`)
 
+### `setlist_maker/web_editor.py` - Browser tracklist editor
+- **run_web_editor():** Drop-in sibling of `editor.run_editor()` that serves a
+  single-page editor (`web_editor.html`) from a loopback `ThreadingHTTPServer`
+  on an ephemeral port and opens the browser. Reuses `Track`/`Tracklist`,
+  `CorrectionsDB`, and the shared `save_tracklist()` / `resolve_audio_path()`
+  helpers from `editor.py` so the TUI and web front ends never drift.
+- **Endpoints:** `GET /` (page), `GET /api/tracklist`, `POST /api/save`
+  (writes `.md` + `.json` + corrections via `save_tracklist`), `GET /api/audio`
+  (HTTP Range streaming powering the in-browser scrubber), `POST /api/done`
+  (graceful shutdown → returns control to the CLI).
+- **Pure helpers:** `tracklist_to_api()` and `apply_edits()` are socket-free and
+  unit-tested directly. Opened with `identify --web-edit` / `-w`; mutually
+  exclusive with `--edit`.
+
 ### `setlist_maker/playback.py` - Editor audio preview
 - **PlaybackController:** Drives a non-blocking `ffplay` subprocess (`play()` / `stop()` /
   `is_playing()` / `elapsed()`), reaping the child on stop. Deliberately out-of-process: an
