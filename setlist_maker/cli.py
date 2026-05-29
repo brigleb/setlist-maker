@@ -397,7 +397,7 @@ Setlist Maker samples a long recording every 30 seconds, identifies each slice
 with Shazam, and writes a timestamped markdown tracklist (plus a JSON sidecar).
 
 Typical workflow
-  1. Identify + review   %(prog)s my_set.mp3 --edit
+  1. Identify + review   %(prog)s my_set.mp3 --edit   (or --web-edit in a browser)
   2. ...or all at once   %(prog)s my_set.mp3 --edit --chapters
   3. Add chapters later  %(prog)s chapters my_set_tracklist.md
 
@@ -442,6 +442,7 @@ global options
 Examples
   %(prog)s recording.mp3                       Identify tracks (or reuse if done)
   %(prog)s recording.mp3 --edit                Identify (or reuse), then edit
+  %(prog)s recording.mp3 --web-edit            Identify (or reuse), then edit in a browser
   %(prog)s recording.mp3 --reidentify --edit   Force a fresh re-identify, then edit
   %(prog)s recording.mp3 --edit --chapters     Identify, edit, then add chapters
   %(prog)s tracklist.md                        Edit an existing tracklist
@@ -464,6 +465,7 @@ Examples
 Examples:
   %(prog)s recording.mp3
   %(prog)s recording.mp3 --edit
+  %(prog)s recording.mp3 --web-edit
   %(prog)s recording.mp3 --edit --chapters   # identify, edit, then embed chapters
   %(prog)s recording.mp3 -o ./tracklists/
 """,
