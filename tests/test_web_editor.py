@@ -208,3 +208,23 @@ def test_post_done_shuts_server_down(sample_tracklist, tmp_path):
         assert not thread.is_alive()  # serve_forever returned
     finally:
         httpd.server_close()
+
+
+def test_run_web_editor_opens_browser_and_returns(monkeypatch, sample_tracklist, tmp_path):
+    """run_web_editor opens the browser and returns once serving ends."""
+    import setlist_maker.web_editor as web
+
+    opened = []
+    monkeypatch.setattr(web.webbrowser, "open", lambda url: opened.append(url))
+    # don't actually block: make serve_forever a no-op for this test
+    monkeypatch.setattr(web.ThreadingHTTPServer, "serve_forever", lambda self: None)
+
+    web.run_web_editor(
+        sample_tracklist,
+        tmp_path / "set_tracklist.md",
+        use_corrections=False,
+        audio_path=None,
+        open_browser=True,
+    )
+
+    assert opened and opened[0].startswith("http://127.0.0.1:")

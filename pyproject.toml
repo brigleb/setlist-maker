@@ -51,6 +51,9 @@ Issues = "https://github.com/brigleb/setlist-maker/issues"
 [tool.setuptools.packages.find]
 where = ["."]
 
+[tool.setuptools.package-data]
+setlist_maker = ["web_editor.html"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

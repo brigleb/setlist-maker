@@ -8,6 +8,7 @@ small JSON + audio API bound to loopback (``127.0.0.1``).
 
 import json
 import threading
+import webbrowser
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,7 +16,12 @@ from importlib.resources import files
 from pathlib import Path
 from urllib.parse import urlparse
 
-from setlist_maker.editor import CorrectionsDB, Tracklist, save_tracklist
+from setlist_maker.editor import (
+    CorrectionsDB,
+    Tracklist,
+    resolve_audio_path,
+    save_tracklist,
+)
 
 _AUDIO_CONTENT_TYPES = {
     ".mp3": "audio/mpeg",
@@ -222,3 +228,41 @@ def create_server(ctx: EditorContext) -> ThreadingHTTPServer:
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     httpd.ctx = ctx
     return httpd
+
+
+def run_web_editor(
+    tracklist: Tracklist,
+    output_path: Path,
+    use_corrections: bool = True,
+    audio_path: Path | None = None,
+    open_browser: bool = True,
+) -> None:
+    """Run the browser tracklist editor.
+
+    Drop-in sibling of ``editor.run_editor``. Starts a loopback HTTP server,
+    opens the browser, and serves until the user clicks Done (``/api/done``)
+    or presses Ctrl-C, then returns so the CLI can continue (e.g. --chapters).
+    """
+    corrections_db = CorrectionsDB() if use_corrections else None
+    if corrections_db:
+        applied = corrections_db.apply_corrections(tracklist)
+        if applied > 0:
+            print(f"Applied {applied} learned correction(s) from previous sessions.")
+
+    ctx = EditorContext(
+        tracklist=tracklist,
+        output_path=output_path,
+        corrections_db=corrections_db,
+        audio_path=resolve_audio_path(audio_path, output_path),
+    )
+    httpd = create_server(ctx)
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/"
+    print(f"\nEditing in your browser: {url}\n(Press Ctrl-C here to stop.)")
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
