@@ -41,7 +41,7 @@ def test_apply_edits_updates_and_records_correction(sample_tracklist, tmp_path):
             "artist": "The Chemical Brothers",
             "title": "Block Rockin' Beats",
             "rejected": True,
-        },  # noqa: E501
+        },
     ]
     apply_edits(sample_tracklist, edits, db)
 

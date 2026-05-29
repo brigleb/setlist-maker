@@ -39,7 +39,7 @@ def tracklist_to_api(tracklist: Tracklist) -> dict:
 def apply_edits(
     tracklist: Tracklist,
     edits: list[dict],
-    corrections_db: "CorrectionsDB | None",
+    corrections_db: CorrectionsDB | None,
 ) -> None:
     """Apply per-track edits and rejections in place, recording corrections.
 
