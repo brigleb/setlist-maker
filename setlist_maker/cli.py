@@ -28,8 +28,12 @@ Usage:
     # Identify without opening the editor
     setlist-maker recording.mp3
 
-    # Edit an existing tracklist
-    setlist-maker tracklist.md
+    # Re-running on the same audio reuses the saved tracklist (no re-Shazam);
+    # this reopens it in the editor. Add --reidentify to regenerate from audio.
+    setlist-maker recording.mp3 --edit
+
+    # Edit an existing tracklist directly
+    setlist-maker recording_tracklist.md
 
     # Embed chapter markers and artwork into an MP3
     setlist-maker chapters recording_tracklist.md
@@ -59,6 +63,7 @@ from setlist_maker.identify import (
     SINGLETON_CONFIDENCE_KEEP,
     DedupConfig,
     process_single_file,
+    tracklist_output_path,
 )
 
 
@@ -131,37 +136,53 @@ def cmd_identify(args: argparse.Namespace) -> None:
     if not audio_path:
         sys.exit(1)
 
-    print(f"Processing: {audio_path.name}")
-
     output_dir = Path(args.output_dir) if args.output_dir else None
-    corrections_db = CorrectionsDB() if not args.no_learn else None
+    output_path = tracklist_output_path(audio_path, output_dir)
 
-    # Build deduplication tuning config from flags (validated above)
-    dedup_config = DedupConfig(
-        title_threshold=args.title_threshold,
-        artist_threshold=args.artist_threshold,
-        singleton_confidence_keep=args.singleton_confidence,
-        smoothing=not args.no_smoothing,
-    )
+    # Reuse a tracklist already generated for this audio instead of re-running
+    # Shazam, unless --reidentify asks for a fresh pass. A file that parses to
+    # zero tracks (corrupt/empty) is treated as absent and regenerated.
+    tracklist = None
+    if output_path.exists() and not args.reidentify:
+        existing, _urls = _load_tracklist_with_artwork_urls(output_path)
+        if existing.tracks:
+            print(
+                f"Found existing tracklist: {output_path.name} "
+                f"(use --reidentify to regenerate from audio)"
+            )
+            tracklist = existing
 
-    result = asyncio.run(
-        process_single_file(
-            audio_path=audio_path,
-            output_dir=output_dir,
-            delay_seconds=args.delay,
-            resume=not args.no_resume,
-            corrections_db=corrections_db,
-            dedup_config=dedup_config,
-            summary=not args.no_summary,
-            allow_partial=args.allow_partial,
+    if tracklist is None:
+        print(f"Processing: {audio_path.name}")
+        corrections_db = CorrectionsDB() if not args.no_learn else None
+
+        # Build deduplication tuning config from flags (validated above)
+        dedup_config = DedupConfig(
+            title_threshold=args.title_threshold,
+            artist_threshold=args.artist_threshold,
+            singleton_confidence_keep=args.singleton_confidence,
+            smoothing=not args.no_smoothing,
         )
-    )
 
-    if not result:
-        print(f"\nError: Failed to process {audio_path.name}")
-        sys.exit(1)
+        result = asyncio.run(
+            process_single_file(
+                audio_path=audio_path,
+                output_dir=output_dir,
+                delay_seconds=args.delay,
+                resume=not args.no_resume,
+                corrections_db=corrections_db,
+                dedup_config=dedup_config,
+                summary=not args.no_summary,
+                allow_partial=args.allow_partial,
+            )
+        )
 
-    tracklist, output_path = result
+        if not result:
+            print(f"\nError: Failed to process {audio_path.name}")
+            sys.exit(1)
+
+        tracklist, output_path = result
+
     print(f"\n{'─' * 40}")
     print(tracklist.to_markdown())
 
@@ -376,16 +397,21 @@ Typical workflow
   with --edit to fix any misses (corrections are remembered next time), then
   embed chapter markers + cover artwork into the MP3 for podcast players.
 
+  Re-running on the same audio reuses the saved tracklist (no re-Shazam), so
+  `%(prog)s my_set.mp3 --edit` reopens it for editing. Pass --reidentify to
+  regenerate from the audio instead.
+
 Commands
   identify <audio | tracklist.md>   Identify tracks  (default; may be omitted)
   chapters <tracklist.md>           Embed chapter markers + artwork into an MP3
 
 identify options
-  -e, --edit                  Open the interactive editor after processing
+  -e, --edit                  Open the editor (on an existing tracklist if found)
   -o, --output-dir DIR        Where to write tracklist files (default: beside input)
   -d, --delay SECONDS         Pause between Shazam calls (default: {d_delay})
       --chapters              Embed chapters + artwork after identifying (and editing)
       --no-artwork            With --chapters, embed markers only (skip artwork)
+      --reidentify            Regenerate from audio even if a tracklist exists
       --no-resume             Ignore saved progress and start fresh
       --allow-partial         Process even if far less audio decodes than reported
       --no-learn              Don't read or save corrections
@@ -405,8 +431,9 @@ global options
   -v, --version               Show version
 
 Examples
-  %(prog)s recording.mp3                       Identify tracks
-  %(prog)s recording.mp3 --edit                Identify, then open the editor
+  %(prog)s recording.mp3                       Identify tracks (or reuse if done)
+  %(prog)s recording.mp3 --edit                Identify (or reuse), then edit
+  %(prog)s recording.mp3 --reidentify --edit   Force a fresh re-identify, then edit
   %(prog)s recording.mp3 --edit --chapters     Identify, edit, then add chapters
   %(prog)s tracklist.md                        Edit an existing tracklist
   %(prog)s chapters recording_tracklist.md     Add chapters to the matching MP3
@@ -456,7 +483,8 @@ Examples:
         "-e",
         "--edit",
         action="store_true",
-        help="Open interactive editor after processing",
+        help="Open the editor after identifying — or directly on an existing "
+        "tracklist for this audio, if one is found",
     )
 
     identify_parser.add_argument(
@@ -470,6 +498,14 @@ Examples:
         "--no-artwork",
         action="store_true",
         help="With --chapters, embed chapter markers only (skip artwork fetching)",
+    )
+
+    identify_parser.add_argument(
+        "--reidentify",
+        action="store_true",
+        help="Re-run identification from the audio even if a tracklist already "
+        "exists (by default the existing tracklist is reused); combine with "
+        "--no-resume for a full cold re-scan",
     )
 
     identify_parser.add_argument(

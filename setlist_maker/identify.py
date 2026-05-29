@@ -26,6 +26,19 @@ from setlist_maker.summary import generate_summary
 
 DEFAULT_DELAY_SECONDS = 15  # Pause between API calls
 
+
+def tracklist_output_path(audio_path: Path, output_dir: Path | None) -> Path:
+    """Return the markdown tracklist path for an audio file.
+
+    Shared by the CLI (to detect an already-generated tracklist) and the
+    pipeline (to write one) so both always agree on the location: a
+    ``<stem>_tracklist.md`` sibling of the audio, or inside ``output_dir``
+    when one is given.
+    """
+    directory = output_dir if output_dir is not None else audio_path.parent
+    return directory / f"{audio_path.stem}_tracklist.md"
+
+
 # Two normalized titles at or above this ratio are treated as the same track,
 # provided the artists also match (see ARTIST_SIMILARITY_THRESHOLD). Tuned to
 # merge metadata drift (remix/feat/edit tags, typos) without collapsing
@@ -347,11 +360,8 @@ async def process_single_file(
     base_name = audio_path.stem
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"{base_name}_tracklist.md"
-        progress_path = output_dir / f"{base_name}_progress.json"
-    else:
-        output_path = audio_path.parent / f"{base_name}_tracklist.md"
-        progress_path = audio_path.parent / f"{base_name}_progress.json"
+    output_path = tracklist_output_path(audio_path, output_dir)
+    progress_path = output_path.with_name(f"{base_name}_progress.json")
 
     # Load audio and create slices
     try:
@@ -441,8 +451,7 @@ async def process_single_file(
     print(f"  Saved: {output_path}")
     print(f"  Found {len(tracklist.tracks)} unique tracks")
 
-    # Clean up progress file
-    if progress_path.exists():
-        progress_path.unlink()
-
+    # Retain the progress file rather than deleting it: a later run on the same
+    # audio resumes from these cached Shazam results instead of re-scanning from
+    # scratch. `--no-resume` is the escape hatch for a deliberate cold re-scan.
     return tracklist, output_path

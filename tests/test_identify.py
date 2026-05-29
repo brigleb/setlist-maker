@@ -12,7 +12,21 @@ from setlist_maker.identify import (
     process_single_file,
     results_to_tracklist,
     save_progress,
+    tracklist_output_path,
 )
+
+
+class TestTracklistOutputPath:
+    """Tests for the shared output-path helper used by the CLI and pipeline."""
+
+    def test_defaults_beside_audio_when_no_output_dir(self, temp_dir):
+        audio_path = temp_dir / "set.mp3"
+        assert tracklist_output_path(audio_path, None) == temp_dir / "set_tracklist.md"
+
+    def test_uses_output_dir_when_given(self, temp_dir):
+        audio_path = temp_dir / "set.mp3"
+        out = temp_dir / "lists"
+        assert tracklist_output_path(audio_path, out) == out / "set_tracklist.md"
 
 
 class TestSaveLoadProgress:
@@ -406,8 +420,9 @@ class TestProcessSingleFileOutput:
         data = json.loads(json_path.read_text())
         assert data[0]["coverart_url"] == "https://example.com/art.jpg"
 
-        # Progress file is cleaned up on success
-        assert not (temp_dir / "set_progress.json").exists()
+        # Progress file is retained on success so a later re-identify can resume
+        # from the cached Shazam results instead of re-scanning from scratch.
+        assert (temp_dir / "set_progress.json").exists()
 
 
 class TestFormatProgressLine:

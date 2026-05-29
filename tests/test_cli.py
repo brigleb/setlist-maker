@@ -33,6 +33,7 @@ def _identify_args(**overrides):
         allow_partial=False,
         no_learn=True,  # disabled so these unit tests never touch the real corrections DB
         no_summary=False,
+        reidentify=False,
         title_threshold=SIMILARITY_THRESHOLD,
         artist_threshold=ARTIST_SIMILARITY_THRESHOLD,
         singleton_confidence=SINGLETON_CONFIDENCE_KEEP,
@@ -160,6 +161,91 @@ class TestIdentifyTuningFlags:
         mock_file.assert_not_called()
         mock_process.assert_not_called()
         assert "between 0.0 and 1.0" in capsys.readouterr().out
+
+
+class TestIdentifyReusesExistingTracklist:
+    """Pointing identify at audio reuses an already-generated tracklist."""
+
+    def _seed(self, temp_dir, *, tracks=True):
+        """Create an audio file and (optionally) a matching tracklist beside it."""
+        audio = temp_dir / "set.mp3"
+        audio.write_bytes(b"fake audio")
+        md = temp_dir / "set_tracklist.md"
+        if tracks:
+            tracklist = Tracklist(
+                source_file="set.mp3",
+                tracks=[Track(timestamp=0, artist="Artist", title="Track")],
+                generated_on="2026-01-01 00:00",
+            )
+            md.write_text(tracklist.to_markdown())
+        else:
+            # A header-only file with no numbered tracks parses to zero tracks.
+            md.write_text("# Tracklist: set.mp3\n\n*Generated on 2026-01-01 00:00*\n")
+        return audio, md
+
+    def test_existing_tracklist_skips_identification(self, temp_dir, capsys):
+        """A bare re-run loads the saved tracklist instead of re-running Shazam."""
+        audio, _md = self._seed(temp_dir)
+        args = _identify_args(path=str(audio))
+
+        with (
+            patch("setlist_maker.cli.get_audio_file", return_value=audio),
+            patch("setlist_maker.cli.process_single_file", new=AsyncMock()) as mock_process,
+        ):
+            cmd_identify(args)
+
+        mock_process.assert_not_called()
+        out = capsys.readouterr().out
+        assert "set_tracklist.md" in out
+        assert "Artist" in out  # the existing tracklist was printed
+
+    def test_existing_tracklist_opens_editor_with_audio(self, temp_dir):
+        """--edit on existing audio opens the editor on the saved tracklist."""
+        audio, _md = self._seed(temp_dir)
+        args = _identify_args(path=str(audio), edit=True)
+
+        with (
+            patch("setlist_maker.cli.get_audio_file", return_value=audio),
+            patch("setlist_maker.cli.process_single_file", new=AsyncMock()) as mock_process,
+            patch("setlist_maker.cli.run_editor") as mock_editor,
+        ):
+            cmd_identify(args)
+
+        mock_process.assert_not_called()
+        mock_editor.assert_called_once()
+        assert mock_editor.call_args.kwargs["audio_path"] == audio
+
+    def test_reidentify_forces_identification(self, temp_dir):
+        """--reidentify re-runs the pipeline even when a tracklist exists."""
+        audio, _md = self._seed(temp_dir)
+        args = _identify_args(path=str(audio), reidentify=True)
+
+        with (
+            patch("setlist_maker.cli.get_audio_file", return_value=audio),
+            patch(
+                "setlist_maker.cli.process_single_file",
+                new=AsyncMock(return_value=_dummy_result()),
+            ) as mock_process,
+        ):
+            cmd_identify(args)
+
+        mock_process.assert_called_once()
+
+    def test_empty_tracklist_falls_through_to_identification(self, temp_dir):
+        """A tracklist with no parseable tracks is ignored; identification runs."""
+        audio, _md = self._seed(temp_dir, tracks=False)
+        args = _identify_args(path=str(audio))
+
+        with (
+            patch("setlist_maker.cli.get_audio_file", return_value=audio),
+            patch(
+                "setlist_maker.cli.process_single_file",
+                new=AsyncMock(return_value=_dummy_result()),
+            ) as mock_process,
+        ):
+            cmd_identify(args)
+
+        mock_process.assert_called_once()
 
 
 class TestChainChaptersAfterIdentify:
