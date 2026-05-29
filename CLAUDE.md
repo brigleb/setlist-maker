@@ -101,8 +101,13 @@ CLI application with the following modules:
   (HTTP Range streaming powering the in-browser scrubber), `POST /api/done`
   (graceful shutdown → returns control to the CLI).
 - **Pure helpers:** `tracklist_to_api()` and `apply_edits()` are socket-free and
-  unit-tested directly. Opened with `identify --web-edit` / `-w`; mutually
-  exclusive with `--edit`.
+  unit-tested directly. `apply_edits()` maps edits onto existing tracks by stable
+  `index`; an edit with **no** `index` is a track inserted via the page's per-row
+  "＋ Add below" control — it's appended with its own `timestamp` and the list is
+  re-sorted into chronological position (inserts aren't corrections, so none is
+  recorded). The page sends existing rows by `index` (not array position, which
+  inserts shift) and reloads after saving new tracks so re-save can't duplicate.
+  Opened with `identify --web-edit` / `-w`; mutually exclusive with `--edit`.
 
 ### `setlist_maker/playback.py` - Editor audio preview
 - **PlaybackController:** Drives a non-blocking `ffplay` subprocess (`play()` / `stop()` /

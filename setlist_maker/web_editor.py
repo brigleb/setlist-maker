@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from setlist_maker.editor import (
     CorrectionsDB,
+    Track,
     Tracklist,
     resolve_audio_path,
     save_tracklist,
@@ -70,16 +71,33 @@ def apply_edits(
     """Apply per-track edits and rejections in place, recording corrections.
 
     Mirrors ``editor._on_edit_complete`` + ``action_toggle_reject`` so the web
-    editor learns corrections identically to the TUI. ``edits`` is the list
-    sent by the page, each item keyed by the stable ``index``.
+    editor learns corrections identically to the TUI. Existing tracks are keyed
+    by their stable ``index``; an edit with no ``index`` is a track the user
+    inserted in the page, which is appended and re-sorted into chronological
+    position. Inserted tracks are not Shazam corrections, so none is recorded.
     """
     by_index = dict(enumerate(tracklist.tracks))
+    inserted: list[Track] = []
     for edit in edits:
+        new_artist = (edit.get("artist") or "").strip()
+        new_title = (edit.get("title") or "").strip()
+        if edit.get("index") is None:
+            try:
+                timestamp = max(0, int(edit.get("timestamp") or 0))
+            except (TypeError, ValueError):
+                timestamp = 0
+            inserted.append(
+                Track(
+                    timestamp=timestamp,
+                    artist=new_artist,
+                    title=new_title,
+                    rejected=bool(edit.get("rejected", False)),
+                )
+            )
+            continue
         track = by_index.get(edit.get("index"))
         if track is None:
             continue
-        new_artist = (edit.get("artist") or "").strip()
-        new_title = (edit.get("title") or "").strip()
         if new_artist != track.artist or new_title != track.title:
             if track.original_artist is None:
                 track.original_artist = track.artist
@@ -95,6 +113,10 @@ def apply_edits(
                     corrected_title=new_title,
                 )
         track.rejected = bool(edit.get("rejected", track.rejected))
+
+    if inserted:
+        tracklist.tracks.extend(inserted)
+        tracklist.tracks.sort(key=lambda t: t.timestamp)  # stable: keeps load order on ties
 
 
 def _load_page() -> str:
