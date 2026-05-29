@@ -38,3 +38,6 @@ Thumbs.db
 # Project specific
 *_progress.json
 .todos/
+
+# Brainstorming / visual companion scratch
+.superpowers/
