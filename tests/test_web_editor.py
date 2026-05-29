@@ -68,6 +68,113 @@ def test_apply_edits_ignores_unknown_index(sample_tracklist):
     assert sample_tracklist.tracks[0].artist == "Daft Punk"  # unchanged
 
 
+def test_apply_edits_inserts_new_track_in_chronological_order(sample_tracklist):
+    """An edit without an index is a new track; it lands sorted by timestamp."""
+    from setlist_maker.web_editor import apply_edits
+
+    # fixture timestamps: 0, 180, 360, 540 — insert one at 270 (between 180 and 360)
+    apply_edits(
+        sample_tracklist,
+        [{"artist": "Justice", "title": "Genesis", "timestamp": 270, "rejected": False}],
+        None,
+    )
+
+    timestamps = [t.timestamp for t in sample_tracklist.tracks]
+    assert timestamps == [0, 180, 270, 360, 540]
+    inserted = sample_tracklist.tracks[2]
+    assert inserted.artist == "Justice"
+    assert inserted.title == "Genesis"
+
+
+def test_apply_edits_appends_new_track_after_last(sample_tracklist):
+    from setlist_maker.web_editor import apply_edits
+
+    apply_edits(
+        sample_tracklist,
+        [{"artist": "Bonobo", "title": "Kerala", "timestamp": 600}],
+        None,
+    )
+    assert [t.timestamp for t in sample_tracklist.tracks] == [0, 180, 360, 540, 600]
+    assert sample_tracklist.tracks[-1].artist == "Bonobo"
+
+
+def test_apply_edits_mixes_new_track_with_existing_index_edits(sample_tracklist):
+    """A new track (no index) must not disturb index-based mapping of existing edits."""
+    from setlist_maker.web_editor import apply_edits
+
+    apply_edits(
+        sample_tracklist,
+        [
+            {"index": 0, "artist": "Daft Punk", "title": "One More Time", "rejected": False},
+            {"artist": "Aphex Twin", "title": "Windowlicker", "timestamp": 90},  # new, no index
+            {"index": 3, "artist": "Fatboy Slim", "title": "Praise You", "rejected": True},
+        ],
+        None,
+    )
+
+    assert [t.timestamp for t in sample_tracklist.tracks] == [0, 90, 180, 360, 540]
+    # existing edits applied by stable index, not payload position
+    by_ts = {t.timestamp: t for t in sample_tracklist.tracks}
+    assert by_ts[0].title == "One More Time"
+    assert by_ts[540].rejected is True
+    assert by_ts[90].artist == "Aphex Twin"
+
+
+def test_apply_edits_new_track_records_no_correction(sample_tracklist, tmp_path):
+    """Inserting a track is not a Shazam correction; nothing is learned."""
+    from setlist_maker.editor import CorrectionsDB
+    from setlist_maker.web_editor import apply_edits
+
+    db = CorrectionsDB(db_path=tmp_path / "corrections.json")
+    apply_edits(
+        sample_tracklist,
+        [{"artist": "Moderat", "title": "A New Error", "timestamp": 270}],
+        db,
+    )
+
+    inserted = next(t for t in sample_tracklist.tracks if t.timestamp == 270)
+    assert inserted.was_corrected is False
+    assert db.get_correction("Moderat", "A New Error") is None
+
+
+def test_apply_edits_new_track_missing_timestamp_defaults_to_zero(sample_tracklist):
+    from setlist_maker.web_editor import apply_edits
+
+    apply_edits(sample_tracklist, [{"artist": "A", "title": "B"}], None)
+    assert len(sample_tracklist.tracks) == 5
+    new = next(t for t in sample_tracklist.tracks if t.artist == "A")
+    assert new.timestamp == 0
+    # stable sort keeps the pre-existing 0:00 track ahead of the appended one
+    assert sample_tracklist.tracks[0].artist == "Daft Punk"
+    assert sample_tracklist.tracks[1].artist == "A"
+
+
+def test_inserted_track_round_trips_through_markdown(sample_tracklist):
+    """Insert -> to_markdown -> parse re-produces the track in chronological order."""
+    from setlist_maker.editor import parse_markdown_tracklist
+    from setlist_maker.web_editor import apply_edits
+
+    apply_edits(
+        sample_tracklist,
+        [{"artist": "Caribou", "title": "Odessa", "timestamp": 270}],
+        None,
+    )
+    reparsed = parse_markdown_tracklist(sample_tracklist.to_markdown())
+
+    assert [t.timestamp for t in reparsed.tracks] == [0, 180, 270, 360, 540]
+    third = reparsed.tracks[2]
+    assert third.artist == "Caribou"
+    assert third.title == "Odessa"
+
+
+def test_page_has_insert_affordance_and_time_field():
+    """The page exposes a way to add a track and edit a new row's timestamp."""
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    assert "addBelow(" in html  # per-row "+ Add below" handler
+    assert "timefield" in html  # inline timestamp field for new rows
+    assert "MM:SS" in html  # ...with an MM:SS placeholder
+
+
 @contextmanager
 def running_server(ctx):
     """Start the web editor server on an ephemeral port in a background thread."""

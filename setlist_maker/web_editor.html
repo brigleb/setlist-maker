@@ -32,6 +32,9 @@
   .iconbtn { background:none; border:none; cursor:pointer; font-size:16px; padding:2px 4px; line-height:1; }
   .play { color:var(--accent); }
   .reject { color:#c8c8cd; }
+  .add { color:#c8c8cd; font-weight:700; }
+  .add:hover { color:var(--accent); }
+  .editfields input.timefield { flex:0 0 80px; text-align:center; font-variant-numeric:tabular-nums; }
   #player { position:fixed; left:0; right:0; bottom:0; background:#1c1c1e; color:#fff; display:flex; align-items:center; gap:14px; padding:12px 20px; }
   #player.disabled { opacity:.4; pointer-events:none; }
   #pthumb { width:38px; height:38px; border-radius:6px; flex:none; background-size:cover; background:#333; }
@@ -152,12 +155,40 @@
     rej.onclick = (e) => { e.stopPropagation(); t.rejected = !t.rejected; setDirty(true); render(); };
     row.appendChild(rej);
 
+    const add = document.createElement("button");
+    add.className = "iconbtn add"; add.textContent = "＋"; add.title = "Add a track below";
+    add.onclick = (e) => { e.stopPropagation(); addBelow(i); };
+    row.appendChild(add);
+
     return row;
+  }
+
+  const INSERT_TAIL_GAP = 30;  // seconds past the last track when adding at the end
+
+  // Parse "M:SS", "MM:SS", or "H:MM:SS" into seconds; null if unparseable.
+  function parseTime(str) {
+    const parts = (str || "").trim().split(":");
+    if (parts.length < 2 || parts.length > 3 || !parts.every(p => /^\d+$/.test(p.trim()))) return null;
+    const n = parts.map(p => parseInt(p, 10));
+    return n.length === 3 ? n[0] * 3600 + n[1] * 60 + n[2] : n[0] * 60 + n[1];
+  }
+
+  // Insert a blank, editable track after row i; default its time to the midpoint
+  // to the next track (or just past the last one), then open it for editing.
+  function addBelow(i) {
+    const cur = tracks[i], next = tracks[i + 1];
+    const ts = next ? Math.floor((cur.timestamp + next.timestamp) / 2) : cur.timestamp + INSERT_TAIL_GAP;
+    tracks.splice(i + 1, 0, { artist: "", title: "", timestamp: ts, time: fmt(ts), rejected: false, _new: true });
+    setDirty(true);
+    render();
+    const row = document.getElementById("list").children[i + 1];
+    if (row) startEdit(row, i + 1);
   }
 
   function startEdit(row, i) {
     if (row.querySelector(".editfields")) return;
     const t = tracks[i];
+    const isNew = !!t._new;
     const meta = row.querySelector(".meta");
     row.classList.add("editing");
     const wrap = document.createElement("div");
@@ -165,15 +196,28 @@
     const a = document.createElement("input"); a.value = t.artist; a.placeholder = "Artist";
     const ti = document.createElement("input"); ti.value = t.title; ti.placeholder = "Title";
     wrap.appendChild(a); wrap.appendChild(ti);
+    // Inserted rows also edit their timestamp; existing rows keep title/artist only.
+    let tm = null;
+    if (isNew) {
+      tm = document.createElement("input");
+      tm.className = "timefield"; tm.value = t.time || fmt(t.timestamp); tm.placeholder = "MM:SS";
+      wrap.appendChild(tm);
+    }
     meta.replaceWith(wrap);
     a.focus();
     function commit() {
       const na = a.value.trim(), nt = ti.value.trim();
-      if (na !== t.artist || nt !== t.title) { t.artist = na; t.title = nt; t._edited = true; setDirty(true); }
+      if (na !== t.artist || nt !== t.title) { t.artist = na; t.title = nt; if (!isNew) t._edited = true; setDirty(true); }
+      if (tm) {
+        const secs = parseTime(tm.value);
+        if (secs !== null && secs !== t.timestamp) { t.timestamp = secs; setDirty(true); tracks.sort((x, y) => x.timestamp - y.timestamp); }
+        t.time = fmt(t.timestamp);
+      }
       render();
     }
     a.addEventListener("keydown", ev => { if (ev.key === "Enter") ti.focus(); if (ev.key === "Escape") render(); });
-    ti.addEventListener("keydown", ev => { if (ev.key === "Enter") commit(); if (ev.key === "Escape") render(); });
+    ti.addEventListener("keydown", ev => { if (ev.key === "Enter") { if (tm) tm.focus(); else commit(); } if (ev.key === "Escape") render(); });
+    if (tm) tm.addEventListener("keydown", ev => { if (ev.key === "Enter") commit(); if (ev.key === "Escape") render(); });
     wrap.addEventListener("focusout", () => { setTimeout(() => { if (!wrap.contains(document.activeElement)) commit(); }, 0); });
   }
 
@@ -204,11 +248,19 @@
   });
 
   document.getElementById("save").onclick = async () => {
-    const payload = { tracks: tracks.map((t, i) => ({ index: i, artist: t.artist, title: t.title, rejected: !!t.rejected })) };
+    // Existing rows map back by their stable server index (NOT array position,
+    // which inserted rows shift); new rows carry a timestamp and no index.
+    const hasNew = tracks.some(t => t._new);
+    const payload = { tracks: tracks.map(t => t._new
+      ? { artist: t.artist, title: t.title, timestamp: t.timestamp, rejected: !!t.rejected }
+      : { index: t.index, artist: t.artist, title: t.title, rejected: !!t.rejected }) };
     try {
       const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const res = await r.json();
-      if (res.ok) { setDirty(false); toast("Saved"); } else { toast("Save failed: " + (res.error || "")); }
+      if (res.ok) {
+        if (hasNew) await load();  // refresh so inserted rows gain real indices (re-save won't duplicate)
+        setDirty(false); toast("Saved");
+      } else { toast("Save failed: " + (res.error || "")); }
     } catch (e) { toast("Save failed"); }
   };
 
