@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setlist Maker — Editor</title>
+<style>
+  :root { --accent:#0a84ff; --ok:#1f9d55; --warn:#c8860a; --bg:#f6f6f7; --card:#fff; --line:#eee; --muted:#8a8a8e; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; background:var(--bg); color:#1c1c1e; padding-bottom:84px; }
+  header { position:sticky; top:0; background:var(--card); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; align-items:center; justify-content:space-between; z-index:5; }
+  .file { font-weight:700; font-size:15px; }
+  .counts { color:var(--muted); font-size:12px; margin-top:2px; }
+  .actions button { font:inherit; font-weight:600; font-size:13px; border-radius:7px; padding:7px 16px; cursor:pointer; border:1px solid transparent; margin-left:8px; }
+  #save { background:var(--accent); color:#fff; }
+  #save:disabled { opacity:.5; cursor:default; }
+  #done { background:#fff; color:#555; border-color:#ddd; }
+  .summary { padding:10px 20px; color:var(--muted); font-size:12px; font-style:italic; border-bottom:1px solid #f1f1f1; background:var(--card); }
+  main { max-width:760px; margin:0 auto; }
+  .row { display:flex; align-items:center; gap:13px; padding:11px 20px; border-bottom:1px solid #f4f4f4; background:var(--card); }
+  .row.rejected { opacity:.45; }
+  .row.editing { background:#eef6ff; outline:2px solid var(--accent); outline-offset:-2px; }
+  .thumb { width:42px; height:42px; border-radius:6px; flex:none; background-size:cover; background-position:center; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; }
+  .meta { flex:1; min-width:0; cursor:text; }
+  .artist { font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .title { color:var(--muted); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row.rejected .artist, .row.rejected .title { text-decoration:line-through; }
+  .row.unknown .artist { color:var(--warn); font-style:italic; }
+  .editfields { flex:1; display:flex; gap:8px; }
+  .editfields input { flex:1; font:inherit; font-size:13px; padding:6px 9px; border:1px solid #b9d6ff; border-radius:6px; }
+  .time { color:#b0b0b5; font-size:12px; font-variant-numeric:tabular-nums; }
+  .iconbtn { background:none; border:none; cursor:pointer; font-size:16px; padding:2px 4px; line-height:1; }
+  .play { color:var(--accent); }
+  .reject { color:#c8c8cd; }
+  #player { position:fixed; left:0; right:0; bottom:0; background:#1c1c1e; color:#fff; display:flex; align-items:center; gap:14px; padding:12px 20px; }
+  #player.disabled { opacity:.4; pointer-events:none; }
+  #pthumb { width:38px; height:38px; border-radius:6px; flex:none; background-size:cover; background:#333; }
+  #pplay { font-size:16px; background:none; border:none; color:#fff; cursor:pointer; }
+  #pmeta { flex:1; }
+  #plabel { font-weight:600; font-size:12px; margin-bottom:6px; }
+  #seek { width:100%; }
+  #ptime { color:#9a9a9e; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  #toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:#1c1c1e; color:#fff; padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  #toast.show { opacity:1; }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="file" id="file">—</div>
+      <div class="counts" id="counts"></div>
+    </div>
+    <div class="actions">
+      <button id="save" disabled>Save</button>
+      <button id="done">Done</button>
+    </div>
+  </header>
+  <div class="summary" id="summary" hidden></div>
+  <main id="list"></main>
+  <div id="player" class="disabled">
+    <div id="pthumb"></div>
+    <button id="pplay">▶</button>
+    <div id="pmeta">
+      <div id="plabel">Nothing playing</div>
+      <input id="seek" type="range" min="0" max="100" value="0" step="0.1">
+    </div>
+    <div id="ptime">0:00 / 0:00</div>
+  </div>
+  <audio id="audio" src="/api/audio" preload="metadata"></audio>
+  <div id="toast"></div>
+<script>
+  const GRADS = [
+    "linear-gradient(135deg,#6a5acd,#0a84ff)",
+    "linear-gradient(135deg,#1f9d55,#7bd389)",
+    "linear-gradient(135deg,#ff6b6b,#feca57)",
+    "linear-gradient(135deg,#f857a6,#ff5858)",
+    "linear-gradient(135deg,#43cea2,#185a9d)",
+  ];
+  let tracks = [];
+  let dirty = false;
+  let playingIndex = null;
+  const audio = document.getElementById("audio");
+
+  function fmt(s) {
+    s = Math.floor(s || 0);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    const mm = (h > 0) ? String(m).padStart(2, "0") : String(m);
+    return (h > 0 ? h + ":" : "") + mm + ":" + String(sec).padStart(2, "0");
+  }
+  function setDirty(v) { dirty = v; document.getElementById("save").disabled = !v; }
+  function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); }
+
+  async function load() {
+    const data = await (await fetch("/api/tracklist")).json();
+    document.getElementById("file").textContent = "🎚 " + data.source_file;
+    tracks = data.tracks;
+    if (data.summary) { const s = document.getElementById("summary"); s.textContent = data.summary; s.hidden = false; }
+    render();
+  }
+
+  function updateCounts() {
+    const rej = tracks.filter(t => t.rejected).length;
+    const ed = tracks.filter(t => t._edited).length;
+    const parts = [tracks.length + " tracks"];
+    if (ed) parts.push(ed + " edited");
+    if (rej) parts.push(rej + " rejected");
+    document.getElementById("counts").textContent = parts.join(" · ");
+  }
+
+  function render() {
+    const list = document.getElementById("list");
+    list.innerHTML = "";
+    tracks.forEach((t, i) => list.appendChild(rowEl(t, i)));
+    updateCounts();
+  }
+
+  function rowEl(t, i) {
+    const unknown = !t.artist && !t.title;
+    const row = document.createElement("div");
+    row.className = "row" + (t.rejected ? " rejected" : "") + (unknown ? " unknown" : "");
+
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    thumb.style.background = GRADS[i % GRADS.length];
+    if (t.coverart_url) thumb.style.backgroundImage = "url('" + t.coverart_url + "')";
+    else if (unknown) thumb.textContent = "?";
+    row.appendChild(thumb);
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const artistEl = document.createElement("div");
+    artistEl.className = "artist";
+    artistEl.textContent = t.artist || (unknown ? "Unidentified" : "");
+    const titleEl = document.createElement("div");
+    titleEl.className = "title";
+    titleEl.textContent = t.title || (unknown ? "add a label" : "");
+    meta.append(artistEl, titleEl);  // textContent, not innerHTML — no XSS surface
+    meta.onclick = () => startEdit(row, i);
+    row.appendChild(meta);
+
+    const time = document.createElement("div");
+    time.className = "time"; time.textContent = t.time;
+    row.appendChild(time);
+
+    const play = document.createElement("button");
+    play.className = "iconbtn play"; play.textContent = "▶";
+    play.onclick = (e) => { e.stopPropagation(); playFrom(i); };
+    row.appendChild(play);
+
+    const rej = document.createElement("button");
+    rej.className = "iconbtn reject"; rej.textContent = t.rejected ? "↩" : "✕";
+    rej.onclick = (e) => { e.stopPropagation(); t.rejected = !t.rejected; setDirty(true); render(); };
+    row.appendChild(rej);
+
+    return row;
+  }
+
+  function startEdit(row, i) {
+    if (row.querySelector(".editfields")) return;
+    const t = tracks[i];
+    const meta = row.querySelector(".meta");
+    row.classList.add("editing");
+    const wrap = document.createElement("div");
+    wrap.className = "editfields";
+    const a = document.createElement("input"); a.value = t.artist; a.placeholder = "Artist";
+    const ti = document.createElement("input"); ti.value = t.title; ti.placeholder = "Title";
+    wrap.appendChild(a); wrap.appendChild(ti);
+    meta.replaceWith(wrap);
+    a.focus();
+    function commit() {
+      const na = a.value.trim(), nt = ti.value.trim();
+      if (na !== t.artist || nt !== t.title) { t.artist = na; t.title = nt; t._edited = true; setDirty(true); }
+      render();
+    }
+    a.addEventListener("keydown", ev => { if (ev.key === "Enter") ti.focus(); if (ev.key === "Escape") render(); });
+    ti.addEventListener("keydown", ev => { if (ev.key === "Enter") commit(); if (ev.key === "Escape") render(); });
+    wrap.addEventListener("focusout", () => { setTimeout(() => { if (!wrap.contains(document.activeElement)) commit(); }, 0); });
+  }
+
+  function playFrom(i) {
+    const t = tracks[i];
+    playingIndex = i;
+    document.getElementById("plabel").textContent = (t.artist || "Unidentified") + (t.title ? " — " + t.title : "");
+    const pt = document.getElementById("pthumb");
+    pt.style.background = GRADS[i % GRADS.length];
+    pt.style.backgroundImage = t.coverart_url ? "url('" + t.coverart_url + "')" : "";
+    const start = () => { audio.currentTime = t.timestamp; audio.play(); };
+    if (audio.readyState >= 1) start();
+    else audio.addEventListener("loadedmetadata", start, { once: true });
+  }
+
+  document.getElementById("pplay").onclick = () => { if (audio.paused) audio.play(); else audio.pause(); };
+  audio.addEventListener("play", () => document.getElementById("pplay").textContent = "⏸");
+  audio.addEventListener("pause", () => document.getElementById("pplay").textContent = "▶");
+  audio.addEventListener("loadedmetadata", () => document.getElementById("player").classList.remove("disabled"));
+  audio.addEventListener("error", () => document.getElementById("player").classList.add("disabled"));
+  audio.addEventListener("timeupdate", () => {
+    const seek = document.getElementById("seek");
+    if (audio.duration) seek.value = (audio.currentTime / audio.duration) * 100;
+    document.getElementById("ptime").textContent = fmt(audio.currentTime) + " / " + fmt(audio.duration);
+  });
+  document.getElementById("seek").addEventListener("input", e => {
+    if (audio.duration) audio.currentTime = (e.target.value / 100) * audio.duration;
+  });
+
+  document.getElementById("save").onclick = async () => {
+    const payload = { tracks: tracks.map((t, i) => ({ index: i, artist: t.artist, title: t.title, rejected: !!t.rejected })) };
+    try {
+      const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const res = await r.json();
+      if (res.ok) { setDirty(false); toast("Saved"); } else { toast("Save failed: " + (res.error || "")); }
+    } catch (e) { toast("Save failed"); }
+  };
+
+  document.getElementById("done").onclick = async () => {
+    if (dirty && !confirm("You have unsaved changes. Close anyway?")) return;
+    dirty = false;
+    await fetch("/api/done", { method: "POST" }).catch(() => {});
+    document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#8a8a8e;font-family:sans-serif">Editor closed — you can close this tab.</div>';
+    setTimeout(() => { try { window.close(); } catch (e) {} }, 300);
+  };
+
+  window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+  load();
+</script>
+</body>
+</html>
