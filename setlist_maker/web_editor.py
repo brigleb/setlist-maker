@@ -258,9 +258,9 @@ def run_web_editor(
     httpd = create_server(ctx)
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
     print(f"\nEditing in your browser: {url}\n(Press Ctrl-C here to stop.)")
-    if open_browser:
-        webbrowser.open(url)
     try:
+        if open_browser:
+            webbrowser.open(url)
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
