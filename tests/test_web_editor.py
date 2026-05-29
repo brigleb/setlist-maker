@@ -2,9 +2,12 @@
 
 import json
 import threading
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from importlib.resources import files
+
+import pytest
 
 
 def test_page_asset_exists_and_has_hooks():
@@ -147,3 +150,31 @@ def test_post_save_writes_files_and_records_correction(sample_tracklist, tmp_pat
     assert "Praise You" not in md  # rejected, excluded from output
     assert (tmp_path / "set_tracklist.json").exists()
     assert db.get_correction("Daft Punk", "Around the World") == ("Daft Punk", "One More Time")
+
+
+def test_get_audio_full_and_range(sample_tracklist, tmp_path):
+    audio = tmp_path / "set.mp3"
+    audio.write_bytes(bytes(range(256)))  # 256 deterministic bytes
+    ctx = _ctx(sample_tracklist, tmp_path, audio_path=audio)
+
+    with running_server(ctx) as base:
+        # full request
+        with urllib.request.urlopen(base + "/api/audio") as r:
+            assert r.status == 200
+            assert r.headers["Accept-Ranges"] == "bytes"
+            assert len(r.read()) == 256
+        # range request
+        req = urllib.request.Request(base + "/api/audio", headers={"Range": "bytes=0-99"})
+        with urllib.request.urlopen(req) as r:
+            assert r.status == 206
+            assert r.headers["Content-Range"] == "bytes 0-99/256"
+            data = r.read()
+            assert len(data) == 100
+            assert data == bytes(range(100))
+
+
+def test_get_audio_404_when_missing(sample_tracklist, tmp_path):
+    with running_server(_ctx(sample_tracklist, tmp_path, audio_path=None)) as base:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(base + "/api/audio")
+        assert exc.value.code == 404

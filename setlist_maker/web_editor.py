@@ -16,6 +16,17 @@ from urllib.parse import urlparse
 
 from setlist_maker.editor import CorrectionsDB, Tracklist, save_tracklist
 
+_AUDIO_CONTENT_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".aac": "audio/aac",
+    ".wma": "audio/x-ms-wma",
+    ".aiff": "audio/aiff",
+}
+
 
 def tracklist_to_api(tracklist: Tracklist) -> dict:
     """Shape a Tracklist into the JSON the web page consumes.
@@ -146,8 +157,50 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == "/api/tracklist":
             self._send_json(tracklist_to_api(self._ctx.tracklist))
+        elif path == "/api/audio":
+            self._send_audio()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _send_audio(self) -> None:
+        audio_path = self._ctx.audio_path
+        if audio_path is None or not audio_path.exists():
+            self.send_error(HTTPStatus.NOT_FOUND, "audio not found")
+            return
+        size = audio_path.stat().st_size
+        ctype = _AUDIO_CONTENT_TYPES.get(audio_path.suffix.lower(), "application/octet-stream")
+
+        start, end, status = 0, size - 1, HTTPStatus.OK
+        rng = self.headers.get("Range")
+        if rng and rng.startswith("bytes="):
+            status = HTTPStatus.PARTIAL_CONTENT
+            lo, _, hi = rng[len("bytes=") :].partition("-")
+            if lo.strip():
+                start = max(0, int(lo))
+            if hi.strip():
+                end = min(size - 1, int(hi))
+
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if status == HTTPStatus.PARTIAL_CONTENT:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+
+        with open(audio_path, "rb") as f:
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    break  # browser seeked/closed the stream; normal for media
+                remaining -= len(chunk)
 
 
 def create_server(ctx: EditorContext) -> ThreadingHTTPServer:
