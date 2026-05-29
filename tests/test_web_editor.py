@@ -1,5 +1,9 @@
 """Tests for the web editor (setlist_maker.web_editor)."""
 
+import json
+import threading
+import urllib.request
+from contextlib import contextmanager
 from importlib.resources import files
 
 
@@ -59,3 +63,47 @@ def test_apply_edits_ignores_unknown_index(sample_tracklist):
 
     apply_edits(sample_tracklist, [{"index": 99, "artist": "X", "title": "Y"}], None)
     assert sample_tracklist.tracks[0].artist == "Daft Punk"  # unchanged
+
+
+@contextmanager
+def running_server(ctx):
+    """Start the web editor server on an ephemeral port in a background thread."""
+    from setlist_maker.web_editor import create_server
+
+    httpd = create_server(ctx)
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield base
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+
+
+def _ctx(tracklist, tmp_path, audio_path=None):
+    from setlist_maker.web_editor import EditorContext
+
+    return EditorContext(
+        tracklist=tracklist,
+        output_path=tmp_path / "set_tracklist.md",
+        corrections_db=None,
+        audio_path=audio_path,
+    )
+
+
+def test_get_root_serves_page(sample_tracklist, tmp_path):
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(base + "/") as r:
+            body = r.read().decode()
+            assert r.status == 200
+            assert "<audio" in body
+
+
+def test_get_tracklist_returns_json(sample_tracklist, tmp_path):
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(base + "/api/tracklist") as r:
+            data = json.loads(r.read())
+            assert data["source_file"] == "test_mix.mp3"
+            assert len(data["tracks"]) == 4
