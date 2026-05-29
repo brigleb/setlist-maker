@@ -7,6 +7,7 @@ small JSON + audio API bound to loopback (``127.0.0.1``).
 """
 
 import json
+import threading
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -128,8 +129,15 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/save":
             self._handle_save()
+        elif path == "/api/done":
+            self._handle_done()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _handle_done(self) -> None:
+        self._send_json({"ok": True})
+        # shut down from another thread so this response flushes first
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
 
     def _handle_save(self) -> None:
         length = int(self.headers.get("Content-Length", 0))

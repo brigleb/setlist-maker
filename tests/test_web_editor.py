@@ -190,3 +190,21 @@ def test_get_audio_ignores_malformed_range(sample_tracklist, tmp_path):
             # malformed range -> fall back to full 200 response, no crash
             assert r.status == 200
             assert len(r.read()) == 256
+
+
+def test_post_done_shuts_server_down(sample_tracklist, tmp_path):
+    """After /api/done the server stops serving and the thread exits."""
+    from setlist_maker.web_editor import create_server
+
+    httpd = create_server(_ctx(sample_tracklist, tmp_path))
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        req = urllib.request.Request(base + "/api/done", data=b"", method="POST")
+        with urllib.request.urlopen(req) as r:
+            assert json.loads(r.read())["ok"] is True
+        thread.join(timeout=3)
+        assert not thread.is_alive()  # serve_forever returned
+    finally:
+        httpd.server_close()
