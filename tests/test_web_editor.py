@@ -178,3 +178,15 @@ def test_get_audio_404_when_missing(sample_tracklist, tmp_path):
         with pytest.raises(urllib.error.HTTPError) as exc:
             urllib.request.urlopen(base + "/api/audio")
         assert exc.value.code == 404
+
+
+def test_get_audio_ignores_malformed_range(sample_tracklist, tmp_path):
+    audio = tmp_path / "set.mp3"
+    audio.write_bytes(bytes(range(256)))
+    ctx = _ctx(sample_tracklist, tmp_path, audio_path=audio)
+    with running_server(ctx) as base:
+        req = urllib.request.Request(base + "/api/audio", headers={"Range": "bytes=abc-def"})
+        with urllib.request.urlopen(req) as r:
+            # malformed range -> fall back to full 200 response, no crash
+            assert r.status == 200
+            assert len(r.read()) == 256

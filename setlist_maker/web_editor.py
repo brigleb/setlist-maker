@@ -173,12 +173,18 @@ class _Handler(BaseHTTPRequestHandler):
         start, end, status = 0, size - 1, HTTPStatus.OK
         rng = self.headers.get("Range")
         if rng and rng.startswith("bytes="):
-            status = HTTPStatus.PARTIAL_CONTENT
             lo, _, hi = rng[len("bytes=") :].partition("-")
-            if lo.strip():
-                start = max(0, int(lo))
-            if hi.strip():
-                end = min(size - 1, int(hi))
+            try:
+                new_start = max(0, int(lo)) if lo.strip() else 0
+                new_end = min(size - 1, int(hi)) if hi.strip() else size - 1
+            except ValueError:
+                new_start, new_end = 0, size - 1  # malformed: serve full file
+            else:
+                if new_start <= new_end:
+                    start, end, status = new_start, new_end, HTTPStatus.PARTIAL_CONTENT
+                else:
+                    self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                    return
 
         length = end - start + 1
         self.send_response(status)
