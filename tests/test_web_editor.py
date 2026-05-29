@@ -310,6 +310,76 @@ def test_post_save_writes_files_and_records_correction(sample_tracklist, tmp_pat
     assert db.get_correction("Daft Punk", "Around the World") == ("Daft Punk", "One More Time")
 
 
+def test_post_save_writes_summary_to_markdown(sample_tracklist, tmp_path):
+    from setlist_maker.web_editor import EditorContext
+
+    ctx = EditorContext(
+        tracklist=sample_tracklist,
+        output_path=tmp_path / "set_tracklist.md",
+        corrections_db=None,
+        audio_path=None,
+    )
+    payload = json.dumps(
+        {
+            "tracks": [
+                {"index": i, "artist": t.artist, "title": t.title, "rejected": False}
+                for i, t in enumerate(sample_tracklist.tracks)
+            ],
+            "summary": "A sweaty warehouse set.",
+        }
+    ).encode()
+
+    with running_server(ctx) as base:
+        req = urllib.request.Request(
+            base + "/api/save",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            res = json.loads(r.read())
+
+    assert res["ok"] is True
+    md = (tmp_path / "set_tracklist.md").read_text()
+    assert "A sweaty warehouse set." in md
+
+
+def test_post_save_absent_summary_leaves_existing_summary_unchanged(sample_tracklist, tmp_path):
+    """A track-only save (no summary key) must not clear an existing summary."""
+    from setlist_maker.web_editor import EditorContext
+
+    sample_tracklist.summary = "Original summary."
+    ctx = EditorContext(
+        tracklist=sample_tracklist,
+        output_path=tmp_path / "set_tracklist.md",
+        corrections_db=None,
+        audio_path=None,
+    )
+    payload = json.dumps(
+        {
+            "tracks": [
+                {"index": i, "artist": t.artist, "title": t.title, "rejected": False}
+                for i, t in enumerate(sample_tracklist.tracks)
+            ]
+            # "summary" key deliberately absent
+        }
+    ).encode()
+
+    with running_server(ctx) as base:
+        req = urllib.request.Request(
+            base + "/api/save",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            res = json.loads(r.read())
+
+    assert res["ok"] is True
+    md = (tmp_path / "set_tracklist.md").read_text()
+    assert "Original summary." in md
+
+
 def test_get_audio_full_and_range(sample_tracklist, tmp_path):
     audio = tmp_path / "set.mp3"
     audio.write_bytes(bytes(range(256)))  # 256 deterministic bytes

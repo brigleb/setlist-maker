@@ -194,8 +194,14 @@ class _Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b"{}"
         ctx = self._ctx
         try:
-            edits = json.loads(raw).get("tracks", [])
-            apply_edits(ctx.tracklist, edits, ctx.corrections_db)
+            data = json.loads(raw)
+            edits = data.get("tracks", [])
+            apply_edits(
+                ctx.tracklist,
+                edits,
+                ctx.corrections_db,
+                summary=data.get("summary", _UNSET),
+            )
             save_tracklist(ctx.tracklist, ctx.output_path, ctx.corrections_db)
         except Exception as exc:  # surface to the page; keep state intact
             self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
