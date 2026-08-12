@@ -1,0 +1,372 @@
+<title>Setlist Maker Workflow</title>
+<style>
+  :root {
+    --bg: #F3F4F0;
+    --surface: #FFFFFF;
+    --ink: #22271F;
+    --muted: #67705E;
+    --line: #D8DCD0;
+    --accent: #20685C;
+    --accent-soft: #E3EEEA;
+    --issue: #9A5B00;
+    --issue-soft: #F6ECDD;
+    --code-bg: #EAECE4;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #151814;
+      --surface: #1D211C;
+      --ink: #E4E8DF;
+      --muted: #99A390;
+      --line: #333A30;
+      --accent: #55B8A3;
+      --accent-soft: #1E2E2A;
+      --issue: #E0A64C;
+      --issue-soft: #2E2618;
+      --code-bg: #22261F;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #151814;
+    --surface: #1D211C;
+    --ink: #E4E8DF;
+    --muted: #99A390;
+    --line: #333A30;
+    --accent: #55B8A3;
+    --accent-soft: #1E2E2A;
+    --issue: #E0A64C;
+    --issue-soft: #2E2618;
+    --code-bg: #22261F;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    margin: 0;
+    padding: 3rem 1.25rem 5rem;
+  }
+  main { max-width: 960px; margin: 0 auto; }
+  header { max-width: 720px; margin-bottom: 2.5rem; }
+  h1 {
+    font-family: var(--mono);
+    font-size: 1.7rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.6rem;
+    text-wrap: balance;
+  }
+  h1 .dim { color: var(--muted); font-weight: 400; }
+  .lede { color: var(--muted); font-size: 1.02rem; max-width: 62ch; margin: 0; }
+  .lede code, p code, li code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+  }
+  h2 {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--accent);
+    margin: 3rem 0 1rem;
+  }
+  figure { margin: 0; }
+  .diagram-scroll { overflow-x: auto; }
+  .diagram-scroll svg { min-width: 780px; max-width: 100%; height: auto; display: block; }
+  figcaption { color: var(--muted); font-size: 0.88rem; max-width: 68ch; margin-top: 0.75rem; }
+
+  /* SVG classes */
+  .box  { fill: var(--surface); stroke: var(--line); stroke-width: 1.25; }
+  .boxhi{ fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
+  .sub  { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+  .bt   { font-family: var(--mono); font-size: 13px; font-weight: 600; fill: var(--ink); }
+  .bd   { font-family: var(--sans); font-size: 11.5px; fill: var(--muted); }
+  .note { font-family: var(--sans); font-size: 12px; fill: var(--muted); }
+  .noteh{ font-family: var(--mono); font-size: 11.5px; font-weight: 600; fill: var(--ink); }
+  .lbl  { font-family: var(--sans); font-size: 11px; fill: var(--muted); }
+  .flow { stroke: var(--ink); stroke-width: 1.4; fill: none; }
+  .rail { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+  .loopy{ stroke: var(--accent); stroke-width: 1.3; fill: none; stroke-dasharray: 4 4; }
+  .fI   { fill: var(--ink); }
+  .fM   { fill: var(--muted); }
+  .fA   { fill: var(--accent); }
+  .hint { font-family: var(--sans); font-size: 11.5px; fill: var(--accent); }
+  .ipill{ fill: var(--issue-soft); stroke: var(--issue); stroke-width: 1; }
+  .itext{ font-family: var(--mono); font-size: 10.5px; font-weight: 600; fill: var(--issue); }
+  .iref { fill: var(--issue); font-weight: 600; }
+  .aref { fill: var(--accent); font-weight: 600; }
+
+  /* Issues list */
+  .issues { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+  .issues li {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    display: grid;
+    grid-template-columns: 3.2rem 1fr;
+    gap: 0.25rem 0.9rem;
+    align-items: baseline;
+  }
+  .issues .num { font-family: var(--mono); font-weight: 600; color: var(--issue); }
+  .issues li.shipped .num { color: var(--accent); }
+  .issues .where {
+    grid-column: 2;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+  }
+  .issues .what { grid-column: 2; font-size: 0.95rem; }
+
+  /* Field notes */
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.75rem; }
+  .notes div {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    font-size: 0.92rem;
+  }
+  .notes b { font-family: var(--mono); font-size: 0.8rem; display: block; margin-bottom: 0.3rem; color: var(--accent); font-weight: 600; }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    line-height: 1.7;
+    margin: 0;
+  }
+  pre .c { color: var(--muted); }
+  footer { color: var(--muted); font-size: 0.82rem; margin-top: 3rem; max-width: 68ch; }
+</style>
+
+<main>
+<header>
+  <h1>Setlist Maker <span class="dim">— how a set becomes a tracklist</span></h1>
+  <p class="lede">One audio file goes in; 30-second slices are Shazam'd one at a time; the noisy matches
+  are deduplicated and corrected into a tracklist written as <code>.md</code>&nbsp;+&nbsp;<code>.json</code>,
+  which you can then polish in an editor and embed as podcast chapters. Amber tags mark where the
+  open GitHub issues live.</p>
+</header>
+
+<figure>
+  <div class="diagram-scroll">
+  <svg viewBox="0 0 960 1330" role="img" aria-label="Flow diagram of the Setlist Maker pipeline: entry, reuse check, audio load with truncation guard, 30-second slicing, per-sample Shazam recognition loop with progress saving, deduplication (issue 7), corrections, Claude summary, markdown and JSON outputs, the terminal and web editors (issues 10 and 16) which feed corrections back, and the optional chapters chain.">
+    <defs>
+      <marker id="arrI" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="fI"></path>
+      </marker>
+      <marker id="arrM" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="fM"></path>
+      </marker>
+      <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="fA"></path>
+      </marker>
+    </defs>
+
+    <!-- ══ Skip rail (right): .md path / reuse jumps straight to the editors ══ -->
+    <text class="lbl" x="432" y="46">path is a finished .md</text>
+    <path class="rail" d="M424 56 H468 V1032 H436" marker-end="url(#arrM)"></path>
+    <text class="lbl" x="436" y="134">yes</text>
+    <path class="rail" d="M424 144 H468"></path>
+
+    <!-- ══ Entry ══ -->
+    <rect class="box" x="94" y="24" width="330" height="64" rx="7"></rect>
+    <text class="bt" x="110" y="50">setlist-maker &lt;audio | .md&gt;</text>
+    <text class="bd" x="110" y="72">cli.py · main() routes to cmd_identify (default)</text>
+    <path class="flow" d="M259 88 V108" marker-end="url(#arrI)"></path>
+
+    <!-- ══ Reuse check ══ -->
+    <rect class="box" x="94" y="112" width="330" height="60" rx="7"></rect>
+    <text class="bt" x="110" y="138">tracklist already on disk?</text>
+    <text class="bd" x="110" y="158">looks for &lt;name&gt;.md next to the audio</text>
+    <text class="lbl" x="268" y="192">no — fresh identification</text>
+    <path class="flow" d="M259 172 V198" marker-end="url(#arrI)"></path>
+    <text class="note" x="500" y="120">A finished tracklist is never re-Shazam'd by</text>
+    <text class="note" x="500" y="136">accident — force a fresh pass with <tspan class="aref">--reidentify</tspan>.</text>
+
+    <!-- ══ Load audio ══ -->
+    <rect class="box" x="94" y="202" width="330" height="76" rx="7"></rect>
+    <text class="bt" x="110" y="228">load_audio() · audio.py</text>
+    <text class="bd" x="110" y="248">full decode via pydub + ffmpeg</text>
+    <text class="bd" x="110" y="266">decoded length cross-checked against ffprobe</text>
+    <path class="flow" d="M259 278 V304" marker-end="url(#arrI)"></path>
+    <text class="noteh" x="500" y="222">The iCloud guard</text>
+    <text class="note" x="500" y="240">A file still syncing decodes short → raises</text>
+    <text class="note" x="500" y="256">TruncatedAudioError instead of silently writing</text>
+    <text class="note" x="500" y="272">half a tracklist. Bypass: <tspan class="aref">--allow-partial</tspan>.</text>
+
+    <!-- ══ Slice ══ -->
+    <rect class="box" x="94" y="308" width="330" height="58" rx="7"></rect>
+    <text class="bt" x="110" y="334">slice_audio()</text>
+    <text class="bd" x="110" y="354">30-second samples, start to finish</text>
+    <path class="flow" d="M259 366 V392" marker-end="url(#arrI)"></path>
+
+    <!-- ══ Recognition loop ══ -->
+    <rect class="boxhi" x="94" y="396" width="330" height="158" rx="7"></rect>
+    <text class="bt" x="110" y="422">recognition loop <tspan class="bd">· one sample at a time</tspan></text>
+    <text class="bd" x="110" y="446">→ shazamio lookup, retry + exponential backoff</text>
+    <text class="bd" x="110" y="466">→ estimate_confidence() attached to the match</text>
+    <text class="bd" x="110" y="486">→ append + save &lt;name&gt;_progress.json</text>
+    <text class="bd" x="110" y="506">→ sleep --delay (default 15 s), next sample</text>
+    <path class="loopy" d="M404 516 H414 V436 H406" marker-end="url(#arrA)"></path>
+    <text class="hint" x="110" y="536">interrupt any time — next run resumes here</text>
+    <path class="flow" d="M259 554 V580" marker-end="url(#arrI)"></path>
+    <text class="noteh" x="500" y="420">Budget real time</text>
+    <text class="note" x="500" y="438">A 1-hour set is ~120 samples; at the default</text>
+    <text class="note" x="500" y="454">delay that's 30–40 min of polite API pacing.</text>
+    <text class="note" x="500" y="470">Ctrl-C freely: progress persists per sample</text>
+    <text class="note" x="500" y="486">(<tspan class="aref">--no-resume</tspan> discards it).</text>
+
+    <!-- ══ Dedup ══ -->
+    <rect class="box" x="94" y="584" width="330" height="112" rx="7"></rect>
+    <text class="bt" x="110" y="610">deduplicate_tracklist()</text>
+    <text class="bd" x="110" y="632">fuzzy-cluster titles/artists (remix · feat drift)</text>
+    <text class="bd" x="110" y="652">smooth isolated outliers: A·B·A → A·A·A</text>
+    <rect class="ipill" x="346" y="640" width="30" height="17" rx="8.5"></rect>
+    <text class="itext" x="361" y="652" text-anchor="middle">#7</text>
+    <text class="bd" x="110" y="672">drop low-confidence singletons, keep confident</text>
+    <text class="bd" x="110" y="686">short tracks · collapse consecutive repeats</text>
+    <path class="flow" d="M259 696 V722" marker-end="url(#arrI)"></path>
+    <text class="note" x="500" y="608"><tspan class="iref">#7</tspan> The known bug: smoothing can erase a</text>
+    <text class="note" x="500" y="624">genuinely confident short track sandwiched</text>
+    <text class="note" x="500" y="640">A·B·A. One-minute cut missing? Rerun with</text>
+    <text class="note" x="500" y="656"><tspan class="aref">--no-smoothing</tspan>. Also tunable: --title-threshold,</text>
+    <text class="note" x="500" y="672">--artist-threshold, --singleton-confidence.</text>
+
+    <!-- ══ Corrections ══ -->
+    <rect class="box" x="94" y="726" width="330" height="58" rx="7"></rect>
+    <text class="bt" x="110" y="752">apply corrections · CorrectionsDB</text>
+    <text class="bd" x="110" y="772">~/.config/setlist-maker/corrections.json</text>
+    <path class="flow" d="M259 784 V810" marker-end="url(#arrI)"></path>
+
+    <!-- ══ Summary ══ -->
+    <rect class="box" x="94" y="814" width="330" height="58" rx="7"></rect>
+    <text class="bt" x="110" y="840">generate_summary() <tspan class="bd">· best-effort</tspan></text>
+    <text class="bd" x="110" y="860">one-paragraph description via `claude -p`</text>
+    <path class="flow" d="M259 872 V898" marker-end="url(#arrI)"></path>
+    <text class="note" x="500" y="838">Needs the claude CLI on PATH; any failure just</text>
+    <text class="note" x="500" y="854">skips the summary. Opt out: <tspan class="aref">--no-summary</tspan>.</text>
+
+    <!-- ══ Outputs ══ -->
+    <rect class="boxhi" x="94" y="902" width="330" height="58" rx="7"></rect>
+    <text class="bt" x="110" y="928">write &lt;name&gt;.md + &lt;name&gt;.json</text>
+    <text class="bd" x="110" y="948">tracklist markdown + sidecar (cover-art URLs)</text>
+    <text class="lbl" x="268" y="984">--edit (TUI) / -w (browser)</text>
+    <path class="flow" d="M259 960 V986" marker-end="url(#arrI)"></path>
+
+    <!-- ══ Editors ══ -->
+    <rect class="box" x="94" y="990" width="330" height="150" rx="7"></rect>
+    <text class="bt" x="110" y="1016">review &amp; fix <tspan class="bd">· optional, either editor</tspan></text>
+    <rect class="sub" x="108" y="1028" width="302" height="44" rx="5"></rect>
+    <text class="bd" x="120" y="1046"><tspan class="noteh">TUI</tspan>  Textual spreadsheet · `p` = 30-s ffplay preview</text>
+    <text class="bd" x="120" y="1064">play/stop only — no seek yet</text>
+    <rect class="ipill" x="336" y="1050" width="38" height="17" rx="8.5"></rect>
+    <text class="itext" x="355" y="1062" text-anchor="middle">#10</text>
+    <rect class="sub" x="108" y="1078" width="302" height="44" rx="5"></rect>
+    <text class="bd" x="120" y="1096"><tspan class="noteh">Web</tspan>  loopback HTTP · audio scrubber · insert rows</text>
+    <text class="bd" x="120" y="1114">editable set description · saves via /api/save</text>
+    <text class="bd" x="110" y="1134">both write back through save_tracklist()</text>
+    <rect class="ipill" x="478" y="1006" width="38" height="17" rx="8.5"></rect>
+    <text class="itext" x="497" y="1018" text-anchor="middle">#16</text>
+    <text class="note" x="500" y="1052"><tspan class="iref">#16</tspan> The reopen trap: a set description that</text>
+    <text class="note" x="500" y="1068">contains numbered, track-looking lines gets</text>
+    <text class="note" x="500" y="1084">misparsed when a .md comes back in through</text>
+    <text class="note" x="500" y="1100">parse_markdown_tracklist().</text>
+    <text class="note" x="500" y="1124"><tspan class="iref">#10</tspan> TUI preview can't scrub within a track.</text>
+
+    <!-- ══ Learning loop ══ -->
+    <path class="loopy" d="M94 1134 H54 V755 H88" marker-end="url(#arrA)"></path>
+    <text class="lbl" x="40" y="948" text-anchor="middle" transform="rotate(-90 40 948)">your fixes become corrections → next run</text>
+
+    <!-- ══ Chapters ══ -->
+    <text class="lbl" x="268" y="1164">--chapters, or the `chapters` subcommand</text>
+    <path class="flow" d="M259 1140 V1166" marker-end="url(#arrI)"></path>
+    <rect class="box" x="94" y="1170" width="330" height="118" rx="7"></rect>
+    <text class="bt" x="110" y="1196">chapters chain <tspan class="bd">· MP3 only</tspan></text>
+    <text class="bd" x="110" y="1218">re-parse tracklist → locate the MP3</text>
+    <text class="bd" x="110" y="1238">artwork waterfall: Shazam CDN → iTunes →</text>
+    <text class="bd" x="110" y="1254">Deezer → MusicBrainz/Cover Art Archive</text>
+    <text class="bd" x="110" y="1274">embed ID3v2 CHAP/CTOC for podcast players</text>
+    <text class="note" x="500" y="1216">Lower-third chapter art per track</text>
+    <text class="note" x="500" y="1232">(create_chapter_image). Skip lookups</text>
+    <text class="note" x="500" y="1248">with <tspan class="aref">--no-artwork</tspan>.</text>
+  </svg>
+  </div>
+  <figcaption>The identify pipeline top to bottom. The right rail is the shortcut both re-entry
+  paths take (reopening a saved <code>.md</code>, or finding one beside the audio); the dashed left
+  loop is the corrections database learning from your edits. Amber pills are open GitHub issues.</figcaption>
+</figure>
+
+<h2>The open issues, mapped</h2>
+<ul class="issues">
+  <li>
+    <span class="num">#7</span>
+    <span class="where">dedup · smoothing — the one most likely to bite</span>
+    <span class="what">A confident short track sandwiched between two longer ones (A·B·A) gets smoothed
+    away as an outlier. If a brief cut you know was played is missing, rerun with
+    <code>--no-smoothing</code> and compare.</span>
+  </li>
+  <li>
+    <span class="num">#16</span>
+    <span class="where">reopen path · parse_markdown_tracklist</span>
+    <span class="what">A set description containing numbered track-format lines is misparsed when the
+    <code>.md</code> is reopened for editing. Until fixed, keep descriptions free of
+    <code>1. Artist – Title</code>-style lines.</span>
+  </li>
+  <li>
+    <span class="num">#10</span>
+    <span class="where">tui editor · playback</span>
+    <span class="what"><code>p</code> previews the selected track's 30-second window; there's no
+    seek/scrub within it. The web editor's scrubber is the workaround.</span>
+  </li>
+  <li class="shipped">
+    <span class="num">#13</span>
+    <span class="where">web editor · closed aug 2026</span>
+    <span class="what">Insert a missed track — shipped in PR #15 ("＋ Add below" with inline timestamp).
+    Verified and closed.</span>
+  </li>
+  <li class="shipped">
+    <span class="num">#14</span>
+    <span class="where">web editor · closed aug 2026</span>
+    <span class="what">Larger, editable set description — shipped on <code>main</code>
+    (<code>88e7f38</code>&nbsp;→&nbsp;<code>3b2da85</code>). Verified and closed.</span>
+  </li>
+</ul>
+
+<h2>Before you run it</h2>
+<div class="notes">
+  <div><b>time it takes</b>An hour-long set ≈ 120 samples ≈ 30–40 minutes at the default 15-second
+  delay. Ctrl-C is safe; the run resumes from <code>&lt;name&gt;_progress.json</code>.</div>
+  <div><b>icloud files</b>If the source lives in iCloud, let it finish downloading first — or expect
+  the <code>TruncatedAudioError</code> guard to stop a partial decode (that's it working).</div>
+  <div><b>reruns are free</b>An existing tracklist is reused, never re-Shazam'd, unless you pass
+  <code>--reidentify</code>. Reopening the <code>.md</code> goes straight to an editor.</div>
+  <div><b>it learns</b>Fixes accepted in either editor land in <code>corrections.json</code> and
+  auto-apply to every future run. <code>--no-learn</code> opts out.</div>
+</div>
+
+<h2>Common invocations</h2>
+<pre>setlist-maker set.mp3              <span class="c"># identify → print → write set.md + set.json</span>
+setlist-maker set.mp3 -w           <span class="c"># …then review in the browser editor</span>
+setlist-maker set.mp3 --edit       <span class="c"># …then review in the terminal editor</span>
+setlist-maker set.md -w            <span class="c"># reopen an existing tracklist (mind #16)</span>
+setlist-maker set.mp3 --chapters   <span class="c"># full run, then embed ID3 chapters</span>
+setlist-maker chapters set.md --audio set.mp3</pre>
+
+<footer>Drawn from the code on <code>main</code> (4fb2f01) and the open GitHub issues as of
+August 11, 2026. Module map lives in CLAUDE.md; this page adds the flow between the modules.</footer>
+</main>
