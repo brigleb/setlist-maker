@@ -88,6 +88,17 @@ CLI application with the following modules:
 - **fetch_artwork():** Waterfall lookup across Shazam CDN, iTunes, Deezer, MusicBrainz/Cover Art Archive
 - **create_chapter_image():** Builds per-chapter artwork with an MTV-style lower-third overlay
 
+### `setlist_maker/artwork_cache.py` - Chapter image cache
+- **chapter_image():** The single path from a track to its chapter composite —
+  `fetch_artwork()` + `create_chapter_image()`, cached on disk. Called by both the
+  web editor's `/api/artwork` preview and `embed_chapters_for_tracklist()`, so the
+  image previewed is byte-identical to the one embedded (#20).
+- **Cache key is a content hash** of (artist, title, coverart_url, size), so an edit
+  regenerates structurally — there is no invalidation code path. Lives in
+  `$XDG_CACHE_HOME/setlist-maker/artwork` (else `~/.cache/...`).
+- Per-key locks dedupe concurrent requests; a semaphore caps simultaneous generation
+  at 4. An unwritable cache degrades to in-memory generation rather than failing.
+
 ### `setlist_maker/editor.py` - Interactive TUI editor
 - **TracklistEditor:** Textual app providing spreadsheet-like interface
 - **EditTrackScreen:** Modal dialog for editing artist/title fields
