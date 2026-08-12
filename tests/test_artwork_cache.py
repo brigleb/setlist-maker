@@ -265,6 +265,39 @@ def test_missing_src_after_cached_composite_does_not_poison_used_fallback(monkey
     assert not (cache_dir() / f"{key}.fallback").exists()
 
 
+def test_unreadable_cache_dir_does_not_crash_fallback_recording(monkeypatch):
+    """An unreadable cache dir must degrade, not raise, when recording a fallback.
+
+    Regression: _record_fallback()'s composite-existence check uses
+    Path.exists(), which only swallows OSError subtypes matching ENOENT /
+    ENOTDIR / EBADF / ELOOP -- it re-raises PermissionError (EACCES). Making
+    the cache directory unreadable must not crash source_artwork(), and
+    used_fallback() must still report correctly for the rest of the process.
+    """
+    import os
+
+    from setlist_maker.artwork_cache import cache_dir, source_artwork, used_fallback
+
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("running as root: chmod restrictions have no effect")
+
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: None,
+    )
+
+    cache_root = cache_dir()
+    cache_root.mkdir(parents=True)
+    cache_root.chmod(0o000)  # unreadable and untraversable
+
+    try:
+        result = source_artwork("Daft Punk", "Around the World")
+        assert result is None
+        assert used_fallback("Daft Punk", "Around the World") is True
+    finally:
+        cache_root.chmod(0o755)  # restore so tmp_path cleanup can remove it
+
+
 def test_concurrent_calls_generate_once(monkeypatch):
     """Two threads racing on one key must not both hit the network."""
     import threading

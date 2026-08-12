@@ -208,8 +208,28 @@ def _record_fallback(key: str, is_fallback: bool) -> None:
         # skipping is harmless. This guards the case where a .jpg is cached
         # but its .src is missing (an older build, a pruned .src, or an
         # unwritable cache) and a later re-fetch attempt fails.
-        if (cache_dir() / f"{key}.jpg").exists():
+        #
+        # Path.exists() only swallows the OSError subtypes matching ENOENT /
+        # ENOTDIR / EBADF / ELOOP -- it re-raises PermissionError (EACCES),
+        # unlike every other filesystem touch in this module, so this check
+        # needs its own guard rather than relying on exists()'s own handling.
+        try:
+            composite_exists = (cache_dir() / f"{key}.jpg").exists()
+        except OSError:
+            # Can't tell whether a composite is cached -- the cache is
+            # unusable in this state anyway (the marker write below would
+            # fail too). Record the fallback in-process so used_fallback()
+            # stays correct for the rest of this run, and skip the disk
+            # write entirely. This add() must happen here, not be left to
+            # fall through into some outer handler, or an unreadable cache
+            # dir would silently make used_fallback() wrong instead of just
+            # slow.
+            _fallback_seen.add(key)
             return
+
+        if composite_exists:
+            return
+
         _fallback_seen.add(key)
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
