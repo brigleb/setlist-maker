@@ -170,6 +170,8 @@ setlist-maker my_set.mp3 --edit --chapters
 
 This writes ID3v2 CHAP/CTOC frames into the MP3. Podcast players (Apple Podcasts, Overcast, Pocket Casts, etc.) and VLC will show a chapter list with timestamps, titles, and artwork for each track.
 
+Tags are written as ID3v2.3 — the ecosystem convention for podcast chapters. Players widely misparse ID3v2.4's syncsafe CHAP sub-frame sizes once artwork pushes a sub-frame past 128 bytes, silently hiding every chapter (see issue #17).
+
 For each track, artwork is fetched using a waterfall of sources: Shazam CDN, iTunes, Deezer, and MusicBrainz/Cover Art Archive. Remix tags and featuring info are automatically stripped for smarter search fallbacks. Each chapter image gets an MTV-style lower-third overlay with the artist and title.
 
 ### Learning from Corrections
