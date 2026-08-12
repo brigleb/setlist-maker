@@ -86,6 +86,9 @@ CLI application with the following modules:
   CHAP sub-frame sizes once an artwork APIC sub-frame exceeds 128 bytes and silently
   drop every chapter (#17). Guarded by an ffprobe round-trip regression test.
 - **fetch_artwork():** Waterfall lookup across Shazam CDN, iTunes, Deezer, MusicBrainz/Cover Art Archive
+- Chapter composites are produced through `artwork_cache.chapter_image()`, not by
+  pairing `fetch_artwork()` + `create_chapter_image()` directly — that shared cache is
+  what makes the web editor's preview byte-identical to what gets embedded.
 - **create_chapter_image():** Builds per-chapter artwork with an MTV-style lower-third overlay
 
 ### `setlist_maker/artwork_cache.py` - Chapter image cache

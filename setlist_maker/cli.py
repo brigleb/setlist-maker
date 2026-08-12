@@ -46,7 +46,7 @@ import sys
 from pathlib import Path
 
 from setlist_maker import __version__
-from setlist_maker.artwork import create_chapter_image, fetch_artwork
+from setlist_maker.artwork_cache import chapter_image, used_fallback
 from setlist_maker.audio import get_audio_file
 from setlist_maker.chapters import embed_chapters
 from setlist_maker.editor import (
@@ -288,32 +288,24 @@ def embed_chapters_for_tracklist(
             label = f"{track.artist} - {track.title}"
             print(f"  [{i + 1}/{len(chapter_tracks)}] {track.time_str} - {label}")
 
-            # Fetch cover art
-            artwork_bytes = fetch_artwork(
+            # One cached path shared with the editor's preview, so the image
+            # embedded here is byte-identical to the one the user approved.
+            chapter_images[i] = chapter_image(
                 artist=track.artist,
                 title=track.title,
                 coverart_url=track.coverart_url,
             )
 
-            if artwork_bytes:
-                print("    Found artwork, generating chapter image...")
-            else:
-                print("    No artwork found, using text-only image")
-
-            # Create MTV-style overlay image
-            chapter_img = create_chapter_image(
-                artwork_bytes=artwork_bytes,
-                artist=track.artist,
-                title=track.title,
-            )
-            chapter_images[i] = chapter_img
-
-            # Use first track's artwork as episode cover
-            if episode_image is None and artwork_bytes:
-                episode_image = create_chapter_image(
-                    artwork_bytes=artwork_bytes,
+            # Episode cover: first track with *real* artwork, relabelled for the
+            # set. used_fallback() preserves the pre-cache behavior of skipping
+            # tracks whose composite is just the gradient.
+            if episode_image is None and not used_fallback(
+                track.artist, track.title, track.coverart_url
+            ):
+                episode_image = chapter_image(
                     artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
                     title="Tracklist",
+                    coverart_url=track.coverart_url,
                 )
 
         print(f"  Generated {len(chapter_images)} chapter image(s)")

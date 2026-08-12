@@ -427,3 +427,74 @@ def test_edit_and_web_edit_together_errors():
     args = _identify_args(edit=True, web_edit=True)
     with pytest.raises(SystemExit):
         cmd_identify(args)
+
+
+def test_embed_chapters_reuses_cached_artwork(monkeypatch, tmp_path, sample_tracklist):
+    """A composite already generated in the editor is not re-fetched at embed time."""
+    from setlist_maker import artwork_cache
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: None,
+    )
+
+    # Warm the cache the way the editor's preview would.
+    for t in sample_tracklist.tracks:
+        if not t.is_unidentified:
+            artwork_cache.chapter_image(t.artist, t.title, t.coverart_url)
+
+    def explode(*a, **k):
+        raise AssertionError("embed must reuse the cache, not re-fetch")
+
+    monkeypatch.setattr("setlist_maker.artwork_cache.fetch_artwork", explode)
+
+    embedded = {}
+    monkeypatch.setattr(
+        "setlist_maker.cli.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
+    )
+
+    embed_chapters_for_tracklist(sample_tracklist, tmp_path / "set.mp3", fetch_art=True)
+
+    # three identified tracks in the fixture, each with a cached composite
+    assert len(embedded["chapter_images"]) == 3
+    # no track had real artwork, so there is no episode cover (as before the cache)
+    assert embedded["episode_image"] is None
+
+
+def _jpeg(color=(10, 120, 90)):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (600, 600), color).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def test_episode_cover_skips_a_track_with_no_artwork(monkeypatch, tmp_path, sample_tracklist):
+    """The opener having no findable art must not yield a gradient episode cover.
+
+    Pins the pre-cache behavior: the episode cover comes from the first track
+    with *real* artwork, not merely the first identified one.
+    """
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    def art_for_second_track_only(artist, title, coverart_url=None, size=600):
+        return _jpeg() if artist == "The Chemical Brothers" else None
+
+    monkeypatch.setattr("setlist_maker.artwork_cache.fetch_artwork", art_for_second_track_only)
+
+    embedded = {}
+    monkeypatch.setattr(
+        "setlist_maker.cli.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
+    )
+
+    embed_chapters_for_tracklist(sample_tracklist, tmp_path / "set.mp3", fetch_art=True)
+
+    assert embedded["episode_image"] is not None
