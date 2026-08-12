@@ -519,3 +519,8 @@ def test_page_lazy_loads_composite_artwork():
     # before it. Placed after </script>, getElementById returns null and the
     # TypeError takes down the whole page -- which a substring check misses.
     assert html.index('id="artwork-overlay"') < html.index("<script>")
+    # A saved edit changes the composite; without a cache-busting version param,
+    # Chrome reuses the decoded image for the identical pre-edit URL and the
+    # thumb never updates until a full page reload.
+    assert '"&v=" + artVersion' in html
+    assert "artVersion++" in html  # bumped on save so the next request is fresh

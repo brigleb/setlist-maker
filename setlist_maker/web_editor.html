@@ -130,6 +130,8 @@
     updateCounts();
   }
 
+  let artVersion = 0;  // bumped on save so re-requested thumbs bypass the browser's decoded-image cache
+
   // Generate visible rows first: 60-track sets are network-bound on a miss.
   const artObserver = new IntersectionObserver((entries) => {
     for (const e of entries) {
@@ -139,14 +141,14 @@
       const img = new Image();
       // 404 = unidentified or out of range; keep the gradient placeholder.
       img.onload = () => { el.style.backgroundImage = "url('" + img.src + "')"; };
-      img.src = "/api/artwork?index=" + el.dataset.index;
+      img.src = "/api/artwork?index=" + el.dataset.index + "&v=" + artVersion;
     }
   }, { rootMargin: "200px" });  // start just before the row scrolls into view
 
   const overlay = document.getElementById("artwork-overlay");
   const overlayImg = overlay.querySelector("img");
   function showArtwork(index) {
-    overlayImg.src = "/api/artwork?index=" + index;
+    overlayImg.src = "/api/artwork?index=" + index + "&v=" + artVersion;
     overlay.classList.add("open");
   }
   overlay.onclick = () => { overlay.classList.remove("open"); overlayImg.src = ""; };
@@ -303,6 +305,7 @@
       if (res.ok) {
         // Always re-render: an edited artist/title changes the composite, and
         // the thumb must re-request against the now-saved server state.
+        artVersion++;
         if (hasNew) await load();  // inserted rows also need real indices
         else render();
         setDirty(false); toast("Saved");
