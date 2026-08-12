@@ -22,9 +22,11 @@ logger = logging.getLogger(__name__)
 # title or URL text, so field boundaries can never be ambiguous.
 _KEY_SEP = "\0"
 
-# Cap simultaneous generation. Each miss can make up to six network calls, so
+# Cap simultaneous fetching. Each miss can make up to six network calls, so
 # an editor scrolling 60 rows must not open 60 fetch storms. Cache hits never
-# take the semaphore -- only generation is capped.
+# take the semaphore -- only the fetch inside source_artwork() is capped;
+# compositing (create_chapter_image) is local PIL work and is deliberately
+# left uncapped.
 _MAX_CONCURRENT_GENERATION = 4
 _generation_slots = threading.Semaphore(_MAX_CONCURRENT_GENERATION)
 
@@ -197,6 +199,17 @@ def _record_fallback(key: str, is_fallback: bool) -> None:
     """Persist whether this composite was drawn without real source artwork."""
     marker = _fallback_marker(key)
     if is_fallback:
+        # Don't mark a key as fallback if a composite is already cached for
+        # it. A cached .jpg was either built from real art (a marker here
+        # would be wrong, and -- because chapter_image() hits the .jpg cache
+        # and returns before ever reaching this line again -- permanently
+        # wrong, hiding that track from the episode cover forever) or it was
+        # itself a fallback, in which case its marker already exists and
+        # skipping is harmless. This guards the case where a .jpg is cached
+        # but its .src is missing (an older build, a pruned .src, or an
+        # unwritable cache) and a later re-fetch attempt fails.
+        if (cache_dir() / f"{key}.jpg").exists():
+            return
         _fallback_seen.add(key)
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)

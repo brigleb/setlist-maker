@@ -104,8 +104,9 @@ CLI application with the following modules:
   `$XDG_CACHE_HOME/setlist-maker/artwork` (else `~/.cache/...`).
 - Per-key locks — `RLock`, since `chapter_image()` calls `source_artwork()` for the
   *same* key while still holding its own lock — dedupe concurrent requests; a
-  semaphore caps simultaneous generation at 4. An unwritable cache degrades to
-  in-memory generation rather than failing.
+  semaphore caps simultaneous network fetches at 4 (compositing is local PIL work and
+  is not capped). An unwritable cache degrades to in-memory generation rather than
+  failing.
 
 ### `setlist_maker/editor.py` - Interactive TUI editor
 - **TracklistEditor:** Textual app providing spreadsheet-like interface

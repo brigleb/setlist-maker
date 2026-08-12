@@ -216,6 +216,55 @@ def test_used_fallback_survives_a_fresh_process(monkeypatch):
     assert artwork_cache.used_fallback("Daft Punk", "Around the World") is True
 
 
+def test_missing_src_after_cached_composite_does_not_poison_used_fallback(monkeypatch):
+    """A cached composite with no .src must not be marked as fallback.
+
+    Regression: a .jpg can exist without its .src (an older build, a pruned
+    .src, or an unwritable cache when it was first generated). If the episode
+    cover then calls source_artwork() for that key and the re-fetch fails
+    (rate limit, network blip, artwork taken down), that failure must not be
+    recorded as this key's fallback status -- doing so would permanently and
+    silently swap that track's episode cover for the gradient, even though
+    its own cached chapter image still shows the real art.
+    """
+    import io
+
+    from PIL import Image
+
+    from setlist_maker.artwork_cache import (
+        cache_dir,
+        cache_key,
+        chapter_image,
+        source_artwork,
+        used_fallback,
+    )
+
+    buf = io.BytesIO()
+    Image.new("RGB", (600, 600), (10, 120, 90)).save(buf, format="JPEG")
+    real_art = buf.getvalue()
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: real_art,
+    )
+
+    chapter_image("Daft Punk", "Around the World")
+    assert used_fallback("Daft Punk", "Around the World") is False
+
+    # Simulate a .jpg cached without its .src.
+    key = cache_key("Daft Punk", "Around the World", None, 600)
+    (cache_dir() / f"{key}.src").unlink()
+
+    # A later re-fetch attempt for the same key fails.
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: None,
+    )
+    assert source_artwork("Daft Punk", "Around the World") is None  # the fetch did fail
+
+    assert used_fallback("Daft Punk", "Around the World") is False
+    assert not (cache_dir() / f"{key}.fallback").exists()
+
+
 def test_concurrent_calls_generate_once(monkeypatch):
     """Two threads racing on one key must not both hit the network."""
     import threading
