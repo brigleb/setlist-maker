@@ -429,6 +429,65 @@ def test_edit_and_web_edit_together_errors():
         cmd_identify(args)
 
 
+def test_md_edit_path_previews_the_same_key_chapters_embeds(monkeypatch, tmp_path):
+    """Editing an existing .md must carry the sidecar's coverart_url into the editor.
+
+    The preview is only authoritative if it is keyed identically to what
+    `chapters` embeds. `parse_markdown_tracklist()` alone cannot supply
+    coverart_url (markdown has no URL field), so loading a .md straight through
+    it made the editor preview chapter_image(artist, title, None) while the
+    chapters path -- which reads the JSON sidecar -- embedded
+    chapter_image(artist, title, "https://..."): different key, different
+    fetch strategy, different image.
+    """
+    from setlist_maker.artwork import CHAPTER_IMAGE_SIZE
+    from setlist_maker.artwork_cache import cache_key
+
+    md_path = tmp_path / "set_tracklist.md"
+    md_path.write_text(
+        "# Tracklist: set.mp3\n\n"
+        "*Generated on 2026-01-31 20:00*\n\n"
+        "1. **Daft Punk** - Around the World (0:00)\n"
+        "2. **Fatboy Slim** - Praise You (3:00)\n"
+    )
+    md_path.with_suffix(".json").write_text(
+        json.dumps(
+            [
+                {
+                    "timestamp": 0,
+                    "time": "0:00",
+                    "artist": "Daft Punk",
+                    "title": "Around the World",
+                    "coverart_url": "https://example.test/art1.jpg",
+                },
+                {
+                    "timestamp": 180,
+                    "time": "3:00",
+                    "artist": "Fatboy Slim",
+                    "title": "Praise You",
+                    "coverart_url": "https://example.test/art2.jpg",
+                },
+            ]
+        )
+    )
+
+    args = _identify_args(path=str(md_path), web_edit=True)
+    with patch("setlist_maker.cli.run_web_editor") as mock_web:
+        cmd_identify(args)
+
+    editor_tracklist = mock_web.call_args.args[0]
+    chapters_tracklist, _urls = _load_tracklist_with_artwork_urls(md_path)
+
+    def keys(tracklist):
+        return [
+            cache_key(t.artist, t.title, t.coverart_url, CHAPTER_IMAGE_SIZE)
+            for t in tracklist.tracks
+        ]
+
+    assert editor_tracklist.tracks[0].coverart_url == "https://example.test/art1.jpg"
+    assert keys(editor_tracklist) == keys(chapters_tracklist)
+
+
 def test_embed_chapters_reuses_cached_artwork(monkeypatch, tmp_path, sample_tracklist):
     """A composite already generated in the editor is not re-fetched at embed time."""
     from setlist_maker import artwork_cache
@@ -518,6 +577,70 @@ def test_episode_cover_skips_a_track_with_no_artwork(monkeypatch, tmp_path, samp
     assert all(abs(pixel[c] - art_color[c]) <= tolerance for c in range(3)), (
         f"episode cover top-left pixel {pixel} does not match the fetched art color "
         f"{art_color} (looks like the gradient fallback instead)"
+    )
+
+
+def test_episode_cover_falls_through_when_source_art_is_gone(
+    monkeypatch, tmp_path, sample_tracklist
+):
+    """A cached composite whose .src vanished must not yield a gradient cover.
+
+    used_fallback() correctly reports "this track had real art" (its composite
+    was built from some), so the episode-cover branch is entered -- but with
+    the .src gone (an intermediate build that predates .src, a disk-full window
+    between the .src and .jpg writes, or a user pruning .src files) the re-fetch
+    can fail. Feeding that None into create_chapter_image() produced a gradient
+    *and* assigned it, permanently blocking every later track with real art.
+    The pre-cache behavior was to skip to the next track, and that is what must
+    hold: the episode cover is either a later track's real art or nothing.
+    """
+    import io
+
+    from PIL import Image
+
+    from setlist_maker import artwork_cache
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    opener_color = (200, 20, 21)
+    later_color = (20, 190, 30)
+
+    # First pass: the opener's art is findable, so its composite gets cached.
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: _jpeg(opener_color),
+    )
+    opener = sample_tracklist.tracks[0]
+    artwork_cache.chapter_image(opener.artist, opener.title, opener.coverart_url)
+
+    # Its .src is then lost, leaving a cached .jpg with no source art behind it.
+    key = artwork_cache.cache_key(opener.artist, opener.title, opener.coverart_url, 600)
+    (artwork_cache.cache_dir() / f"{key}.src").unlink()
+
+    # Later run: the opener's art can no longer be fetched; a later track's can.
+    def fetch(artist, title, coverart_url=None, size=600):
+        if artist == opener.artist:
+            return None
+        return _jpeg(later_color)
+
+    monkeypatch.setattr("setlist_maker.artwork_cache.fetch_artwork", fetch)
+
+    embedded = {}
+    monkeypatch.setattr(
+        "setlist_maker.cli.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
+    )
+
+    embed_chapters_for_tracklist(sample_tracklist, tmp_path / "set.mp3", fetch_art=True)
+
+    cover = embedded["episode_image"]
+    assert cover is not None, "a later track had real art and should have supplied the cover"
+    pixel = Image.open(io.BytesIO(cover)).convert("RGB").getpixel((0, 0))
+    tolerance = 20  # allow for JPEG compression drift
+    assert all(abs(pixel[c] - later_color[c]) <= tolerance for c in range(3)), (
+        f"episode cover top-left pixel {pixel} is not the later track's art {later_color} "
+        f"(the gradient fallback's is ~(30, 30, 40))"
     )
 
 

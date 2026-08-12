@@ -298,6 +298,45 @@ def test_unreadable_cache_dir_does_not_crash_fallback_recording(monkeypatch):
         cache_root.chmod(0o755)  # restore so tmp_path cleanup can remove it
 
 
+def test_unreadable_cache_dir_does_not_crash_used_fallback(monkeypatch):
+    """used_fallback() must degrade to False, not raise, on an unreadable cache.
+
+    Regression: used_fallback() probed the marker file with Path.exists(),
+    which re-raises PermissionError (EACCES) -- so an unreadable cache dir
+    took down the whole `chapters` command, violating this module's invariant
+    that an unusable cache degrades to in-memory generation.
+
+    `_fallback_seen` is cleared before the assertion on purpose: the in-process
+    set short-circuits ahead of the marker probe, so a test that leaves it
+    populated (as test_unreadable_cache_dir_does_not_crash_fallback_recording
+    does) never reaches the filesystem touch this pins.
+    """
+    import os
+
+    from setlist_maker import artwork_cache
+
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("running as root: chmod restrictions have no effect")
+
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: None,
+    )
+
+    cache_root = artwork_cache.cache_dir()
+    cache_root.mkdir(parents=True)
+    cache_root.chmod(0o000)  # unreadable and untraversable
+
+    try:
+        # chapter_image() itself already degrades; the crash was downstream.
+        assert artwork_cache.chapter_image("Daft Punk", "Around the World").startswith(b"\xff\xd8")
+
+        artwork_cache._fallback_seen.clear()  # force the marker-file path
+        assert artwork_cache.used_fallback("Daft Punk", "Around the World") is False
+    finally:
+        cache_root.chmod(0o755)  # restore so tmp_path cleanup can remove it
+
+
 def test_concurrent_calls_generate_once(monkeypatch):
     """Two threads racing on one key must not both hit the network."""
     import threading

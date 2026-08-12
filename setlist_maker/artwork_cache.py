@@ -256,4 +256,15 @@ def used_fallback(
     compositing moved behind this cache.
     """
     key = cache_key(artist, title, coverart_url, size)
-    return key in _fallback_seen or _fallback_marker(key).exists()
+    if key in _fallback_seen:
+        return True
+    try:
+        return _fallback_marker(key).exists()
+    except OSError:
+        # Same PermissionError hazard _record_fallback() guards against:
+        # Path.exists() re-raises EACCES rather than swallowing it, so an
+        # unreadable cache dir would crash the caller (`chapters`) instead of
+        # degrading. Nothing in _fallback_seen and no readable marker means we
+        # cannot prove this key was a fallback, so report False -- the episode
+        # cover then re-checks for real source bytes before using the track.
+        return False

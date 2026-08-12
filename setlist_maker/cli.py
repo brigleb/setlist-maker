@@ -114,9 +114,11 @@ def cmd_identify(args: argparse.Namespace) -> None:
     # Editing an existing markdown tracklist
     if input_path.suffix.lower() == ".md" and input_path.is_file():
         print(f"Opening tracklist for editing: {input_path.name}")
-        with open(input_path) as f:
-            content = f.read()
-        tracklist = parse_markdown_tracklist(content)
+        # Same loader the chapters path uses: it parses this markdown for
+        # structure *and* picks up the JSON sidecar's coverart_url. Parsing the
+        # markdown alone would leave coverart_url None, so the editor would
+        # preview a differently-keyed composite than `chapters` embeds.
+        tracklist, _urls = _load_tracklist_with_artwork_urls(input_path)
         if not tracklist.tracks:
             print("Error: Could not parse tracklist from markdown file.")
             sys.exit(1)
@@ -303,13 +305,21 @@ def embed_chapters_for_tracklist(
             if episode_image is None and not used_fallback(
                 track.artist, track.title, track.coverart_url
             ):
-                # Same fetched art as this track's chapter image (a cache hit, no
-                # network), relabelled for the set as a whole.
-                episode_image = create_chapter_image(
-                    artwork_bytes=source_artwork(track.artist, track.title, track.coverart_url),
-                    artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
-                    title="Tracklist",
-                )
+                # Same fetched art as this track's chapter image (normally a
+                # cache hit, no network), relabelled for the set as a whole.
+                # Only accept it if real source bytes actually came back: a
+                # cached composite whose .src is gone (an older build, a
+                # disk-full window between the two writes, a pruned cache) can
+                # still report "had real art" while the re-fetch fails. Feeding
+                # that None to create_chapter_image() would yield a gradient
+                # *and* latch it, blocking every later track with real art.
+                src = source_artwork(track.artist, track.title, track.coverart_url)
+                if src:
+                    episode_image = create_chapter_image(
+                        artwork_bytes=src,
+                        artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
+                        title="Tracklist",
+                    )
 
         print(f"  Generated {len(chapter_images)} chapter image(s)")
 

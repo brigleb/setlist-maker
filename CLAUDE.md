@@ -99,9 +99,27 @@ CLI application with the following modules:
   re-running the waterfall. `chapter_image()` calls this internally to build the
   chapter composite; `embed_chapters_for_tracklist()` also calls it directly to build
   the episode cover from the same fetched art (still no network on a cache hit).
+- **used_fallback():** True if the composite for a key was drawn on the gradient
+  because no real artwork was found. Public API and load-bearing:
+  `embed_chapters_for_tracklist()` uses it to pick the episode cover from the first
+  track with *real* art rather than the first identified one. Only meaningful **after**
+  `chapter_image()` / `source_artwork()` has run for the same key — it reports what a
+  previous generation recorded, never fetches, and answers False for an unknown key.
+  The episode-cover path therefore still requires `source_artwork()` to hand back real
+  bytes before using a track (a cached `.jpg` whose `.src` is gone reports False here,
+  but its re-fetch can fail).
+- **`.fallback` marker files:** empty files beside the `.jpg`/`.src` in the cache dir,
+  one per fallback key. They carry `used_fallback()`'s answer **across processes** — the
+  editor generates the composites, and a later `chapters` run (a fresh process, cache
+  hits only) must still know not to pick a gradient as the episode cover. An in-memory
+  `_fallback_seen` set mirrors them so an unwritable/unreadable cache still answers
+  correctly for the current run.
 - **Cache key is a content hash** of (artist, title, coverart_url, size), so an edit
   regenerates structurally — there is no invalidation code path. Lives in
-  `$XDG_CACHE_HOME/setlist-maker/artwork` (else `~/.cache/...`).
+  `$XDG_CACHE_HOME/setlist-maker/artwork` (else `~/.cache/...`). Every loader that
+  feeds the editor or `chapters` must supply `coverart_url` (the JSON sidecar's, via
+  `_load_tracklist_with_artwork_urls()`) — parsing markdown alone leaves it `None` and
+  silently keys the preview differently from the embed.
 - Per-key locks — `RLock`, since `chapter_image()` calls `source_artwork()` for the
   *same* key while still holding its own lock — dedupe concurrent requests; a
   semaphore caps simultaneous network fetches at 4 (compositing is local PIL work and
@@ -126,8 +144,13 @@ CLI application with the following modules:
   helpers from `editor.py` so the TUI and web front ends never drift.
 - **Endpoints:** `GET /` (page), `GET /api/tracklist`, `POST /api/save`
   (writes `.md` + `.json` + corrections via `save_tracklist`), `GET /api/audio`
-  (HTTP Range streaming powering the in-browser scrubber), `POST /api/done`
-  (graceful shutdown → returns control to the CLI).
+  (HTTP Range streaming powering the in-browser scrubber), `GET /api/artwork?index=N`
+  (the JPEG chapter composite for one track, from `artwork_cache.chapter_image()` —
+  the exact bytes `chapters` will embed; served `Cache-Control: no-store` since the
+  page re-requests after a save. 404s on an unparseable or out-of-range `index`, and
+  on an unidentified track, which `chapters` skips too. Keyed by **saved** track
+  state, not the page's live fields, so the preview always reflects what would be
+  embedded), `POST /api/done` (graceful shutdown → returns control to the CLI).
 - **Pure helpers:** `tracklist_to_api()` and `apply_edits()` are socket-free and
   unit-tested directly. `apply_edits()` maps edits onto existing tracks by stable
   `index`; an edit with **no** `index` is a track inserted via the page's per-row
