@@ -465,3 +465,45 @@ def test_run_web_editor_opens_browser_and_returns(monkeypatch, sample_tracklist,
     )
 
     assert opened and opened[0].startswith("http://127.0.0.1:")
+
+
+@pytest.fixture
+def offline_artwork(monkeypatch, tmp_path):
+    """Isolate the artwork cache and keep it off the network."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: None,
+    )
+
+
+def test_artwork_endpoint_returns_jpeg(sample_tracklist, tmp_path, offline_artwork):
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(f"{base}/api/artwork?index=0") as r:
+            assert r.status == 200
+            assert r.headers["Content-Type"] == "image/jpeg"
+            body = r.read()
+    assert body.startswith(b"\xff\xd8")
+
+
+def test_artwork_endpoint_404s_for_unidentified(sample_tracklist, tmp_path, offline_artwork):
+    """Track 2 in the fixture is unidentified; chapters skips those, so does preview."""
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"{base}/api/artwork?index=2")
+    assert exc.value.code == 404
+
+
+@pytest.mark.parametrize("qs", ["index=99", "index=-1", "index=abc", ""])
+def test_artwork_endpoint_404s_for_bad_index(sample_tracklist, tmp_path, offline_artwork, qs):
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"{base}/api/artwork?{qs}")
+    assert exc.value.code == 404
+
+
+def test_artwork_endpoint_is_not_browser_cached(sample_tracklist, tmp_path, offline_artwork):
+    """no-store keeps an edited row from showing its pre-edit composite."""
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(f"{base}/api/artwork?index=0") as r:
+            assert "no-store" in r.headers.get("Cache-Control", "")
