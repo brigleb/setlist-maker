@@ -515,3 +515,7 @@ def test_page_lazy_loads_composite_artwork():
     assert "/api/artwork?index=" in html
     assert "IntersectionObserver" in html  # visible rows generate first
     assert "artwork-overlay" in html  # click-to-enlarge target
+    # The script looks the overlay up at top level, so the element must appear
+    # before it. Placed after </script>, getElementById returns null and the
+    # TypeError takes down the whole page -- which a substring check misses.
+    assert html.index('id="artwork-overlay"') < html.index("<script>")
