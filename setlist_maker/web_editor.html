@@ -124,6 +124,10 @@
   }
 
   function render() {
+    // Drop the previous generation's registrations first. A thumb that never
+    // scrolled into view is never unobserved by the callback, so without this
+    // every edit/reject/add leaks one stale registration per off-screen row.
+    artObserver.disconnect();
     const list = document.getElementById("list");
     list.innerHTML = "";
     tracks.forEach((t, i) => list.appendChild(rowEl(t, i)));
@@ -164,14 +168,17 @@
     const thumb = document.createElement("div");
     thumb.className = "thumb";
     thumb.style.background = GRADS[i % GRADS.length];
+    const hasIndex = t.index !== undefined && t.index !== null;
     if (unknown) {
       thumb.textContent = "?";
-    } else {
+    } else if (hasIndex) {
       // The gradient stays until the composite lands, so rows never jump.
       thumb.dataset.index = t.index;
       thumb.onclick = (e) => { e.stopPropagation(); showArtwork(t.index); };
       artObserver.observe(thumb);
     }
+    // else: an unsaved inserted row has no server index yet -- keep the
+    // gradient placeholder and skip the artwork request entirely.
     row.appendChild(thumb);
 
     const meta = document.createElement("div");

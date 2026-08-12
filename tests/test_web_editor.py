@@ -524,3 +524,11 @@ def test_page_lazy_loads_composite_artwork():
     # thumb never updates until a full page reload.
     assert '"&v=" + artVersion' in html
     assert "artVersion++" in html  # bumped on save so the next request is fresh
+    # Every render() rebuilds all rows; without disconnecting first, thumbs that
+    # never scrolled into view leak one stale IntersectionObserver registration
+    # per edit/reject/add on a detached element that will never be cleaned up.
+    assert "artObserver.disconnect()" in html
+    # An unsaved inserted row has no server index yet; observing/wiring it would
+    # fire a wasted /api/artwork?index=undefined request. 0 is a legitimate
+    # index, so the guard must check for undefined/null, not falsiness.
+    assert "t.index !== undefined && t.index !== null" in html
