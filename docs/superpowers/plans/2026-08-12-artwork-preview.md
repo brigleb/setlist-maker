@@ -186,7 +186,9 @@ git commit -m "feat(artwork-cache): add cache location and content-hash key"
 
 **Interfaces:**
 - Consumes: `cache_dir()`, `cache_key()` from Task 1; `fetch_artwork`, `create_chapter_image`, `CHAPTER_IMAGE_SIZE` from `setlist_maker.artwork`
-- Produces: `chapter_image(artist: str, title: str, coverart_url: str | None = None, size: int = CHAPTER_IMAGE_SIZE) -> bytes` — always returns JPEG bytes, never raises for a missing-artwork or unwritable-cache condition
+- Produces:
+  - `chapter_image(artist: str, title: str, coverart_url: str | None = None, size: int = CHAPTER_IMAGE_SIZE) -> bytes` — always returns JPEG bytes, never raises for a missing-artwork or unwritable-cache condition
+  - `used_fallback(artist: str, title: str, coverart_url: str | None = None, size: int = CHAPTER_IMAGE_SIZE) -> bool` — True when the composite for that key was drawn on the gradient because no source artwork was found. Only meaningful after `chapter_image()` has been called for the same key; Task 5 relies on it to keep the episode cover on the first track with *real* art.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -259,19 +261,63 @@ def test_corrupt_cache_file_is_regenerated(monkeypatch):
 
 
 def test_unwritable_cache_dir_still_returns_bytes(monkeypatch, tmp_path):
-    """A read-only cache must degrade to in-memory generation, not fail."""
+    """An unusable cache must degrade to in-memory generation, not fail.
+
+    The cache dir is pointed *inside a regular file*, so mkdir raises
+    NotADirectoryError for real -- no patching of pathlib internals.
+    """
     from setlist_maker import artwork_cache
 
     _fake_art(monkeypatch)
-    blocked = tmp_path / "blocked"
-    blocked.mkdir()
-    monkeypatch.setattr(artwork_cache, "cache_dir", lambda: blocked / "nope")
-    monkeypatch.setattr(
-        artwork_cache.Path, "mkdir", lambda *a, **k: (_ for _ in ()).throw(PermissionError())
-    )
+    not_a_dir = tmp_path / "regular-file"
+    not_a_dir.write_text("x")
+    monkeypatch.setattr(artwork_cache, "cache_dir", lambda: not_a_dir / "artwork")
 
     data = artwork_cache.chapter_image("Daft Punk", "Around the World")
     assert data.startswith(b"\xff\xd8")
+    assert not (not_a_dir / "artwork").exists()
+
+
+def test_used_fallback_is_true_when_no_artwork_found(monkeypatch):
+    from setlist_maker.artwork_cache import chapter_image, used_fallback
+
+    _fake_art(monkeypatch)  # fetch returns None -> gradient fallback
+    chapter_image("Daft Punk", "Around the World")
+    assert used_fallback("Daft Punk", "Around the World") is True
+
+
+def test_used_fallback_is_false_when_artwork_found(monkeypatch):
+    from PIL import Image
+
+    from setlist_maker.artwork_cache import chapter_image, used_fallback
+
+    import io
+
+    buf = io.BytesIO()
+    Image.new("RGB", (600, 600), (10, 120, 90)).save(buf, format="JPEG")
+    real_art = buf.getvalue()
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: real_art,
+    )
+
+    chapter_image("Daft Punk", "Around the World")
+    assert used_fallback("Daft Punk", "Around the World") is False
+
+
+def test_used_fallback_survives_a_fresh_process(monkeypatch):
+    """A cross-process cache hit must still know it was a fallback.
+
+    This is the case that matters: the editor generates, then `chapters`
+    runs later and must not pick a gradient as the episode cover.
+    """
+    from setlist_maker import artwork_cache
+
+    _fake_art(monkeypatch)
+    artwork_cache.chapter_image("Daft Punk", "Around the World")
+
+    artwork_cache._fallback_seen.clear()  # simulate a new process
+    assert artwork_cache.used_fallback("Daft Punk", "Around the World") is True
 
 
 def test_concurrent_calls_generate_once(monkeypatch):
@@ -326,6 +372,12 @@ _generation_slots = threading.Semaphore(_MAX_CONCURRENT_GENERATION)
 # One lock per cache key so two requests for the same track generate once.
 _key_locks: dict[str, threading.Lock] = {}
 _key_locks_guard = threading.Lock()
+
+# Keys whose composite was drawn on the gradient because no source artwork was
+# found. Mirrored to a marker file so a later process (the `chapters` run after
+# an editing session) still knows, and does not pick a gradient as the episode
+# cover. The in-process set also covers the case where the cache is unwritable.
+_fallback_seen: set[str] = set()
 ```
 
 Then append:
@@ -397,18 +449,56 @@ def chapter_image(
             )
 
         _write_cached(path, data)
+        _record_fallback(key, artwork_bytes is None)
         return data
+
+
+def _fallback_marker(key: str) -> Path:
+    return cache_dir() / f"{key}.fallback"
+
+
+def _record_fallback(key: str, is_fallback: bool) -> None:
+    """Persist whether this composite was drawn without real source artwork."""
+    marker = _fallback_marker(key)
+    if is_fallback:
+        _fallback_seen.add(key)
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch()
+        except OSError:
+            pass  # in-process set still answers for this run
+    else:
+        _fallback_seen.discard(key)
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def used_fallback(
+    artist: str,
+    title: str,
+    coverart_url: str | None = None,
+    size: int = CHAPTER_IMAGE_SIZE,
+) -> bool:
+    """True if this track's composite had no real artwork behind it.
+
+    Lets the episode cover keep skipping artless tracks the way it did before
+    compositing moved behind this cache.
+    """
+    key = cache_key(artist, title, coverart_url, size)
+    return key in _fallback_seen or _fallback_marker(key).exists()
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_artwork_cache.py -v`
-Expected: PASS (16 tests)
+Expected: PASS (19 tests)
 
 - [ ] **Step 5: Run the full suite and lint**
 
 Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
-Expected: 254 passed (238 + 16); "All checks passed!"
+Expected: 257 passed (238 + 19); "All checks passed!"
 
 - [ ] **Step 6: Update CLAUDE.md**
 
@@ -568,7 +658,7 @@ Expected: PASS (7 tests)
 - [ ] **Step 5: Run the full suite and lint**
 
 Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
-Expected: 261 passed (254 + 7); "All checks passed!"
+Expected: 264 passed (257 + 7); "All checks passed!"
 
 - [ ] **Step 6: Commit**
 
@@ -719,7 +809,7 @@ Confirm: thumbs fill in with lower-third composites (not raw covers), the uniden
 - [ ] **Step 8: Run the full suite and lint**
 
 Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
-Expected: 262 passed (261 + 1); "All checks passed!"
+Expected: 265 passed (264 + 1); "All checks passed!"
 
 - [ ] **Step 9: Commit**
 
@@ -777,13 +867,52 @@ def test_embed_chapters_reuses_cached_artwork(monkeypatch, tmp_path, sample_trac
 
     # three identified tracks in the fixture, each with a cached composite
     assert len(embedded["chapter_images"]) == 3
+    # no track had real artwork, so there is no episode cover (as before the cache)
+    assert embedded["episode_image"] is None
+
+
+def _jpeg(color=(10, 120, 90)):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (600, 600), color).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def test_episode_cover_skips_a_track_with_no_artwork(monkeypatch, tmp_path, sample_tracklist):
+    """The opener having no findable art must not yield a gradient episode cover.
+
+    Pins the pre-cache behavior: the episode cover comes from the first track
+    with *real* artwork, not merely the first identified one.
+    """
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    def art_for_second_track_only(artist, title, coverart_url=None, size=600):
+        return _jpeg() if artist == "The Chemical Brothers" else None
+
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork", art_for_second_track_only
+    )
+
+    embedded = {}
+    monkeypatch.setattr(
+        "setlist_maker.cli.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
+    )
+
+    embed_chapters_for_tracklist(sample_tracklist, tmp_path / "set.mp3", fetch_art=True)
+
     assert embedded["episode_image"] is not None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `uv run pytest tests/test_cli.py -k reuses_cached -v`
-Expected: FAIL — `AssertionError: embed must reuse the cache, not re-fetch`
+Expected: FAIL — `AssertionError: embed must reuse the cache, not re-fetch` (and the episode-cover test fails on the gradient fall-through)
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -796,7 +925,7 @@ from setlist_maker.artwork import create_chapter_image, fetch_artwork
 to:
 
 ```python
-from setlist_maker.artwork_cache import chapter_image
+from setlist_maker.artwork_cache import chapter_image, used_fallback
 ```
 
 In `embed_chapters_for_tracklist`, replace the body of the per-track loop (the `artwork_bytes = fetch_artwork(...)` block through `chapter_images[i] = chapter_img`, plus the episode-cover block) with:
@@ -810,8 +939,12 @@ In `embed_chapters_for_tracklist`, replace the body of the per-track loop (the `
                 coverart_url=track.coverart_url,
             )
 
-            # Episode cover: first identified track's art, relabelled for the set.
-            if episode_image is None:
+            # Episode cover: first track with *real* artwork, relabelled for the
+            # set. used_fallback() preserves the pre-cache behavior of skipping
+            # tracks whose composite is just the gradient.
+            if episode_image is None and not used_fallback(
+                track.artist, track.title, track.coverart_url
+            ):
                 episode_image = chapter_image(
                     artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
                     title="Tracklist",
@@ -829,7 +962,7 @@ Expected: PASS
 - [ ] **Step 5: Run the full suite and lint**
 
 Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check .`
-Expected: 263 passed (262 + 1); "All checks passed!"
+Expected: 267 passed (265 + 2); "All checks passed!"
 
 Note: no existing test patches `setlist_maker.cli.fetch_artwork`, so moving the
 call into `artwork_cache` breaks nothing. `embed_chapters_for_tracklist` is only
