@@ -86,21 +86,26 @@ CLI application with the following modules:
   CHAP sub-frame sizes once an artwork APIC sub-frame exceeds 128 bytes and silently
   drop every chapter (#17). Guarded by an ffprobe round-trip regression test.
 - **fetch_artwork():** Waterfall lookup across Shazam CDN, iTunes, Deezer, MusicBrainz/Cover Art Archive
-- Chapter composites are produced through `artwork_cache.chapter_image()`, not by
-  pairing `fetch_artwork()` + `create_chapter_image()` directly — that shared cache is
-  what makes the web editor's preview byte-identical to what gets embedded.
 - **create_chapter_image():** Builds per-chapter artwork with an MTV-style lower-third overlay
 
 ### `setlist_maker/artwork_cache.py` - Chapter image cache
 - **chapter_image():** The single path from a track to its chapter composite —
-  `fetch_artwork()` + `create_chapter_image()`, cached on disk. Called by both the
+  `source_artwork()` + `create_chapter_image()`, cached on disk. Called by both the
   web editor's `/api/artwork` preview and `embed_chapters_for_tracklist()`, so the
   image previewed is byte-identical to the one embedded (#20).
+- **source_artwork():** Caches the raw `fetch_artwork()` result separately from the
+  composite (`.src` file vs `.jpg`), so a second composite of the same track — the
+  episode cover, relabelled for the set — reuses the fetched image instead of
+  re-running the waterfall. `chapter_image()` calls this internally to build the
+  chapter composite; `embed_chapters_for_tracklist()` also calls it directly to build
+  the episode cover from the same fetched art (still no network on a cache hit).
 - **Cache key is a content hash** of (artist, title, coverart_url, size), so an edit
   regenerates structurally — there is no invalidation code path. Lives in
   `$XDG_CACHE_HOME/setlist-maker/artwork` (else `~/.cache/...`).
-- Per-key locks dedupe concurrent requests; a semaphore caps simultaneous generation
-  at 4. An unwritable cache degrades to in-memory generation rather than failing.
+- Per-key locks — `RLock`, since `chapter_image()` calls `source_artwork()` for the
+  *same* key while still holding its own lock — dedupe concurrent requests; a
+  semaphore caps simultaneous generation at 4. An unwritable cache degrades to
+  in-memory generation rather than failing.
 
 ### `setlist_maker/editor.py` - Interactive TUI editor
 - **TracklistEditor:** Textual app providing spreadsheet-like interface

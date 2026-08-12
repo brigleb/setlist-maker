@@ -479,15 +479,80 @@ def test_episode_cover_skips_a_track_with_no_artwork(monkeypatch, tmp_path, samp
 
     Pins the pre-cache behavior: the episode cover comes from the first track
     with *real* artwork, not merely the first identified one.
+
+    Asserts on the episode cover's actual pixel content, not just non-None:
+    `chapter_image()` always returns bytes (a gradient fallback on a miss), so
+    a mere not-None check passes even when the episode cover silently degrades
+    to the gradient -- as happened when the episode cover was (re)built from a
+    second, differently-keyed cache lookup instead of reusing this track's own
+    fetched art. The gradient fallback's top-left pixel is ~(30, 30, 40); the
+    art color here is chosen to be unmistakably different.
     """
+    import io
+
+    from PIL import Image
+
     from setlist_maker.cli import embed_chapters_for_tracklist
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
+    art_color = (200, 20, 21)
+
     def art_for_second_track_only(artist, title, coverart_url=None, size=600):
-        return _jpeg() if artist == "The Chemical Brothers" else None
+        return _jpeg(art_color) if artist == "The Chemical Brothers" else None
 
     monkeypatch.setattr("setlist_maker.artwork_cache.fetch_artwork", art_for_second_track_only)
+
+    embedded = {}
+    monkeypatch.setattr(
+        "setlist_maker.cli.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
+    )
+
+    embed_chapters_for_tracklist(sample_tracklist, tmp_path / "set.mp3", fetch_art=True)
+
+    assert embedded["episode_image"] is not None
+    cover = Image.open(io.BytesIO(embedded["episode_image"])).convert("RGB")
+    pixel = cover.getpixel((0, 0))
+    tolerance = 20  # allow for JPEG compression drift
+    assert all(abs(pixel[c] - art_color[c]) <= tolerance for c in range(3)), (
+        f"episode cover top-left pixel {pixel} does not match the fetched art color "
+        f"{art_color} (looks like the gradient fallback instead)"
+    )
+
+
+def test_episode_cover_reuses_cached_source_art(monkeypatch, tmp_path, sample_tracklist):
+    """The episode cover's second composite must not re-fetch.
+
+    Backs the README claim that a `--chapters` run right after editing needs
+    no network: the editor's preview caches this track's raw source art (not
+    just its composite), and the episode cover -- a second composite of the
+    same track's art, relabelled for the set -- must reuse that cached source
+    rather than calling fetch_artwork() again. `test_embed_chapters_reuses_
+    cached_artwork` doesn't cover this: with no track having real artwork
+    there, the episode-cover branch is never entered.
+    """
+    from setlist_maker import artwork_cache
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    real_art = _jpeg((200, 20, 21))
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: real_art,
+    )
+
+    # Warm the cache the way the editor's preview would -- this also caches
+    # the raw source art (the .src file), not just the composite.
+    for t in sample_tracklist.tracks:
+        if not t.is_unidentified:
+            artwork_cache.chapter_image(t.artist, t.title, t.coverart_url)
+
+    def explode(*a, **k):
+        raise AssertionError("episode cover must reuse cached source art, not re-fetch")
+
+    monkeypatch.setattr("setlist_maker.artwork_cache.fetch_artwork", explode)
 
     embedded = {}
     monkeypatch.setattr(

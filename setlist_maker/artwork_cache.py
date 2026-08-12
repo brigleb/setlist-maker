@@ -29,7 +29,11 @@ _MAX_CONCURRENT_GENERATION = 4
 _generation_slots = threading.Semaphore(_MAX_CONCURRENT_GENERATION)
 
 # One lock per cache key so two requests for the same track generate once.
-_key_locks: dict[str, threading.Lock] = {}
+# RLock, not Lock: chapter_image() calls source_artwork() for the *same* key
+# while still holding this lock (both derive their cache key from the same
+# (artist, title, coverart_url, size)), so the same thread must be able to
+# re-enter without deadlocking itself.
+_key_locks: dict[str, threading.RLock] = {}
 _key_locks_guard = threading.Lock()
 
 # Keys whose composite was drawn on the gradient because no source artwork was
@@ -61,10 +65,10 @@ def cache_key(artist: str, title: str, coverart_url: str | None, size: int) -> s
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _lock_for(key: str) -> threading.Lock:
+def _lock_for(key: str) -> threading.RLock:
     """Return the (created-on-demand) lock guarding one cache key."""
     with _key_locks_guard:
-        return _key_locks.setdefault(key, threading.Lock())
+        return _key_locks.setdefault(key, threading.RLock())
 
 
 def _read_cached(path: Path) -> bytes | None:
@@ -93,6 +97,61 @@ def _write_cached(path: Path, data: bytes) -> None:
         logger.debug("Artwork cache write skipped for %s: %s", path, e)
 
 
+def _read_cached_source(path: Path) -> bytes | None:
+    """Return cached raw artwork bytes, or None if absent/unreadable/empty.
+
+    Unlike composites, source art fetched from the network isn't necessarily
+    JPEG (Shazam/iTunes/Deezer/MusicBrainz may hand back PNG or WebP), so no
+    format validation is applied here -- only a zero-length file (the mark of
+    an interrupted write) is treated as a miss.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    return data if data else None
+
+
+def source_artwork(
+    artist: str,
+    title: str,
+    coverart_url: str | None = None,
+    size: int = CHAPTER_IMAGE_SIZE,
+) -> bytes | None:
+    """Return the raw fetched cover art for a track, or None if none was found.
+
+    Cached separately from the composite so a second composite of the same
+    track (the episode cover, which carries different text) reuses the
+    fetched image instead of running the waterfall again.
+    """
+    key = cache_key(artist, title, coverart_url, size)
+    path = cache_dir() / f"{key}.src"
+
+    cached = _read_cached_source(path)
+    if cached is not None:
+        return cached
+
+    with _lock_for(key):
+        # Another thread may have fetched this while we waited for the lock.
+        cached = _read_cached_source(path)
+        if cached is not None:
+            return cached
+
+        with _generation_slots:
+            artwork_bytes = fetch_artwork(
+                artist=artist, title=title, coverart_url=coverart_url, size=size
+            )
+
+        # Record fallback-ness BEFORE writing the source file, for the same
+        # fail-safe reason chapter_image() records before writing its
+        # composite: a crash after the write must not leave a hit that
+        # silently forgets whether real art was found.
+        _record_fallback(key, artwork_bytes is None)
+        if artwork_bytes is not None:
+            _write_cached(path, artwork_bytes)
+        return artwork_bytes
+
+
 def chapter_image(
     artist: str,
     title: str,
@@ -118,21 +177,14 @@ def chapter_image(
         if cached is not None:
             return cached
 
-        with _generation_slots:
-            artwork_bytes = fetch_artwork(
-                artist=artist, title=title, coverart_url=coverart_url, size=size
-            )
-            data = create_chapter_image(
-                artwork_bytes=artwork_bytes, artist=artist, title=title, size=size
-            )
+        # source_artwork() records fallback-ness itself (before it returns),
+        # so that fail-safe ordering is already satisfied by the time we get
+        # here -- this call must happen before the composite is written below.
+        artwork_bytes = source_artwork(artist, title, coverart_url, size)
+        data = create_chapter_image(
+            artwork_bytes=artwork_bytes, artist=artist, title=title, size=size
+        )
 
-        # Record fallback-ness BEFORE writing the image. If this crashed after
-        # the write instead, the .jpg would exist with no .fallback marker, and
-        # every later call would hit the cache and return before reaching this
-        # line -- used_fallback() would report False for a gradient forever.
-        # This order fails safe: a crash leaves no image, so the next call
-        # regenerates and re-records.
-        _record_fallback(key, artwork_bytes is None)
         _write_cached(path, data)
         return data
 

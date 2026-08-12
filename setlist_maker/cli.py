@@ -46,7 +46,8 @@ import sys
 from pathlib import Path
 
 from setlist_maker import __version__
-from setlist_maker.artwork_cache import chapter_image, used_fallback
+from setlist_maker.artwork import create_chapter_image
+from setlist_maker.artwork_cache import chapter_image, source_artwork, used_fallback
 from setlist_maker.audio import get_audio_file
 from setlist_maker.chapters import embed_chapters
 from setlist_maker.editor import (
@@ -302,10 +303,12 @@ def embed_chapters_for_tracklist(
             if episode_image is None and not used_fallback(
                 track.artist, track.title, track.coverart_url
             ):
-                episode_image = chapter_image(
+                # Same fetched art as this track's chapter image (a cache hit, no
+                # network), relabelled for the set as a whole.
+                episode_image = create_chapter_image(
+                    artwork_bytes=source_artwork(track.artist, track.title, track.coverart_url),
                     artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
                     title="Tracklist",
-                    coverart_url=track.coverart_url,
                 )
 
         print(f"  Generated {len(chapter_images)} chapter image(s)")
