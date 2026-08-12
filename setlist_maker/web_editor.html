@@ -23,6 +23,12 @@
   .row.rejected { opacity:.45; }
   .row.editing { background:#eef6ff; outline:2px solid var(--accent); outline-offset:-2px; }
   .thumb { width:42px; height:42px; border-radius:6px; flex:none; background-size:cover; background-position:center; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; }
+  .thumb { cursor:zoom-in; }
+  #artwork-overlay { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none;
+    align-items:center; justify-content:center; z-index:50; cursor:zoom-out; }
+  #artwork-overlay.open { display:flex; }
+  #artwork-overlay img { width:min(90vw,600px); height:auto; border-radius:10px;
+    box-shadow:0 12px 48px rgba(0,0,0,.5); }
   .meta { flex:1; min-width:0; cursor:text; }
   .artist { font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .title { color:var(--muted); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -123,6 +129,30 @@
     updateCounts();
   }
 
+  // Generate visible rows first: 60-track sets are network-bound on a miss.
+  const artObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      const el = e.target;
+      artObserver.unobserve(el);
+      const img = new Image();
+      // 404 = unidentified or out of range; keep the gradient placeholder.
+      img.onload = () => { el.style.backgroundImage = "url('" + img.src + "')"; };
+      img.src = "/api/artwork?index=" + el.dataset.index;
+    }
+  }, { rootMargin: "200px" });  // start just before the row scrolls into view
+
+  const overlay = document.getElementById("artwork-overlay");
+  const overlayImg = overlay.querySelector("img");
+  function showArtwork(index) {
+    overlayImg.src = "/api/artwork?index=" + index;
+    overlay.classList.add("open");
+  }
+  overlay.onclick = () => { overlay.classList.remove("open"); overlayImg.src = ""; };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlay.classList.contains("open")) overlay.click();
+  });
+
   function rowEl(t, i) {
     const unknown = !t.artist && !t.title;
     const row = document.createElement("div");
@@ -131,8 +161,14 @@
     const thumb = document.createElement("div");
     thumb.className = "thumb";
     thumb.style.background = GRADS[i % GRADS.length];
-    if (t.coverart_url) thumb.style.backgroundImage = "url('" + t.coverart_url + "')";
-    else if (unknown) thumb.textContent = "?";
+    if (unknown) {
+      thumb.textContent = "?";
+    } else {
+      // The gradient stays until the composite lands, so rows never jump.
+      thumb.dataset.index = t.index;
+      thumb.onclick = (e) => { e.stopPropagation(); showArtwork(t.index); };
+      artObserver.observe(thumb);
+    }
     row.appendChild(thumb);
 
     const meta = document.createElement("div");
@@ -264,7 +300,10 @@
       const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const res = await r.json();
       if (res.ok) {
-        if (hasNew) await load();  // refresh so inserted rows gain real indices (re-save won't duplicate)
+        // Always re-render: an edited artist/title changes the composite, and
+        // the thumb must re-request against the now-saved server state.
+        if (hasNew) await load();  // inserted rows also need real indices
+        else render();
         setDirty(false); toast("Saved");
       } else { toast("Save failed: " + (res.error || "")); }
     } catch (e) { toast("Save failed"); }
@@ -282,5 +321,6 @@
 
   load();
 </script>
+<div id="artwork-overlay"><img alt="Chapter artwork preview"></div>
 </body>
 </html>

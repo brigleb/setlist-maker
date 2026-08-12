@@ -507,3 +507,11 @@ def test_artwork_endpoint_is_not_browser_cached(sample_tracklist, tmp_path, offl
     with running_server(_ctx(sample_tracklist, tmp_path)) as base:
         with urllib.request.urlopen(f"{base}/api/artwork?index=0") as r:
             assert "no-store" in r.headers.get("Cache-Control", "")
+
+
+def test_page_lazy_loads_composite_artwork():
+    """The page requests the real composite per row and enlarges it on click."""
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    assert "/api/artwork?index=" in html
+    assert "IntersectionObserver" in html  # visible rows generate first
+    assert "artwork-overlay" in html  # click-to-enlarge target
