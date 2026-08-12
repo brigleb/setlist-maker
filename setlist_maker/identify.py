@@ -119,17 +119,31 @@ def _assign_cluster(
     return key
 
 
-def _smooth_sequence(seq: list[tuple[str, str] | None]) -> list[tuple[str, str] | None]:
-    """Flip an isolated single-sample outlier flanked by identical neighbors.
+def _smooth_sequence(
+    seq: list[tuple[str, str] | None],
+    confidences: list[float],
+    confidence_keep: float,
+) -> list[tuple[str, str] | None]:
+    """Flip an *unconfident* isolated single-sample outlier flanked by identical neighbors.
 
-    Turns A?A into AAA, removing both transient mis-detections (A B A) and lone
-    dropouts (A None A) that would otherwise fragment one long track.
+    Turns A?A into AAA, removing lone dropouts (A None A) and transient
+    mis-detections (A B A) that would otherwise fragment one long track. A
+    sample Shazam was at least `confidence_keep` sure of is left alone, so a
+    real short track sandwiched between two longer ones survives to be
+    adjudicated by the singleton filter instead of being erased here (#7).
+
+    The gate reads the *sample's* confidence, not its cluster's: a shaky blip
+    should still be absorbed even when that same track is confidently detected
+    elsewhere in the set.
     """
     smoothed = list(seq)
     for i in range(1, len(seq) - 1):
         left, mid, right = seq[i - 1], seq[i], seq[i + 1]
-        if left is not None and left == right and mid != left:
-            smoothed[i] = left
+        if left is None or left != right or mid == left:
+            continue
+        if mid is not None and confidences[i] >= confidence_keep:
+            continue
+        smoothed[i] = left
     return smoothed
 
 
@@ -142,7 +156,8 @@ def deduplicate_tracklist(
 
     1. Fuzzy-cluster matches so metadata drift (remix/feat/edit tags, typos)
        for one track collapses to a single identity.
-    2. Smooth isolated single-sample outliers (A B A / A None A -> A A A).
+    2. Smooth isolated *unconfident* single-sample outliers (A B A / A None A
+       -> A A A), leaving confident ones for step 3 to adjudicate.
     3. Drop singletons unless Shazam was confident (a real short track).
     4. Collapse consecutive identical matches, preserving unidentified gaps.
     """
@@ -155,11 +170,13 @@ def deduplicate_tracklist(
     cluster_meta: dict[tuple[str, str], dict] = {}
     timestamps: list[int] = []
     seq: list[tuple[str, str] | None] = []
+    confidences: list[float] = []
 
     for timestamp, track_info in raw_results:
         timestamps.append(timestamp)
         if not track_info:
             seq.append(None)
+            confidences.append(0.0)
             continue
 
         representative = _assign_cluster(
@@ -173,13 +190,15 @@ def deduplicate_tracklist(
         # Keep the highest-confidence metadata as the cluster's representative;
         # on ties the first-seen variant wins (usually the cleanest title).
         confidence = track_info.get("confidence") or 0
+        confidences.append(confidence)
         best = cluster_meta.get(representative)
         if best is None or confidence > (best.get("confidence") or 0):
             cluster_meta[representative] = track_info
 
-    # 2. Smooth transient outliers.
+    # 2. Smooth transient outliers, sharing the singleton filter's confidence
+    #    bar so the two steps cooperate rather than compete (#7).
     if config.smoothing:
-        seq = _smooth_sequence(seq)
+        seq = _smooth_sequence(seq, confidences, config.singleton_confidence_keep)
 
     # 3. Confidence-aware singleton removal.
     counts = Counter(rep for rep in seq if rep is not None)

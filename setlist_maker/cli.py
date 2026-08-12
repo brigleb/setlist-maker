@@ -429,7 +429,7 @@ identify options
       --title-threshold N       Title similarity 0-1 to merge matches (default: {d_title})
       --artist-threshold N      Artist similarity 0-1 to merge matches (default: {d_artist})
       --singleton-confidence N  Min confidence 0-1 to keep a 1-sample track (default: {d_single})
-      --no-smoothing            Don't smooth isolated single-sample outliers (A B A -> A)
+      --no-smoothing            Don't smooth unconfident single-sample outliers (A B A -> A)
 
 chapters options
       --audio FILE            MP3 path (auto-detected from the tracklist name if omitted)
@@ -579,12 +579,14 @@ Examples:
         default=SINGLETON_CONFIDENCE_KEEP,
         metavar="0.0-1.0",
         help="Min Shazam confidence (0-1) to keep a track seen in only one sample "
-        f"(default: {SINGLETON_CONFIDENCE_KEEP}); higher drops more one-off matches",
+        f"(default: {SINGLETON_CONFIDENCE_KEEP}); higher drops more one-off matches, "
+        "and also lets smoothing absorb more of them",
     )
     tuning_group.add_argument(
         "--no-smoothing",
         action="store_true",
-        help="Disable smoothing of isolated single-sample outliers (A B A -> A)",
+        help="Disable smoothing of isolated single-sample outliers (A B A -> A); "
+        "smoothing already spares outliers above --singleton-confidence",
     )
 
     # ─────────────────────────────────────────────────────────────────────────

@@ -251,6 +251,60 @@ class TestDeduplicateTracklist:
         assert len(deduped) == 1
         assert deduped[0][1]["title"] == "Song"
 
+    def test_confident_outlier_survives_smoothing(self):
+        """A confident one-sample track flanked by the same neighbor is not smoothed away.
+
+        Regression test for #7: smoothing used to flip every A B A, erasing real
+        short tracks before the confidence-aware singleton filter could keep them.
+        """
+        results = [
+            (0, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+            (30, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+            (60, {"artist": "Guest", "title": "Real Short Banger", "confidence": 0.98}),
+            (90, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+            (120, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+        ]
+
+        deduped = deduplicate_tracklist(results)
+
+        titles = [info["title"] for _, info in deduped if info]
+        assert titles == ["Long Track", "Real Short Banger", "Long Track"]
+
+    def test_low_confidence_outlier_is_still_smoothed(self):
+        """The same shape with an unconfident interloper is still absorbed (A B A -> A)."""
+        results = [
+            (0, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+            (30, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+            (60, {"artist": "Wrong", "title": "Misfire", "confidence": 0.2}),
+            (90, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+            (120, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+        ]
+
+        deduped = deduplicate_tracklist(results)
+
+        assert len(deduped) == 1
+        assert deduped[0][1]["title"] == "Long Track"
+
+    def test_smoothing_uses_the_sample_not_the_cluster_confidence(self):
+        """A weak blip is absorbed even when that track is confident elsewhere.
+
+        Otherwise one shaky sample would fragment a long track just because the
+        misfired-onto title happens to be played (confidently) later in the set.
+        """
+        results = [
+            (0, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+            (30, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+            (60, {"artist": "Guest", "title": "Later Track", "confidence": 0.1}),  # blip
+            (90, {"artist": "DJ", "title": "Long Track", "confidence": 0.9}),
+            (120, {"artist": "Guest", "title": "Later Track", "confidence": 0.95}),
+            (150, {"artist": "Guest", "title": "Later Track", "confidence": 0.95}),
+        ]
+
+        deduped = deduplicate_tracklist(results)
+
+        titles = [info["title"] for _, info in deduped if info]
+        assert titles == ["Long Track", "Later Track"]
+
     def test_confident_singleton_is_kept(self):
         """A lone match survives when Shazam was confident (a real short track)."""
         results = [
