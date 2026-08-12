@@ -696,6 +696,10 @@ def test_page_lazy_loads_composite_artwork():
     assert "/api/artwork?index=" in html
     assert "IntersectionObserver" in html  # visible rows generate first
     assert "artwork-overlay" in html  # click-to-enlarge target
+    # The script looks the overlay up at top level, so the element must appear
+    # before it. Placed after </script>, getElementById returns null and the
+    # TypeError takes down the whole page -- which a substring check misses.
+    assert html.index('id="artwork-overlay"') < html.index("<script>")
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -716,7 +720,11 @@ In `setlist_maker/web_editor.html`, add to the `<style>` block (next to the exis
     box-shadow:0 12px 48px rgba(0,0,0,.5); }
 ```
 
-Immediately before the closing `</body>` tag, add:
+Immediately **before the opening `<script>` tag** (the script block runs at
+parse time and looks this element up at top level, so the element must already
+exist in the DOM — placing it after `</script>` makes `getElementById` return
+`null` and the resulting TypeError kills the entire script, rendering a blank
+editor):
 
 ```html
 <div id="artwork-overlay"><img alt="Chapter artwork preview"></div>
@@ -1023,7 +1031,7 @@ git commit -m "feat(chapters): embed the same composite the editor previewed"
 **Two deviations from the spec, both deliberate:**
 
 1. The spec put the semaphore in the endpoint; the plan puts it in `artwork_cache`. That is what actually delivers the spec's stated property ("cache hits are served without taking the semaphore"), and the chapters path inherits the cap for free.
-2. The spec described a cache-busting query param for post-save refresh. The plan uses `Cache-Control: no-store` plus a re-render instead — same guarantee, no URL bookkeeping, and it is directly asserted by a test.
+2. ~~The spec described a cache-busting query param for post-save refresh. The plan uses `Cache-Control: no-store` plus a re-render instead — same guarantee, no URL bookkeeping.~~ **Retracted during Task 4 browser verification: this was wrong.** `no-store` governs the HTTP cache, but Chrome still reuses an already-decoded image for an identical URL within the same document, so after edit-and-save the thumbnail kept showing the pre-edit composite until a full reload. The spec's cache-busting param was correct and is restored: the page keeps an `artVersion` counter, bumps it on every successful save, and appends `&v=<artVersion>` to the artwork URL. The server ignores the extra param (only `index` is read), so no endpoint change is needed.
 
 **Client-side concurrency cap:** the spec called for 4 in flight. The plan relies on `IntersectionObserver` with a 200px `rootMargin`, which bounds in-flight requests to roughly a viewport's worth of rows, and the server-side semaphore is the real backstop. No separate client-side queue is built — YAGNI; add one only if a fast scroll proves it necessary.
 
