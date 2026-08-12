@@ -61,7 +61,12 @@ CLI application with the following modules:
 - **deduplicate_tracklist():** Fuzzy-clusters matches (normalizes remix/feat/edit tags so metadata
   drift for one track collapses), smooths isolated single-sample outliers (A B A / A None A → A),
   drops low-confidence singletons while keeping confident short tracks, then collapses consecutive
-  identical tracks. Tunables live in `DedupConfig` (defaults: `SIMILARITY_THRESHOLD`,
+  identical tracks. Smoothing is **confidence-aware**: it only absorbs an outlier whose own sample
+  confidence is below `singleton_confidence_keep`, so a real short track sandwiched between two
+  longer ones survives for the singleton filter to adjudicate instead of being erased first (#7).
+  A `None` dropout has no confidence to defend it and is always smoothed. The gate reads the
+  *sample's* confidence, not its cluster's, so a shaky blip is still absorbed when the same track
+  is confidently detected elsewhere. Tunables live in `DedupConfig` (defaults: `SIMILARITY_THRESHOLD`,
   `ARTIST_SIMILARITY_THRESHOLD`, `SINGLETON_CONFIDENCE_KEEP`) and are exposed as `identify`
   flags: `--title-threshold`, `--artist-threshold`, `--singleton-confidence`, `--no-smoothing`
 - **results_to_tracklist():** Applies corrections and builds a `Tracklist`

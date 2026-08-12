@@ -164,7 +164,7 @@
 
 <figure>
   <div class="diagram-scroll">
-  <svg viewBox="0 0 960 1330" role="img" aria-label="Flow diagram of the Setlist Maker pipeline: entry, reuse check, audio load with truncation guard, 30-second slicing, per-sample Shazam recognition loop with progress saving, deduplication (issue 7), corrections, Claude summary, markdown and JSON outputs, the terminal and web editors (issues 10 and 16) which feed corrections back, and the optional chapters chain.">
+  <svg viewBox="0 0 960 1330" role="img" aria-label="Flow diagram of the Setlist Maker pipeline: entry, reuse check, audio load with truncation guard, 30-second slicing, per-sample Shazam recognition loop with progress saving, deduplication, corrections, Claude summary, markdown and JSON outputs, the terminal and web editors (issues 10 and 16) which feed corrections back, and the optional chapters chain.">
     <defs>
       <marker id="arrI" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0,0 L10,5 L0,10 z" class="fI"></path>
@@ -235,17 +235,15 @@
     <rect class="box" x="94" y="584" width="330" height="112" rx="7"></rect>
     <text class="bt" x="110" y="610">deduplicate_tracklist()</text>
     <text class="bd" x="110" y="632">fuzzy-cluster titles/artists (remix · feat drift)</text>
-    <text class="bd" x="110" y="652">smooth isolated outliers: A·B·A → A·A·A</text>
-    <rect class="ipill" x="346" y="640" width="30" height="17" rx="8.5"></rect>
-    <text class="itext" x="361" y="652" text-anchor="middle">#7</text>
+    <text class="bd" x="110" y="652">smooth unconfident outliers: A·B·A → A·A·A</text>
     <text class="bd" x="110" y="672">drop low-confidence singletons, keep confident</text>
     <text class="bd" x="110" y="686">short tracks · collapse consecutive repeats</text>
     <path class="flow" d="M259 696 V722" marker-end="url(#arrI)"></path>
-    <text class="note" x="500" y="608"><tspan class="iref">#7</tspan> The known bug: smoothing can erase a</text>
-    <text class="note" x="500" y="624">genuinely confident short track sandwiched</text>
-    <text class="note" x="500" y="640">A·B·A. One-minute cut missing? Rerun with</text>
-    <text class="note" x="500" y="656"><tspan class="aref">--no-smoothing</tspan>. Also tunable: --title-threshold,</text>
-    <text class="note" x="500" y="672">--artist-threshold, --singleton-confidence.</text>
+    <text class="note" x="500" y="608">Smoothing only absorbs an outlier Shazam</text>
+    <text class="note" x="500" y="624">wasn't sure of, so a real short track sandwiched</text>
+    <text class="note" x="500" y="640">A·B·A survives to step 3. Both steps share the</text>
+    <text class="note" x="500" y="656"><tspan class="aref">--singleton-confidence</tspan> bar. Also tunable:</text>
+    <text class="note" x="500" y="672">--title-threshold, --artist-threshold, --no-smoothing.</text>
 
     <!-- ══ Corrections ══ -->
     <rect class="box" x="94" y="726" width="330" height="58" rx="7"></rect>
@@ -314,13 +312,6 @@
 <h2>The open issues, mapped</h2>
 <ul class="issues">
   <li>
-    <span class="num">#7</span>
-    <span class="where">dedup · smoothing — the one most likely to bite</span>
-    <span class="what">A confident short track sandwiched between two longer ones (A·B·A) gets smoothed
-    away as an outlier. If a brief cut you know was played is missing, rerun with
-    <code>--no-smoothing</code> and compare.</span>
-  </li>
-  <li>
     <span class="num">#16</span>
     <span class="where">reopen path · parse_markdown_tracklist</span>
     <span class="what">A set description containing numbered track-format lines is misparsed when the
@@ -332,6 +323,14 @@
     <span class="where">tui editor · playback</span>
     <span class="what"><code>p</code> previews the selected track's 30-second window; there's no
     seek/scrub within it. The web editor's scrubber is the workaround.</span>
+  </li>
+  <li class="shipped">
+    <span class="num">#7</span>
+    <span class="where">dedup · smoothing — closed aug 2026</span>
+    <span class="what">Smoothing used to erase a confident short track sandwiched between two longer
+    ones (A·B·A). It's now confidence-aware: only an outlier below
+    <code>--singleton-confidence</code> gets absorbed, so short cuts survive without
+    <code>--no-smoothing</code> fragmenting the long tracks.</span>
   </li>
   <li class="shipped">
     <span class="num">#13</span>
