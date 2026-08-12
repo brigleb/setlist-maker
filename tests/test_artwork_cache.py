@@ -5,8 +5,21 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_cache(monkeypatch, tmp_path):
-    """Redirect the cache into tmp_path so tests never touch the real ~/.cache."""
+    """Redirect the cache into tmp_path so tests never touch the real ~/.cache.
+
+    Also clears module-level state (``_fallback_seen``, ``_key_locks``) before
+    and after every test. Other test files (Tasks 3 and 5) reuse the same
+    ("Daft Punk", "Around the World") key; without this, state leaked from one
+    test would cause order-dependent failures in another file.
+    """
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    from setlist_maker import artwork_cache
+
+    artwork_cache._fallback_seen.clear()
+    artwork_cache._key_locks.clear()
+    yield
+    artwork_cache._fallback_seen.clear()
+    artwork_cache._key_locks.clear()
 
 
 def test_cache_dir_honors_xdg(tmp_path):
@@ -120,6 +133,27 @@ def test_corrupt_cache_file_is_regenerated(monkeypatch):
     data = chapter_image("Daft Punk", "Around the World")
     assert data.startswith(b"\xff\xd8")
     assert len(calls) == 2  # regenerated rather than served corrupt
+
+
+def test_truncated_cache_file_is_regenerated(monkeypatch):
+    """A file with an intact JPEG header but a lost tail must not be served.
+
+    Distinct from test_corrupt_cache_file_is_regenerated: that test's garbage
+    fails the SOI-prefix check and never exercises the EOI-suffix check. This
+    one has a valid SOI prefix but no EOI suffix, so it only fails validation
+    via the `endswith(b"\xff\xd9")` half of _read_cached.
+    """
+    from setlist_maker.artwork_cache import cache_dir, cache_key, chapter_image
+
+    calls = _fake_art(monkeypatch)
+    chapter_image("Daft Punk", "Around the World")
+
+    key = cache_key("Daft Punk", "Around the World", None, 600)
+    (cache_dir() / f"{key}.jpg").write_bytes(b"\xff\xd8" + b"x" * 100)  # no EOI marker
+
+    data = chapter_image("Daft Punk", "Around the World")
+    assert data.startswith(b"\xff\xd8")
+    assert len(calls) == 2  # regenerated rather than served the truncated file
 
 
 def test_unwritable_cache_dir_still_returns_bytes(monkeypatch, tmp_path):
