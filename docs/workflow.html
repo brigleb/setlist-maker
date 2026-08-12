@@ -238,12 +238,15 @@
     <text class="bd" x="110" y="652">smooth unconfident outliers: A·B·A → A·A·A</text>
     <text class="bd" x="110" y="672">drop low-confidence singletons, keep confident</text>
     <text class="bd" x="110" y="686">short tracks · collapse consecutive repeats</text>
+    <rect class="ipill" x="372" y="674" width="38" height="17" rx="8.5"></rect>
+    <text class="itext" x="391" y="686" text-anchor="middle">#24</text>
     <path class="flow" d="M259 696 V722" marker-end="url(#arrI)"></path>
     <text class="note" x="500" y="608">Smoothing only absorbs an outlier Shazam</text>
     <text class="note" x="500" y="624">wasn't sure of, so a real short track sandwiched</text>
     <text class="note" x="500" y="640">A·B·A survives to step 3. Both steps share the</text>
     <text class="note" x="500" y="656"><tspan class="aref">--singleton-confidence</tspan> bar. Also tunable:</text>
     <text class="note" x="500" y="672">--title-threshold, --artist-threshold, --no-smoothing.</text>
+    <text class="note" x="500" y="696"><tspan class="iref">#24</tspan> Is 0.6 the right shared bar? Open question.</text>
 
     <!-- ══ Corrections ══ -->
     <rect class="box" x="94" y="726" width="330" height="58" rx="7"></rect>
@@ -324,6 +327,15 @@
     <span class="what"><code>p</code> previews the selected track's 30-second window; there's no
     seek/scrub within it. The web editor's scrubber is the workaround.</span>
   </li>
+  <li>
+    <span class="num">#24</span>
+    <span class="where">dedup · the shared confidence bar</span>
+    <span class="what">Now that smoothing and the singleton filter both gate on
+    <code>--singleton-confidence</code>, one number decides both. The 0.6 default was tuned for the
+    filter alone and sits below what <code>estimate_confidence()</code> gives a clean single match
+    (~0.667), so <code>A·B·A</code> smoothing rarely fires on real sets. Open question, not a
+    regression — wants data from real runs before anyone picks a new number.</span>
+  </li>
   <li class="shipped">
     <span class="num">#7</span>
     <span class="where">dedup · smoothing — closed aug 2026</span>
@@ -366,6 +378,7 @@ setlist-maker set.md -w            <span class="c"># reopen an existing tracklis
 setlist-maker set.mp3 --chapters   <span class="c"># full run, then embed ID3 chapters</span>
 setlist-maker chapters set.md --audio set.mp3</pre>
 
-<footer>Drawn from the code on <code>main</code> (4fb2f01) and the open GitHub issues as of
-August 11, 2026. Module map lives in CLAUDE.md; this page adds the flow between the modules.</footer>
+<footer>Drawn from the code on <code>main</code> (8335435) and the open GitHub issues as of
+August 12, 2026. Module map lives in CLAUDE.md; this page adds the flow between the modules.
+The web-editor issues filed that morning (#19–#22) aren't mapped here yet.</footer>
 </main>
