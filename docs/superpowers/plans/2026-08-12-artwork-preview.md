@@ -448,8 +448,14 @@ def chapter_image(
                 artwork_bytes=artwork_bytes, artist=artist, title=title, size=size
             )
 
-        _write_cached(path, data)
+        # Record fallback-ness BEFORE writing the image. If this crashed after
+        # the write instead, the .jpg would exist with no .fallback marker, and
+        # every later call would hit the cache and return before reaching this
+        # line -- used_fallback() would report False for a gradient forever.
+        # This order fails safe: a crash leaves no image, so the next call
+        # regenerates and re-records.
         _record_fallback(key, artwork_bytes is None)
+        _write_cached(path, data)
         return data
 
 
