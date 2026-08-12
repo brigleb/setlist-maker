@@ -137,7 +137,10 @@ def embed_chapters(
         )
     )
 
-    audio.save()
+    # Save as ID3v2.3, not mutagen's default v2.4: players (Apple Podcasts,
+    # ffmpeg) misparse v2.4 syncsafe CHAP sub-frame sizes once artwork pushes
+    # a sub-frame past 128 bytes, discarding all chapters (issue #17).
+    audio.save(v2_version=3)
     return audio_path
 
 

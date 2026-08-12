@@ -1,6 +1,9 @@
 """Tests for setlist_maker.chapters module."""
 
 import io
+import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -235,6 +238,86 @@ class TestEmbedChapters:
             key=lambda c: c.start_time,
         )
         assert chaps[-1].end_time == 600_000
+
+
+class TestPlayerCompatibility:
+    """
+    Regression tests for issue #17: chapters written as ID3v2.4 are invisible
+    to real players (Apple Podcasts, ffprobe) once an artwork APIC sub-frame
+    exceeds 128 bytes, because v2.4 syncsafe sub-frame sizes are widely
+    misparsed as plain integers. The tag must be saved as ID3v2.3.
+    """
+
+    def test_tag_is_id3v23_on_disk(self, temp_mp3, sample_tracks):
+        """The raw tag header must declare version 2.3."""
+        embed_chapters(temp_mp3, sample_tracks, chapter_images={0: _make_test_jpeg()})
+
+        header = temp_mp3.read_bytes()[:5]
+        assert header[:3] == b"ID3"
+        assert header[3] == 3, f"tag is ID3v2.{header[3]}, players need v2.3"
+
+    @pytest.mark.skipif(shutil.which("ffprobe") is None, reason="ffprobe not installed")
+    def test_ffprobe_reads_chapters_with_artwork(self, temp_mp3, sample_tracks):
+        """
+        Round-trip through an independent parser with artwork embedded.
+
+        The artwork sub-frame must exceed 128 bytes — below that, v2.3 and
+        v2.4 size encodings coincide and the bug cannot fire.
+        """
+        image = _make_test_jpeg(200)
+        assert len(image) >= 128
+
+        embed_chapters(
+            temp_mp3,
+            sample_tracks,
+            chapter_images={i: image for i in range(len(sample_tracks))},
+            episode_image=image,
+        )
+
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-loglevel",
+                "error",
+                "-print_format",
+                "json",
+                "-show_chapters",
+                str(temp_mp3),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        chapters = json.loads(result.stdout)["chapters"]
+        assert len(chapters) == len(sample_tracks)
+
+        # CHAP frame order in the file is arbitrary; players order by start time
+        chapters.sort(key=lambda c: int(c["start"]))
+        assert [c["tags"]["title"] for c in chapters] == [
+            "Daft Punk - Around the World",
+            "The Chemical Brothers - Block Rockin' Beats",
+            "Fatboy Slim - Praise You",
+        ]
+        assert [int(c["start"]) for c in chapters] == [0, 90_000, 210_000]
+
+    def test_reembedding_reclaims_tag_space(self, temp_mp3, sample_tracks):
+        """
+        Re-embedding must not leave the old, larger tag as dead bytes.
+
+        Guards the aftercare path for already-published episodes, whose tags
+        carried tens of MB of unreachable residue from repeated embeds.
+        """
+        # Payloads must dwarf mutagen's keep-padding threshold (10 KiB + 1%)
+        # or the freed space is legitimately retained and nothing shrinks.
+        big_image = bytes(range(256)) * 800  # ~200 KB, the real artwork cap
+        fat_images = {i: big_image for i in range(len(sample_tracks))}
+        embed_chapters(temp_mp3, sample_tracks, chapter_images=fat_images)
+        fat_size = temp_mp3.stat().st_size
+
+        embed_chapters(temp_mp3, sample_tracks)
+        slim_size = temp_mp3.stat().st_size
+
+        assert slim_size < fat_size - 500_000
 
 
 class TestRemoveExistingChapters:

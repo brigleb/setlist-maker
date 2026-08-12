@@ -76,7 +76,10 @@ CLI application with the following modules:
   rendered by `to_markdown()`, and recovered by `parse_markdown_tracklist()` for editor round-trips.
 
 ### `setlist_maker/chapters.py` + `setlist_maker/artwork.py` - Chapter markers & artwork
-- **embed_chapters():** Writes ID3v2 CHAP/CTOC frames into an MP3 for podcast players
+- **embed_chapters():** Writes ID3v2 CHAP/CTOC frames into an MP3 for podcast players.
+  Saves as **ID3v2.3**, never mutagen's default v2.4 — players misparse v2.4 syncsafe
+  CHAP sub-frame sizes once an artwork APIC sub-frame exceeds 128 bytes and silently
+  drop every chapter (#17). Guarded by an ffprobe round-trip regression test.
 - **fetch_artwork():** Waterfall lookup across Shazam CDN, iTunes, Deezer, MusicBrainz/Cover Art Archive
 - **create_chapter_image():** Builds per-chapter artwork with an MTV-style lower-third overlay
 
