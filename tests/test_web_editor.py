@@ -524,6 +524,14 @@ def test_page_lazy_loads_composite_artwork():
     # thumb never updates until a full page reload.
     assert '"&v=" + artVersion' in html
     assert "artVersion++" in html  # bumped on save so the next request is fresh
+    # The `background` shorthand resets every background-* longhand, including
+    # the background-size:cover that scales a 600px composite into a 42px thumb.
+    # Setting it inline (or after background-size in a rule) renders the image at
+    # natural size anchored top-left: a corner crop with the lower-third label --
+    # the entire point of the composite -- off-screen.
+    assert "thumb.style.background =" not in html
+    assert "pt.style.background =" not in html
+    assert "thumb.style.backgroundImage =" in html
     # Every render() rebuilds all rows; without disconnecting first, thumbs that
     # never scrolled into view leak one stale IntersectionObserver registration
     # per edit/reject/add on a detached element that will never be cleaned up.
