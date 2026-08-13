@@ -7,18 +7,15 @@ import pytest
 def isolated_cache(monkeypatch, tmp_path):
     """Redirect the cache into tmp_path so tests never touch the real ~/.cache.
 
-    Also clears module-level state (``_fallback_seen``, ``_key_locks``) before
-    and after every test. Other test files (Tasks 3 and 5) reuse the same
-    ("Daft Punk", "Around the World") key; without this, state leaked from one
-    test would cause order-dependent failures in another file.
+    Also clears ``_key_locks`` before and after every test. Other test files
+    reuse the same ("Daft Punk", "Around the World") key; without this, state
+    leaked from one test could cause order-dependent failures in another file.
     """
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     from setlist_maker import artwork_cache
 
-    artwork_cache._fallback_seen.clear()
     artwork_cache._key_locks.clear()
     yield
-    artwork_cache._fallback_seen.clear()
     artwork_cache._key_locks.clear()
 
 
@@ -70,13 +67,28 @@ def test_cache_key_separator_is_unambiguous():
     assert cache_key("ab", "c", None, 600) != cache_key("a", "bc", None, 600)
 
 
-def _fake_art(monkeypatch, data=b"\xff\xd8fake-jpeg"):
-    """Patch the network fetch; create_chapter_image stays real (Pillow, offline)."""
+def _real_jpeg(color=(10, 120, 90)):
+    """A real decodable JPEG, for the paths that need source art to load."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (600, 600), color).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def _fake_art(monkeypatch, returns=None):
+    """Patch the network fetch; create_chapter_image stays real (Pillow, offline).
+
+    Returns the call log. ``returns=None`` (the default) simulates a lookup that
+    found nothing, which composites to the gradient fallback.
+    """
     calls = []
 
     def fake_fetch(artist, title, coverart_url=None, size=600):
         calls.append((artist, title, coverart_url))
-        return None  # -> gradient fallback composite, no network
+        return returns
 
     monkeypatch.setattr("setlist_maker.artwork_cache.fetch_artwork", fake_fetch)
     return calls
@@ -128,11 +140,15 @@ def test_corrupt_cache_file_is_regenerated(monkeypatch):
     chapter_image("Daft Punk", "Around the World")
 
     key = cache_key("Daft Punk", "Around the World", None, 600)
-    (cache_dir() / f"{key}.jpg").write_bytes(b"truncated garbage")
+    path = cache_dir() / f"{key}.jpg"
+    path.write_bytes(b"truncated garbage")
 
     data = chapter_image("Daft Punk", "Around the World")
-    assert data.startswith(b"\xff\xd8")
-    assert len(calls) == 2  # regenerated rather than served corrupt
+    assert data.startswith(b"\xff\xd8")  # regenerated rather than served corrupt
+    assert path.read_bytes() == data  # and the corrupt file was replaced
+    # No re-fetch: this key's empty lookup is already cached, so regenerating
+    # the composite costs nothing on the network.
+    assert len(calls) == 1
 
 
 def test_truncated_cache_file_is_regenerated(monkeypatch):
@@ -149,11 +165,13 @@ def test_truncated_cache_file_is_regenerated(monkeypatch):
     chapter_image("Daft Punk", "Around the World")
 
     key = cache_key("Daft Punk", "Around the World", None, 600)
-    (cache_dir() / f"{key}.jpg").write_bytes(b"\xff\xd8" + b"x" * 100)  # no EOI marker
+    path = cache_dir() / f"{key}.jpg"
+    path.write_bytes(b"\xff\xd8" + b"x" * 100)  # valid SOI, no EOI marker
 
     data = chapter_image("Daft Punk", "Around the World")
-    assert data.startswith(b"\xff\xd8")
-    assert len(calls) == 2  # regenerated rather than served the truncated file
+    assert data.endswith(b"\xff\xd9")  # regenerated rather than served truncated
+    assert path.read_bytes() == data  # and the truncated file was replaced
+    assert len(calls) == 1  # empty lookup already cached; no re-fetch needed
 
 
 def test_unwritable_cache_dir_still_returns_bytes(monkeypatch, tmp_path):
@@ -174,142 +192,110 @@ def test_unwritable_cache_dir_still_returns_bytes(monkeypatch, tmp_path):
     assert not (not_a_dir / "artwork").exists()
 
 
-def test_used_fallback_is_true_when_no_artwork_found(monkeypatch):
-    from setlist_maker.artwork_cache import chapter_image, used_fallback
+def test_source_artwork_caches_the_bytes_it_found(monkeypatch):
+    from setlist_maker.artwork_cache import cache_dir, cache_key, source_artwork
 
-    _fake_art(monkeypatch)  # fetch returns None -> gradient fallback
-    chapter_image("Daft Punk", "Around the World")
-    assert used_fallback("Daft Punk", "Around the World") is True
+    real_art = _real_jpeg()
+    calls = _fake_art(monkeypatch, returns=real_art)
 
+    assert source_artwork("Daft Punk", "Around the World") == real_art
+    assert source_artwork("Daft Punk", "Around the World") == real_art
+    assert len(calls) == 1  # second call served from .src
 
-def test_used_fallback_is_false_when_artwork_found(monkeypatch):
-    import io
-
-    from PIL import Image
-
-    from setlist_maker.artwork_cache import chapter_image, used_fallback
-
-    buf = io.BytesIO()
-    Image.new("RGB", (600, 600), (10, 120, 90)).save(buf, format="JPEG")
-    real_art = buf.getvalue()
-    monkeypatch.setattr(
-        "setlist_maker.artwork_cache.fetch_artwork",
-        lambda artist, title, coverart_url=None, size=600: real_art,
-    )
-
-    chapter_image("Daft Punk", "Around the World")
-    assert used_fallback("Daft Punk", "Around the World") is False
-
-
-def test_used_fallback_survives_a_fresh_process(monkeypatch):
-    """A cross-process cache hit must still know it was a fallback.
-
-    This is the case that matters: the editor generates, then `chapters`
-    runs later and must not pick a gradient as the episode cover.
-    """
-    from setlist_maker import artwork_cache
-
-    _fake_art(monkeypatch)
-    artwork_cache.chapter_image("Daft Punk", "Around the World")
-
-    artwork_cache._fallback_seen.clear()  # simulate a new process
-    assert artwork_cache.used_fallback("Daft Punk", "Around the World") is True
-
-
-def test_missing_src_after_cached_composite_does_not_poison_used_fallback(monkeypatch):
-    """A cached composite with no .src must not be marked as fallback.
-
-    Regression: a .jpg can exist without its .src (an older build, a pruned
-    .src, or an unwritable cache when it was first generated). If the episode
-    cover then calls source_artwork() for that key and the re-fetch fails
-    (rate limit, network blip, artwork taken down), that failure must not be
-    recorded as this key's fallback status -- doing so would permanently and
-    silently swap that track's episode cover for the gradient, even though
-    its own cached chapter image still shows the real art.
-    """
-    import io
-
-    from PIL import Image
-
-    from setlist_maker.artwork_cache import (
-        cache_dir,
-        cache_key,
-        chapter_image,
-        source_artwork,
-        used_fallback,
-    )
-
-    buf = io.BytesIO()
-    Image.new("RGB", (600, 600), (10, 120, 90)).save(buf, format="JPEG")
-    real_art = buf.getvalue()
-    monkeypatch.setattr(
-        "setlist_maker.artwork_cache.fetch_artwork",
-        lambda artist, title, coverart_url=None, size=600: real_art,
-    )
-
-    chapter_image("Daft Punk", "Around the World")
-    assert used_fallback("Daft Punk", "Around the World") is False
-
-    # Simulate a .jpg cached without its .src.
     key = cache_key("Daft Punk", "Around the World", None, 600)
-    (cache_dir() / f"{key}.src").unlink()
-
-    # A later re-fetch attempt for the same key fails.
-    monkeypatch.setattr(
-        "setlist_maker.artwork_cache.fetch_artwork",
-        lambda artist, title, coverart_url=None, size=600: None,
-    )
-    assert source_artwork("Daft Punk", "Around the World") is None  # the fetch did fail
-
-    assert used_fallback("Daft Punk", "Around the World") is False
+    assert (cache_dir() / f"{key}.src").read_bytes() == real_art
     assert not (cache_dir() / f"{key}.fallback").exists()
 
 
-def test_unreadable_cache_dir_does_not_crash_fallback_recording(monkeypatch):
-    """An unreadable cache dir must degrade, not raise, when recording a fallback.
+def test_an_empty_lookup_is_cached_and_not_retried(monkeypatch):
+    """The marker is a negative-result cache: no art means don't look again.
 
-    Regression: _record_fallback()'s composite-existence check uses
-    Path.exists(), which only swallows OSError subtypes matching ENOENT /
-    ENOTDIR / EBADF / ELOOP -- it re-raises PermissionError (EACCES). Making
-    the cache directory unreadable must not crash source_artwork(), and
-    used_fallback() must still report correctly for the rest of the process.
+    Without it, a track with nothing findable re-runs the six-request waterfall
+    on every single run, which is the whole reason the marker exists.
     """
-    import os
+    from setlist_maker.artwork_cache import cache_dir, cache_key, source_artwork
 
-    from setlist_maker.artwork_cache import cache_dir, source_artwork, used_fallback
+    calls = _fake_art(monkeypatch)  # fetch returns None
 
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        pytest.skip("running as root: chmod restrictions have no effect")
+    assert source_artwork("Daft Punk", "Around the World") is None
+    assert source_artwork("Daft Punk", "Around the World") is None
+    assert len(calls) == 1  # the second call never re-fetched
 
-    monkeypatch.setattr(
-        "setlist_maker.artwork_cache.fetch_artwork",
-        lambda artist, title, coverart_url=None, size=600: None,
-    )
-
-    cache_root = cache_dir()
-    cache_root.mkdir(parents=True)
-    cache_root.chmod(0o000)  # unreadable and untraversable
-
-    try:
-        result = source_artwork("Daft Punk", "Around the World")
-        assert result is None
-        assert used_fallback("Daft Punk", "Around the World") is True
-    finally:
-        cache_root.chmod(0o755)  # restore so tmp_path cleanup can remove it
+    key = cache_key("Daft Punk", "Around the World", None, 600)
+    assert (cache_dir() / f"{key}.fallback").exists()
+    assert not (cache_dir() / f"{key}.src").exists()
 
 
-def test_unreadable_cache_dir_does_not_crash_used_fallback(monkeypatch):
-    """used_fallback() must degrade to False, not raise, on an unreadable cache.
+def test_the_empty_result_survives_a_fresh_process(monkeypatch):
+    """The marker is a file, so `chapters` after an editing session still knows.
 
-    Regression: used_fallback() probed the marker file with Path.exists(),
-    which re-raises PermissionError (EACCES) -- so an unreadable cache dir
-    took down the whole `chapters` command, violating this module's invariant
-    that an unusable cache degrades to in-memory generation.
+    Nothing in-process is consulted, so simply reaching for the same key from a
+    cold module state must still short-circuit.
+    """
+    from setlist_maker.artwork_cache import source_artwork
 
-    `_fallback_seen` is cleared before the assertion on purpose: the in-process
-    set short-circuits ahead of the marker probe, so a test that leaves it
-    populated (as test_unreadable_cache_dir_does_not_crash_fallback_recording
-    does) never reaches the filesystem touch this pins.
+    calls = _fake_art(monkeypatch)
+    source_artwork("Daft Punk", "Around the World")
+
+    # A fresh process shares only the cache directory -- no module state.
+    assert source_artwork("Daft Punk", "Around the World") is None
+    assert len(calls) == 1
+
+
+def test_cached_source_bytes_win_over_a_stale_marker(monkeypatch):
+    """If both somehow exist, the real artwork is the better answer."""
+    from setlist_maker.artwork_cache import cache_dir, cache_key, source_artwork
+
+    real_art = _real_jpeg()
+    _fake_art(monkeypatch, returns=real_art)
+    source_artwork("Daft Punk", "Around the World")
+
+    key = cache_key("Daft Punk", "Around the World", None, 600)
+    (cache_dir() / f"{key}.fallback").touch()  # stale marker alongside real art
+
+    assert source_artwork("Daft Punk", "Around the World") == real_art
+
+
+def test_missing_src_marks_the_key_and_leaves_the_composite_alone(monkeypatch):
+    """A cached .jpg whose .src is gone: a failed re-fetch is recorded as empty.
+
+    This is a deliberate behavior change from the previous design, which
+    refused to mark a key whose composite was already cached. That guard
+    existed because the flag then claimed something about the *composite* --
+    marking it would have wrongly said "this track's chapter image is a
+    gradient". Now the marker only claims the *source lookup* found nothing,
+    which is exactly true here, so recording it is right and it stops the
+    waterfall re-running on every future run.
+
+    The consequences that matter both hold: the cached composite still shows
+    the real art, and the episode cover skips this track rather than latching
+    a gradient (asserted in tests/test_cli.py).
+    """
+    from setlist_maker.artwork_cache import cache_dir, cache_key, chapter_image, source_artwork
+
+    real_art = _real_jpeg()
+    _fake_art(monkeypatch, returns=real_art)
+    composite = chapter_image("Daft Punk", "Around the World")
+
+    key = cache_key("Daft Punk", "Around the World", None, 600)
+    (cache_dir() / f"{key}.src").unlink()  # .jpg survives, .src does not
+
+    calls = _fake_art(monkeypatch)  # the re-fetch now fails
+    assert source_artwork("Daft Punk", "Around the World") is None
+    assert len(calls) == 1
+    assert (cache_dir() / f"{key}.fallback").exists()
+
+    # The composite is untouched: still the real art, still served from cache.
+    assert chapter_image("Daft Punk", "Around the World") == composite
+    assert len(calls) == 1  # .jpg hit; no further fetching
+
+
+def test_unreadable_cache_dir_does_not_crash_source_artwork(monkeypatch):
+    """An unreadable cache must degrade to a plain fetch, not raise.
+
+    Regression: the marker probe uses Path.exists(), which re-raises
+    PermissionError (EACCES) rather than swallowing it like the module's other
+    filesystem touches. An unreadable cache dir must not take down `chapters`.
     """
     import os
 
@@ -318,21 +304,15 @@ def test_unreadable_cache_dir_does_not_crash_used_fallback(monkeypatch):
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("running as root: chmod restrictions have no effect")
 
-    monkeypatch.setattr(
-        "setlist_maker.artwork_cache.fetch_artwork",
-        lambda artist, title, coverart_url=None, size=600: None,
-    )
+    _fake_art(monkeypatch)
 
     cache_root = artwork_cache.cache_dir()
     cache_root.mkdir(parents=True)
     cache_root.chmod(0o000)  # unreadable and untraversable
 
     try:
-        # chapter_image() itself already degrades; the crash was downstream.
+        assert artwork_cache.source_artwork("Daft Punk", "Around the World") is None
         assert artwork_cache.chapter_image("Daft Punk", "Around the World").startswith(b"\xff\xd8")
-
-        artwork_cache._fallback_seen.clear()  # force the marker-file path
-        assert artwork_cache.used_fallback("Daft Punk", "Around the World") is False
     finally:
         cache_root.chmod(0o755)  # restore so tmp_path cleanup can remove it
 

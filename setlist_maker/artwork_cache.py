@@ -35,14 +35,8 @@ _generation_slots = threading.Semaphore(_MAX_CONCURRENT_GENERATION)
 # while still holding this lock (both derive their cache key from the same
 # (artist, title, coverart_url, size)), so the same thread must be able to
 # re-enter without deadlocking itself.
-_key_locks: dict[str, threading.RLock] = {}
+_key_locks: dict[str, object] = {}
 _key_locks_guard = threading.Lock()
-
-# Keys whose composite was drawn on the gradient because no source artwork was
-# found. Mirrored to a marker file so a later process (the `chapters` run after
-# an editing session) still knows, and does not pick a gradient as the episode
-# cover. The in-process set also covers the case where the cache is unwritable.
-_fallback_seen: set[str] = set()
 
 
 def cache_dir() -> Path:
@@ -67,8 +61,8 @@ def cache_key(artist: str, title: str, coverart_url: str | None, size: int) -> s
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _lock_for(key: str) -> threading.RLock:
-    """Return the (created-on-demand) lock guarding one cache key."""
+def _lock_for(key: str):
+    """Return the (created-on-demand) reentrant lock guarding one cache key."""
     with _key_locks_guard:
         return _key_locks.setdefault(key, threading.RLock())
 
@@ -114,6 +108,32 @@ def _read_cached_source(path: Path) -> bytes | None:
     return data if data else None
 
 
+def _fallback_marker(key: str) -> Path:
+    """Path of the empty marker recording that a lookup for this key found nothing."""
+    return cache_dir() / f"{key}.fallback"
+
+
+def _known_artless(key: str) -> bool:
+    """True if an earlier lookup for this key already came back empty."""
+    try:
+        return _fallback_marker(key).exists()
+    except OSError:
+        # Path.exists() re-raises PermissionError rather than swallowing it,
+        # unlike every other filesystem touch here. An unreadable cache has to
+        # degrade to "don't know" -- try the fetch -- not crash the caller.
+        return False
+
+
+def _mark_artless(key: str) -> None:
+    """Record that this key's lookup found nothing. Best-effort."""
+    marker = _fallback_marker(key)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError:
+        pass  # an unwritable cache just means we look again next time
+
+
 def source_artwork(
     artist: str,
     title: str,
@@ -122,34 +142,48 @@ def source_artwork(
 ) -> bytes | None:
     """Return the raw fetched cover art for a track, or None if none was found.
 
-    Cached separately from the composite so a second composite of the same
-    track (the episode cover, which carries different text) reuses the
-    fetched image instead of running the waterfall again.
+    Both answers are cached, because both are worth keeping: the bytes in
+    ``<key>.src`` when a lookup succeeded, and an empty ``<key>.fallback``
+    marker when it didn't. The marker is a negative-result cache -- it stops a
+    track with no findable art from re-running the six-request waterfall on
+    every run, and being a file it survives across processes, so the
+    ``chapters`` run after an editing session still knows.
+
+    Caching the source separately from the composite is what lets the episode
+    cover reuse a track's fetched image under different overlay text without a
+    second lookup.
+
+    A ``None`` return means "no artwork for this track" and is the caller's to
+    interpret; the episode cover uses it to skip artless tracks, the way it did
+    before compositing moved behind this cache.
     """
     key = cache_key(artist, title, coverart_url, size)
     path = cache_dir() / f"{key}.src"
 
+    # Cached bytes win over a marker: if a stale marker somehow coexists with
+    # real source art, the art is the better answer.
     cached = _read_cached_source(path)
     if cached is not None:
         return cached
+    if _known_artless(key):
+        return None
 
     with _lock_for(key):
-        # Another thread may have fetched this while we waited for the lock.
+        # Another thread may have resolved this while we waited for the lock.
         cached = _read_cached_source(path)
         if cached is not None:
             return cached
+        if _known_artless(key):
+            return None
 
         with _generation_slots:
             artwork_bytes = fetch_artwork(
                 artist=artist, title=title, coverart_url=coverart_url, size=size
             )
 
-        # Record fallback-ness BEFORE writing the source file, for the same
-        # fail-safe reason chapter_image() records before writing its
-        # composite: a crash after the write must not leave a hit that
-        # silently forgets whether real art was found.
-        _record_fallback(key, artwork_bytes is None)
-        if artwork_bytes is not None:
+        if artwork_bytes is None:
+            _mark_artless(key)
+        else:
             _write_cached(path, artwork_bytes)
         return artwork_bytes
 
@@ -179,9 +213,6 @@ def chapter_image(
         if cached is not None:
             return cached
 
-        # source_artwork() records fallback-ness itself (before it returns),
-        # so that fail-safe ordering is already satisfied by the time we get
-        # here -- this call must happen before the composite is written below.
         artwork_bytes = source_artwork(artist, title, coverart_url, size)
         data = create_chapter_image(
             artwork_bytes=artwork_bytes, artist=artist, title=title, size=size
@@ -189,82 +220,3 @@ def chapter_image(
 
         _write_cached(path, data)
         return data
-
-
-def _fallback_marker(key: str) -> Path:
-    return cache_dir() / f"{key}.fallback"
-
-
-def _record_fallback(key: str, is_fallback: bool) -> None:
-    """Persist whether this composite was drawn without real source artwork."""
-    marker = _fallback_marker(key)
-    if is_fallback:
-        # Don't mark a key as fallback if a composite is already cached for
-        # it. A cached .jpg was either built from real art (a marker here
-        # would be wrong, and -- because chapter_image() hits the .jpg cache
-        # and returns before ever reaching this line again -- permanently
-        # wrong, hiding that track from the episode cover forever) or it was
-        # itself a fallback, in which case its marker already exists and
-        # skipping is harmless. This guards the case where a .jpg is cached
-        # but its .src is missing (an older build, a pruned .src, or an
-        # unwritable cache) and a later re-fetch attempt fails.
-        #
-        # Path.exists() only swallows the OSError subtypes matching ENOENT /
-        # ENOTDIR / EBADF / ELOOP -- it re-raises PermissionError (EACCES),
-        # unlike every other filesystem touch in this module, so this check
-        # needs its own guard rather than relying on exists()'s own handling.
-        try:
-            composite_exists = (cache_dir() / f"{key}.jpg").exists()
-        except OSError:
-            # Can't tell whether a composite is cached -- the cache is
-            # unusable in this state anyway (the marker write below would
-            # fail too). Record the fallback in-process so used_fallback()
-            # stays correct for the rest of this run, and skip the disk
-            # write entirely. This add() must happen here, not be left to
-            # fall through into some outer handler, or an unreadable cache
-            # dir would silently make used_fallback() wrong instead of just
-            # slow.
-            _fallback_seen.add(key)
-            return
-
-        if composite_exists:
-            return
-
-        _fallback_seen.add(key)
-        try:
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.touch()
-        except OSError:
-            pass  # in-process set still answers for this run
-    else:
-        _fallback_seen.discard(key)
-        try:
-            marker.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-
-def used_fallback(
-    artist: str,
-    title: str,
-    coverart_url: str | None = None,
-    size: int = CHAPTER_IMAGE_SIZE,
-) -> bool:
-    """True if this track's composite had no real artwork behind it.
-
-    Lets the episode cover keep skipping artless tracks the way it did before
-    compositing moved behind this cache.
-    """
-    key = cache_key(artist, title, coverart_url, size)
-    if key in _fallback_seen:
-        return True
-    try:
-        return _fallback_marker(key).exists()
-    except OSError:
-        # Same PermissionError hazard _record_fallback() guards against:
-        # Path.exists() re-raises EACCES rather than swallowing it, so an
-        # unreadable cache dir would crash the caller (`chapters`) instead of
-        # degrading. Nothing in _fallback_seen and no readable marker means we
-        # cannot prove this key was a fallback, so report False -- the episode
-        # cover then re-checks for real source bytes before using the track.
-        return False
