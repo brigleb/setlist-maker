@@ -608,14 +608,13 @@ def test_episode_cover_falls_through_when_source_art_is_gone(
 ):
     """A cached composite whose .src vanished must not yield a gradient cover.
 
-    used_fallback() correctly reports "this track had real art" (its composite
-    was built from some), so the episode-cover branch is entered -- but with
-    the .src gone (an intermediate build that predates .src, a disk-full window
-    between the .src and .jpg writes, or a user pruning .src files) the re-fetch
-    can fail. Feeding that None into create_chapter_image() produced a gradient
-    *and* assigned it, permanently blocking every later track with real art.
-    The pre-cache behavior was to skip to the next track, and that is what must
-    hold: the episode cover is either a later track's real art or nothing.
+    With the .src gone (a disk-full window between the .src and .jpg writes, or
+    a user pruning .src files to reclaim space) the re-fetch for that track can
+    fail. Feeding the resulting None into create_chapter_image() produced a
+    gradient *and* assigned it, permanently blocking every later track with
+    real art. The pre-cache behavior was to skip to the next track, and that is
+    what must hold: the episode cover is either a later track's real art or
+    nothing.
     """
     import io
 

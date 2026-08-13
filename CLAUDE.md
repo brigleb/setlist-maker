@@ -93,27 +93,17 @@ CLI application with the following modules:
   `source_artwork()` + `create_chapter_image()`, cached on disk. Called by both the
   web editor's `/api/artwork` preview and `embed_chapters_for_tracklist()`, so the
   image previewed is byte-identical to the one embedded (#20).
-- **source_artwork():** Caches the raw `fetch_artwork()` result separately from the
-  composite (`.src` file vs `.jpg`), so a second composite of the same track — the
-  episode cover, relabelled for the set — reuses the fetched image instead of
-  re-running the waterfall. `chapter_image()` calls this internally to build the
-  chapter composite; `embed_chapters_for_tracklist()` also calls it directly to build
-  the episode cover from the same fetched art (still no network on a cache hit).
-- **used_fallback():** True if the composite for a key was drawn on the gradient
-  because no real artwork was found. Public API and load-bearing:
-  `embed_chapters_for_tracklist()` uses it to pick the episode cover from the first
-  track with *real* art rather than the first identified one. Only meaningful **after**
-  `chapter_image()` / `source_artwork()` has run for the same key — it reports what a
-  previous generation recorded, never fetches, and answers False for an unknown key.
-  The episode-cover path therefore still requires `source_artwork()` to hand back real
-  bytes before using a track (a cached `.jpg` whose `.src` is gone reports False here,
-  but its re-fetch can fail).
-- **`.fallback` marker files:** empty files beside the `.jpg`/`.src` in the cache dir,
-  one per fallback key. They carry `used_fallback()`'s answer **across processes** — the
-  editor generates the composites, and a later `chapters` run (a fresh process, cache
-  hits only) must still know not to pick a gradient as the episode cover. An in-memory
-  `_fallback_seen` set mirrors them so an unwritable/unreadable cache still answers
-  correctly for the current run.
+- **source_artwork():** The one place a track's artwork is resolved, caching *both*
+  answers — the fetched bytes in `<key>.src`, or an empty `<key>.fallback` marker when
+  the lookup came back empty. The marker is a **negative-result cache**: it stops a
+  track with nothing findable from re-running the six-request waterfall every run, and
+  being a file it survives across processes, so a later `chapters` run (a fresh process,
+  cache hits only) still knows. Caching the source separately from the composite is what
+  lets the episode cover reuse a track's fetched art under different overlay text with
+  no second lookup. A `None` return means "no artwork for this track" and is the
+  caller's to interpret — `embed_chapters_for_tracklist()` uses it to pick the episode
+  cover from the first track with *real* art rather than the first identified one.
+  Cached bytes win over a marker if both somehow exist.
 - **Cache key is a content hash** of (artist, title, coverart_url, size), so an edit
   regenerates structurally — there is no invalidation code path. Lives in
   `$XDG_CACHE_HOME/setlist-maker/artwork` (else `~/.cache/...`). Every loader that

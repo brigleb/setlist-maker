@@ -47,7 +47,7 @@ from pathlib import Path
 
 from setlist_maker import __version__
 from setlist_maker.artwork import create_chapter_image
-from setlist_maker.artwork_cache import chapter_image, source_artwork, used_fallback
+from setlist_maker.artwork_cache import chapter_image, source_artwork
 from setlist_maker.audio import get_audio_file
 from setlist_maker.chapters import embed_chapters
 from setlist_maker.editor import (
@@ -304,19 +304,11 @@ def embed_chapters_for_tracklist(
             )
 
             # Episode cover: first track with *real* artwork, relabelled for the
-            # set. used_fallback() preserves the pre-cache behavior of skipping
-            # tracks whose composite is just the gradient.
-            if episode_image is None and not used_fallback(
-                track.artist, track.title, track.coverart_url
-            ):
-                # Same fetched art as this track's chapter image (normally a
-                # cache hit, no network), relabelled for the set as a whole.
-                # Only accept it if real source bytes actually came back: a
-                # cached composite whose .src is gone (an older build, a
-                # disk-full window between the two writes, a pruned cache) can
-                # still report "had real art" while the re-fetch fails. Feeding
-                # that None to create_chapter_image() would yield a gradient
-                # *and* latch it, blocking every later track with real art.
+            # set. source_artwork() returns the same fetched image this track's
+            # chapter composite used (normally a cache hit, no network), or None
+            # when nothing was findable -- which is exactly the pre-cache rule
+            # for skipping a track, so one call answers both questions.
+            if episode_image is None:
                 src = source_artwork(track.artist, track.title, track.coverart_url)
                 if src:
                     episode_image = create_chapter_image(
