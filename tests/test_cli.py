@@ -373,6 +373,29 @@ class TestLoadTracklistWithArtworkUrls:
         assert tracklist.tracks[2].coverart_url == "https://example.com/art3.jpg"
         assert 1 not in urls
 
+    @pytest.mark.parametrize("sidecar", ["null", "42", "true", '"a string"', "[1, 2, 3]"])
+    def test_structurally_wrong_sidecar_degrades_to_markdown(self, temp_dir, sidecar):
+        """A sidecar that parses as JSON but isn't a list of track dicts must not raise.
+
+        json.load succeeds for these, so JSONDecodeError never fires; iterating
+        the value (or testing membership in its scalar elements) raises TypeError
+        instead. Such a sidecar has to degrade to markdown-only, exactly as an
+        unreadable one does -- otherwise it takes down `chapters`, the reuse
+        path, and the .md-edit path.
+        """
+        md_path = temp_dir / "test_tracklist.md"
+        md_path.write_text(
+            "# Tracklist: test.mp3\n\n*Generated on 2026-01-01 00:00*\n\n"
+            "1. **Artist One** - Track One (0:00)\n"
+        )
+        (temp_dir / "test_tracklist.json").write_text(sidecar)
+
+        tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+
+        assert [t.title for t in tracklist.tracks] == ["Track One"]
+        assert urls == {}
+        assert tracklist.tracks[0].coverart_url is None
+
     def test_falls_back_to_markdown_only(self, temp_dir):
         """Test fallback when no JSON sidecar exists."""
         markdown = """# Tracklist: test.mp3

@@ -250,7 +250,11 @@ def _load_tracklist_with_artwork_urls(
                         coverart_urls[i] = url
 
             return tracklist, coverart_urls
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError, TypeError):
+            # TypeError covers a sidecar that is valid JSON but the wrong shape
+            # (null, a number, a list of scalars): iterating it, or testing
+            # membership in its elements, raises rather than failing to parse.
+            # Any such sidecar degrades to markdown-only, as an unreadable one does.
             pass
 
     # Fallback: parse markdown only (no coverart URLs available)
