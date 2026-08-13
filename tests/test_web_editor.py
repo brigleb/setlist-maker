@@ -540,3 +540,68 @@ def test_page_lazy_loads_composite_artwork():
     # fire a wasted /api/artwork?index=undefined request. 0 is a legitimate
     # index, so the guard must check for undefined/null, not falsiness.
     assert "t.index !== undefined && t.index !== null" in html
+
+
+def _request(base, path, host=None, method="GET", body=None):
+    """Issue a request, optionally forging the Host header."""
+    req = urllib.request.Request(base + path, method=method, data=body)
+    if host is not None:
+        req.add_header("Host", host)
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    return urllib.request.urlopen(req)
+
+
+@pytest.mark.parametrize(
+    "path,method,body",
+    [
+        ("/", "GET", None),
+        ("/api/tracklist", "GET", None),
+        ("/api/audio", "GET", None),
+        ("/api/artwork?index=0", "GET", None),
+        ("/api/save", "POST", b'{"tracks": []}'),
+        ("/api/done", "POST", b"{}"),
+    ],
+)
+def test_every_endpoint_rejects_a_foreign_host(
+    sample_tracklist, tmp_path, offline_artwork, path, method, body
+):
+    """DNS rebinding must not reach any endpoint.
+
+    Binding loopback stops other machines, not a page the user is already on:
+    a hostile site can point its own name at 127.0.0.1, after which the browser
+    treats this server as same-origin and lets the page READ /api/tracklist and
+    /api/audio (the source recording) and POST to /api/save. A rebound request
+    still carries the attacker's Host, which is what this rejects.
+
+    /api/done is included deliberately -- without the guard a hostile page could
+    shut the editor down mid-session.
+    """
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _request(base, path, host="attacker.example", method=method, body=body)
+    assert exc.value.code == 403
+
+
+@pytest.mark.parametrize(
+    "host_template", ["127.0.0.1:{port}", "localhost:{port}", "LocalHost:{port}"]
+)
+def test_loopback_hosts_are_accepted(sample_tracklist, tmp_path, host_template):
+    """The names a browser actually sends must work, case-insensitively."""
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        port = base.rsplit(":", 1)[1]
+        with _request(base, "/api/tracklist", host=host_template.format(port=port)) as r:
+            assert r.status == 200
+
+
+@pytest.mark.parametrize("bad_host", ["", "127.0.0.1", "localhost", "127.0.0.1:1", "127.0.0.1:"])
+def test_host_must_carry_this_servers_port(sample_tracklist, tmp_path, bad_host):
+    """A missing or mismatched port is rejected, not treated as loopback.
+
+    Requiring the exact ephemeral port is what stops a rebinding page from
+    forging a valid Host: it would have to guess the port as well as the name.
+    """
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _request(base, "/api/tracklist", host=bad_host)
+    assert exc.value.code == 403

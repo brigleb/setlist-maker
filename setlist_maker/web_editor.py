@@ -26,6 +26,10 @@ from setlist_maker.editor import (
     save_tracklist,
 )
 
+# Host names a browser may legitimately use to reach this loopback server. The
+# port must match too, so a rebinding attacker cannot forge a valid Host.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost"})
+
 _AUDIO_CONTENT_TYPES = {
     ".mp3": "audio/mpeg",
     ".wav": "audio/wav",
@@ -176,7 +180,33 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _reject_foreign_host(self) -> bool:
+        """Send 403 and return True unless the Host header names this server.
+
+        Binding to 127.0.0.1 stops other machines connecting; it does nothing
+        about a page the user is already looking at. A hostile site can point
+        its own name at 127.0.0.1 (DNS rebinding), at which point the browser
+        treats this server as same-origin with that site and lets it *read*
+        responses -- the tracklist, and the source recording streamed by
+        /api/audio -- as well as POST to /api/save, whose corrections are
+        applied to every future run.
+
+        A rebound request still carries ``Host: attacker.example``, so
+        requiring the loopback name and this server's exact port closes it.
+        The ephemeral port is not itself a defense (a page can scan for it),
+        but it does mean a rebinding attacker cannot guess the Host to forge.
+        """
+        host = self.headers.get("Host", "")
+        name, sep, port = host.partition(":")
+        if sep and port == str(self.server.server_address[1]):
+            if name.lower() in _LOOPBACK_HOSTS:
+                return False
+        self.send_error(HTTPStatus.FORBIDDEN, "invalid Host header")
+        return True
+
     def do_POST(self) -> None:
+        if self._reject_foreign_host():
+            return
         path = urlparse(self.path).path
         if path == "/api/save":
             self._handle_save()
@@ -212,6 +242,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json({"ok": True, "rejected": rejected, "edited": edited})
 
     def do_GET(self) -> None:
+        if self._reject_foreign_host():
+            return
         path = urlparse(self.path).path
         if path == "/":
             body = _load_page().encode("utf-8")
