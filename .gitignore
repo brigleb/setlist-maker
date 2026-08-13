@@ -41,3 +41,8 @@ Thumbs.db
 
 # Brainstorming / visual companion scratch
 .superpowers/
+
+# Per-machine agent/tool artifacts. Only settings.local.json is ignored, not
+# all of .claude/ -- shared skills, commands and settings.json belong in the repo.
+.claude/settings.local.json
+.playwright-mcp/
