@@ -465,3 +465,70 @@ def test_run_web_editor_opens_browser_and_returns(monkeypatch, sample_tracklist,
     )
 
     assert opened and opened[0].startswith("http://127.0.0.1:")
+
+
+@pytest.fixture
+def offline_artwork(monkeypatch, tmp_path):
+    """Isolate the artwork cache and keep it off the network."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: None,
+    )
+
+
+def test_artwork_endpoint_returns_jpeg(sample_tracklist, tmp_path, offline_artwork):
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(f"{base}/api/artwork?index=0") as r:
+            assert r.status == 200
+            assert r.headers["Content-Type"] == "image/jpeg"
+            body = r.read()
+    assert body.startswith(b"\xff\xd8")
+
+
+def test_artwork_endpoint_404s_for_unidentified(sample_tracklist, tmp_path, offline_artwork):
+    """Track 2 in the fixture is unidentified; chapters skips those, so does preview."""
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"{base}/api/artwork?index=2")
+    assert exc.value.code == 404
+
+
+@pytest.mark.parametrize("qs", ["index=99", "index=-1", "index=abc", ""])
+def test_artwork_endpoint_404s_for_bad_index(sample_tracklist, tmp_path, offline_artwork, qs):
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"{base}/api/artwork?{qs}")
+    assert exc.value.code == 404
+
+
+def test_artwork_endpoint_is_not_browser_cached(sample_tracklist, tmp_path, offline_artwork):
+    """no-store keeps an edited row from showing its pre-edit composite."""
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(f"{base}/api/artwork?index=0") as r:
+            assert "no-store" in r.headers.get("Cache-Control", "")
+
+
+def test_page_lazy_loads_composite_artwork():
+    """The page requests the real composite per row and enlarges it on click."""
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    assert "/api/artwork?index=" in html
+    assert "IntersectionObserver" in html  # visible rows generate first
+    assert "artwork-overlay" in html  # click-to-enlarge target
+    # The script looks the overlay up at top level, so the element must appear
+    # before it. Placed after </script>, getElementById returns null and the
+    # TypeError takes down the whole page -- which a substring check misses.
+    assert html.index('id="artwork-overlay"') < html.index("<script>")
+    # A saved edit changes the composite; without a cache-busting version param,
+    # Chrome reuses the decoded image for the identical pre-edit URL and the
+    # thumb never updates until a full page reload.
+    assert '"&v=" + artVersion' in html
+    assert "artVersion++" in html  # bumped on save so the next request is fresh
+    # Every render() rebuilds all rows; without disconnecting first, thumbs that
+    # never scrolled into view leak one stale IntersectionObserver registration
+    # per edit/reject/add on a detached element that will never be cleaned up.
+    assert "artObserver.disconnect()" in html
+    # An unsaved inserted row has no server index yet; observing/wiring it would
+    # fire a wasted /api/artwork?index=undefined request. 0 is a legitimate
+    # index, so the guard must check for undefined/null, not falsiness.
+    assert "t.index !== undefined && t.index !== null" in html

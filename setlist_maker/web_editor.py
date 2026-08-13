@@ -15,8 +15,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
+from setlist_maker.artwork_cache import chapter_image
 from setlist_maker.editor import (
     CorrectionsDB,
     Track,
@@ -223,8 +224,49 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(tracklist_to_api(self._ctx.tracklist))
         elif path == "/api/audio":
             self._send_audio()
+        elif path == "/api/artwork":
+            self._send_artwork()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _send_artwork(self) -> None:
+        """Serve the chapter composite for one track, generating it on demand.
+
+        Index-based rather than artist/title-from-the-page on purpose: the
+        cache is authoritative, so the preview must reflect *saved* state --
+        that is what ``chapters`` will embed.
+        """
+        params = parse_qs(urlparse(self.path).query)
+        try:
+            index = int(params.get("index", [""])[0])
+        except (TypeError, ValueError):
+            self.send_error(HTTPStatus.NOT_FOUND, "bad index")
+            return
+
+        tracks = self._ctx.tracklist.tracks
+        if not 0 <= index < len(tracks):
+            self.send_error(HTTPStatus.NOT_FOUND, "no such track")
+            return
+
+        track = tracks[index]
+        if track.is_unidentified:
+            # chapters skips unidentified tracks, so there is nothing to preview
+            self.send_error(HTTPStatus.NOT_FOUND, "track is unidentified")
+            return
+
+        data = chapter_image(
+            artist=track.artist, title=track.title, coverart_url=track.coverart_url
+        )
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        # The page re-requests after a save; never serve a pre-edit composite.
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # row scrolled away / page closed
 
     def _send_audio(self) -> None:
         audio_path = self._ctx.audio_path

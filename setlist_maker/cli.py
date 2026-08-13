@@ -46,7 +46,8 @@ import sys
 from pathlib import Path
 
 from setlist_maker import __version__
-from setlist_maker.artwork import create_chapter_image, fetch_artwork
+from setlist_maker.artwork import create_chapter_image
+from setlist_maker.artwork_cache import chapter_image, source_artwork, used_fallback
 from setlist_maker.audio import get_audio_file
 from setlist_maker.chapters import embed_chapters
 from setlist_maker.editor import (
@@ -113,9 +114,11 @@ def cmd_identify(args: argparse.Namespace) -> None:
     # Editing an existing markdown tracklist
     if input_path.suffix.lower() == ".md" and input_path.is_file():
         print(f"Opening tracklist for editing: {input_path.name}")
-        with open(input_path) as f:
-            content = f.read()
-        tracklist = parse_markdown_tracklist(content)
+        # Same loader the chapters path uses: it parses this markdown for
+        # structure *and* picks up the JSON sidecar's coverart_url. Parsing the
+        # markdown alone would leave coverart_url None, so the editor would
+        # preview a differently-keyed composite than `chapters` embeds.
+        tracklist, _urls = _load_tracklist_with_artwork_urls(input_path)
         if not tracklist.tracks:
             print("Error: Could not parse tracklist from markdown file.")
             sys.exit(1)
@@ -288,33 +291,35 @@ def embed_chapters_for_tracklist(
             label = f"{track.artist} - {track.title}"
             print(f"  [{i + 1}/{len(chapter_tracks)}] {track.time_str} - {label}")
 
-            # Fetch cover art
-            artwork_bytes = fetch_artwork(
+            # One cached path shared with the editor's preview, so the image
+            # embedded here is byte-identical to the one the user approved.
+            chapter_images[i] = chapter_image(
                 artist=track.artist,
                 title=track.title,
                 coverart_url=track.coverart_url,
             )
 
-            if artwork_bytes:
-                print("    Found artwork, generating chapter image...")
-            else:
-                print("    No artwork found, using text-only image")
-
-            # Create MTV-style overlay image
-            chapter_img = create_chapter_image(
-                artwork_bytes=artwork_bytes,
-                artist=track.artist,
-                title=track.title,
-            )
-            chapter_images[i] = chapter_img
-
-            # Use first track's artwork as episode cover
-            if episode_image is None and artwork_bytes:
-                episode_image = create_chapter_image(
-                    artwork_bytes=artwork_bytes,
-                    artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
-                    title="Tracklist",
-                )
+            # Episode cover: first track with *real* artwork, relabelled for the
+            # set. used_fallback() preserves the pre-cache behavior of skipping
+            # tracks whose composite is just the gradient.
+            if episode_image is None and not used_fallback(
+                track.artist, track.title, track.coverart_url
+            ):
+                # Same fetched art as this track's chapter image (normally a
+                # cache hit, no network), relabelled for the set as a whole.
+                # Only accept it if real source bytes actually came back: a
+                # cached composite whose .src is gone (an older build, a
+                # disk-full window between the two writes, a pruned cache) can
+                # still report "had real art" while the re-fetch fails. Feeding
+                # that None to create_chapter_image() would yield a gradient
+                # *and* latch it, blocking every later track with real art.
+                src = source_artwork(track.artist, track.title, track.coverart_url)
+                if src:
+                    episode_image = create_chapter_image(
+                        artwork_bytes=src,
+                        artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
+                        title="Tracklist",
+                    )
 
         print(f"  Generated {len(chapter_images)} chapter image(s)")
 

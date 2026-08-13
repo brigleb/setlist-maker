@@ -102,6 +102,11 @@ setlist-maker recording.mp3 --edit --chapters
 Every run writes both a markdown tracklist and a JSON sidecar (the JSON carries
 each track's Shazam cover-art URL, so the `chapters` command can reuse it later).
 
+Artwork previewed in the web editor is cached on disk (`$XDG_CACHE_HOME/setlist-maker/artwork`,
+or `~/.cache/setlist-maker/artwork` if `XDG_CACHE_HOME` isn't set) and reused by
+`chapters`, so what you approve on screen is exactly what gets embedded — and a
+`--chapters` run right after editing needs no network.
+
 > **Note:** Setlist Maker expects a single, finished audio file. If your set is
 > split across multiple files or needs cleanup (joining, compression, loudness
 > normalization), do that in your audio editor of choice first, then run
