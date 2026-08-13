@@ -22,8 +22,11 @@
   .row { display:flex; align-items:center; gap:13px; padding:11px 20px; border-bottom:1px solid #f4f4f4; background:var(--card); }
   .row.rejected { opacity:.45; }
   .row.editing { background:#eef6ff; outline:2px solid var(--accent); outline-offset:-2px; }
-  .thumb { width:42px; height:42px; border-radius:6px; flex:none; background-size:cover; background-position:center; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; }
-  .thumb { cursor:zoom-in; }
+  /* background-size/position must not be re-reset by a `background` shorthand,
+     here or inline in JS -- the shorthand resets every background-* longhand,
+     which renders a 600px composite at natural size anchored top-left, showing
+     only its corner and hiding the lower-third label entirely. */
+  .thumb { width:42px; height:42px; border-radius:6px; flex:none; background-size:cover; background-position:center; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; cursor:zoom-in; }
   #artwork-overlay { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none;
     align-items:center; justify-content:center; z-index:50; cursor:zoom-out; }
   #artwork-overlay.open { display:flex; }
@@ -45,7 +48,9 @@
   .editfields input.timefield { flex:0 0 80px; text-align:center; font-variant-numeric:tabular-nums; }
   #player { position:fixed; left:0; right:0; bottom:0; background:#1c1c1e; color:#fff; display:flex; align-items:center; gap:14px; padding:12px 20px; }
   #player.disabled { opacity:.4; pointer-events:none; }
-  #pthumb { width:38px; height:38px; border-radius:6px; flex:none; background-size:cover; background:#333; }
+  /* background-color, not the `background` shorthand: the shorthand would reset
+     background-size:cover declared beside it and crop the artwork to its corner. */
+  #pthumb { width:38px; height:38px; border-radius:6px; flex:none; background-color:#333; background-size:cover; background-position:center; }
   #pplay { font-size:16px; background:none; border:none; color:#fff; cursor:pointer; }
   #pmeta { flex:1; }
   #plabel { font-weight:600; font-size:12px; margin-bottom:6px; }
@@ -167,7 +172,10 @@
 
     const thumb = document.createElement("div");
     thumb.className = "thumb";
-    thumb.style.background = GRADS[i % GRADS.length];
+    // backgroundImage, never the `background` shorthand: the shorthand resets
+    // background-size/position, so the composite would render at natural size
+    // anchored top-left -- a corner crop with its label off-screen.
+    thumb.style.backgroundImage = GRADS[i % GRADS.length];
     const hasIndex = t.index !== undefined && t.index !== null;
     if (unknown) {
       thumb.textContent = "?";
@@ -278,8 +286,9 @@
     playingIndex = i;
     document.getElementById("plabel").textContent = (t.artist || "Unidentified") + (t.title ? " — " + t.title : "");
     const pt = document.getElementById("pthumb");
-    pt.style.background = GRADS[i % GRADS.length];
-    pt.style.backgroundImage = t.coverart_url ? "url('" + t.coverart_url + "')" : "";
+    pt.style.backgroundImage = t.coverart_url
+      ? "url('" + t.coverart_url + "')"
+      : GRADS[i % GRADS.length];
     const start = () => { audio.currentTime = t.timestamp; audio.play(); };
     if (audio.readyState >= 1) start();
     else audio.addEventListener("loadedmetadata", start, { once: true });
