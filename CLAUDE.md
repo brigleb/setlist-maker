@@ -141,6 +141,15 @@ CLI application with the following modules:
   on an unidentified track, which `chapters` skips too. Keyed by **saved** track
   state, not the page's live fields, so the preview always reflects what would be
   embedded), `POST /api/done` (graceful shutdown → returns control to the CLI).
+- **Host-header guard:** `_reject_foreign_host()` runs at the top of both `do_GET`
+  and `do_POST` — a single gate, so a new endpoint cannot forget it. Requires the
+  loopback name (`127.0.0.1`/`localhost`, case-insensitive) **and** this server's
+  exact ephemeral port; anything else gets `403`. Binding loopback only stops other
+  *machines*, not a page the user is already viewing: a hostile site can point its
+  own name at 127.0.0.1 (DNS rebinding), after which the browser treats this server
+  as same-origin and lets the page read `/api/tracklist` and `/api/audio` (the source
+  recording) and POST to `/api/save`, whose corrections apply to every future run.
+  A rebound request still carries the attacker's `Host`, which is what this rejects (#26).
 - **Pure helpers:** `tracklist_to_api()` and `apply_edits()` are socket-free and
   unit-tested directly. `apply_edits()` maps edits onto existing tracks by stable
   `index`; an edit with **no** `index` is a track inserted via the page's per-row
