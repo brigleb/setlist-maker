@@ -7,7 +7,7 @@
 <style>
   :root { --accent:#0a84ff; --ok:#1f9d55; --warn:#c8860a; --bg:#f6f6f7; --card:#fff; --line:#eee; --muted:#8a8a8e; }
   * { box-sizing:border-box; }
-  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; background:var(--bg); color:#1c1c1e; padding-bottom:84px; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; background:var(--bg); color:#1c1c1e; padding-bottom:104px; }
   header { position:sticky; top:0; background:var(--card); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; align-items:center; justify-content:space-between; z-index:5; }
   .file { font-weight:700; font-size:15px; }
   .counts { color:var(--muted); font-size:12px; margin-top:2px; }
@@ -46,16 +46,22 @@
   .add { color:#c8c8cd; font-weight:700; }
   .add:hover { color:var(--accent); }
   .editfields input.timefield { flex:0 0 80px; text-align:center; font-variant-numeric:tabular-nums; }
-  #player { position:fixed; left:0; right:0; bottom:0; background:#1c1c1e; color:#fff; display:flex; align-items:center; gap:14px; padding:12px 20px; }
+  #player { position:fixed; left:0; right:0; bottom:0; background:#1c1c1e; color:#fff; display:flex; align-items:center; gap:14px; padding:10px 20px; }
   #player.disabled { opacity:.4; pointer-events:none; }
   /* background-color, not the `background` shorthand: the shorthand would reset
      background-size:cover declared beside it and crop the artwork to its corner. */
-  #pthumb { width:38px; height:38px; border-radius:6px; flex:none; background-color:#333; background-size:cover; background-position:center; }
-  #pplay { font-size:16px; background:none; border:none; color:#fff; cursor:pointer; }
-  #pmeta { flex:1; }
-  #plabel { font-weight:600; font-size:12px; margin-bottom:6px; }
-  #seek { width:100%; }
-  #ptime { color:#9a9a9e; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  #pthumb { width:48px; height:48px; border-radius:6px; flex:none; background-color:#333; background-size:cover; background-position:center; }
+  #pbody { flex:1; min-width:0; display:flex; flex-direction:column; gap:5px; }
+  #ptop { display:flex; align-items:center; gap:14px; }
+  #ptransport { display:flex; align-items:center; gap:2px; flex:none; }
+  #ptransport button { min-width:34px; height:28px; font-size:14px; background:none; border:none; color:#fff; cursor:pointer; border-radius:6px; line-height:1; }
+  #ptransport button:hover { background:#2f2f33; }
+  #ptransport button span { font-size:9px; vertical-align:super; }
+  #pplay { font-size:17px; }
+  #plabel { flex:1; min-width:0; font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #pcount, #ppos, #ptime { color:#9a9a9e; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; flex:none; }
+  #seek { width:100%; margin:0; accent-color:var(--accent); }
+  #pfoot { display:flex; justify-content:space-between; align-items:center; }
   #toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:#1c1c1e; color:#fff; padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
   #toast.show { opacity:1; }
 </style>
@@ -75,12 +81,24 @@
   <main id="list"></main>
   <div id="player" class="disabled">
     <div id="pthumb"></div>
-    <button id="pplay">▶</button>
-    <div id="pmeta">
-      <div id="plabel">Nothing playing</div>
-      <input id="seek" type="range" min="0" max="100" value="0" step="0.1">
+    <div id="pbody">
+      <div id="ptop">
+        <div id="ptransport">
+          <button id="pprev" title="Previous track (Up)">⏮</button>
+          <button id="pback15" title="Back 15 seconds (Left)">↺<span>15</span></button>
+          <button id="pplay" title="Play/pause (Space)">▶</button>
+          <button id="pfwd15" title="Forward 15 seconds (Right)"><span>15</span>↻</button>
+          <button id="pnext" title="Next track (Down)">⏭</button>
+        </div>
+        <div id="plabel">Nothing playing</div>
+        <div id="pcount"></div>
+      </div>
+      <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek within track">
+      <div id="pfoot">
+        <div id="ppos">—</div>
+        <div id="ptime">0:00 / 0:00</div>
+      </div>
     </div>
-    <div id="ptime">0:00 / 0:00</div>
   </div>
   <audio id="audio" src="/api/audio" preload="metadata"></audio>
   <div id="toast"></div>
