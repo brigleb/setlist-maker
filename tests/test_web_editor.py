@@ -20,6 +20,30 @@ def test_page_asset_exists_and_has_hooks():
     assert "<audio" in html
 
 
+def test_page_asset_has_player_controls():
+    """The transport controls and their IDs are the contract the script binds to."""
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    for element_id in ("pprev", "pback15", "pplay", "pfwd15", "pnext", "ppos", "pcount", "seek"):
+        assert f'id="{element_id}"' in html, f"missing #{element_id}"
+
+
+def test_body_padding_clears_the_player_bar():
+    """The list must not hide behind the fixed player.
+
+    Substring-level, because there is no JS harness -- it catches the specific
+    regression of growing the bar without growing the padding.
+    """
+    import re
+
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    padding = re.search(r"body\s*\{[^}]*padding-bottom:\s*(\d+)px", html)
+    assert padding, "body padding-bottom not found"
+    assert int(padding.group(1)) >= 100, (
+        f"body padding-bottom is {padding.group(1)}px; the reworked player bar is ~84px "
+        f"and needs more clearance than that"
+    )
+
+
 def test_tracklist_to_api_shape(sample_tracklist):
     from setlist_maker.web_editor import tracklist_to_api
 

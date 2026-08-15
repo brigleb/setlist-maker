@@ -7,7 +7,7 @@
 <style>
   :root { --accent:#0a84ff; --ok:#1f9d55; --warn:#c8860a; --bg:#f6f6f7; --card:#fff; --line:#eee; --muted:#8a8a8e; }
   * { box-sizing:border-box; }
-  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; background:var(--bg); color:#1c1c1e; padding-bottom:84px; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; background:var(--bg); color:#1c1c1e; padding-bottom:104px; }
   header { position:sticky; top:0; background:var(--card); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; align-items:center; justify-content:space-between; z-index:5; }
   .file { font-weight:700; font-size:15px; }
   .counts { color:var(--muted); font-size:12px; margin-top:2px; }
@@ -22,6 +22,7 @@
   .row { display:flex; align-items:center; gap:13px; padding:11px 20px; border-bottom:1px solid #f4f4f4; background:var(--card); }
   .row.rejected { opacity:.45; }
   .row.editing { background:#eef6ff; outline:2px solid var(--accent); outline-offset:-2px; }
+  .row.playing { background:#f0f7ff; box-shadow:inset 3px 0 0 var(--accent); }
   /* background-size/position must not be re-reset by a `background` shorthand,
      here or inline in JS -- the shorthand resets every background-* longhand,
      which renders a 600px composite at natural size anchored top-left, showing
@@ -46,16 +47,22 @@
   .add { color:#c8c8cd; font-weight:700; }
   .add:hover { color:var(--accent); }
   .editfields input.timefield { flex:0 0 80px; text-align:center; font-variant-numeric:tabular-nums; }
-  #player { position:fixed; left:0; right:0; bottom:0; background:#1c1c1e; color:#fff; display:flex; align-items:center; gap:14px; padding:12px 20px; }
+  #player { position:fixed; left:0; right:0; bottom:0; background:#1c1c1e; color:#fff; display:flex; align-items:center; gap:14px; padding:10px 20px; }
   #player.disabled { opacity:.4; pointer-events:none; }
   /* background-color, not the `background` shorthand: the shorthand would reset
      background-size:cover declared beside it and crop the artwork to its corner. */
-  #pthumb { width:38px; height:38px; border-radius:6px; flex:none; background-color:#333; background-size:cover; background-position:center; }
-  #pplay { font-size:16px; background:none; border:none; color:#fff; cursor:pointer; }
-  #pmeta { flex:1; }
-  #plabel { font-weight:600; font-size:12px; margin-bottom:6px; }
-  #seek { width:100%; }
-  #ptime { color:#9a9a9e; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  #pthumb { width:48px; height:48px; border-radius:6px; flex:none; background-color:#333; background-size:cover; background-position:center; }
+  #pbody { flex:1; min-width:0; display:flex; flex-direction:column; gap:5px; }
+  #ptop { display:flex; align-items:center; gap:14px; }
+  #ptransport { display:flex; align-items:center; gap:2px; flex:none; }
+  #ptransport button { min-width:34px; height:28px; font-size:14px; background:none; border:none; color:#fff; cursor:pointer; border-radius:6px; line-height:1; }
+  #ptransport button:hover { background:#2f2f33; }
+  #ptransport button span { font-size:9px; vertical-align:super; }
+  #pplay { font-size:17px; }
+  #plabel { flex:1; min-width:0; font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #pcount, #ppos, #ptime { color:#9a9a9e; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; flex:none; }
+  #seek { width:100%; margin:0; accent-color:var(--accent); }
+  #pfoot { display:flex; justify-content:space-between; align-items:center; }
   #toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:#1c1c1e; color:#fff; padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
   #toast.show { opacity:1; }
 </style>
@@ -75,12 +82,24 @@
   <main id="list"></main>
   <div id="player" class="disabled">
     <div id="pthumb"></div>
-    <button id="pplay">▶</button>
-    <div id="pmeta">
-      <div id="plabel">Nothing playing</div>
-      <input id="seek" type="range" min="0" max="100" value="0" step="0.1">
+    <div id="pbody">
+      <div id="ptop">
+        <div id="ptransport">
+          <button id="pprev" title="Previous track (Up)">⏮</button>
+          <button id="pback15" title="Back 15 seconds (Left)">↺<span>15</span></button>
+          <button id="pplay" title="Play/pause (Space)">▶</button>
+          <button id="pfwd15" title="Forward 15 seconds (Right)"><span>15</span>↻</button>
+          <button id="pnext" title="Next track (Down)">⏭</button>
+        </div>
+        <div id="plabel">Nothing playing</div>
+        <div id="pcount"></div>
+      </div>
+      <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek within track">
+      <div id="pfoot">
+        <div id="ppos">—</div>
+        <div id="ptime">0:00 / 0:00</div>
+      </div>
     </div>
-    <div id="ptime">0:00 / 0:00</div>
   </div>
   <audio id="audio" src="/api/audio" preload="metadata"></audio>
   <div id="toast"></div>
@@ -96,6 +115,12 @@
   let tracks = [];
   let dirty = false;
   let playingIndex = null;
+  // The playing track *object*, held alongside the bare index. addBelow()'s
+  // splice and commit()'s re-sort can both move the playing track to a
+  // different array position without changing what's on screen for it --
+  // reindexPlayingTrack() re-derives playingIndex from this reference so a
+  // stale bare index never points at a different track after either mutation.
+  let playingTrack = null;
   const audio = document.getElementById("audio");
   const summaryEl = document.getElementById("summary");
   function autosizeSummary() { summaryEl.style.height = "auto"; summaryEl.style.height = summaryEl.scrollHeight + "px"; }
@@ -107,6 +132,52 @@
     const mm = (h > 0) ? String(m).padStart(2, "0") : String(m);
     return (h > 0 ? h + ":" : "") + mm + ":" + String(sec).padStart(2, "0");
   }
+
+  // A track's window runs from its own timestamp to the next track's; the last
+  // runs to the end of the audio. Derived on demand, never cached, so inserting
+  // a row needs no separate bookkeeping. Clamped to >=1s so two tracks sharing a
+  // timestamp cannot produce a zero-width scrubber and a division by zero.
+  function windowFor(i) {
+    const t = tracks[i];
+    if (!t) return { start: 0, end: 1, length: 1 };
+    const start = t.timestamp;
+    const next = tracks[i + 1];
+    const rawEnd = next ? next.timestamp : (audio.duration || start + 1);
+    const end = Math.max(rawEnd, start + 1);
+    return { start, end, length: end - start };
+  }
+
+  // Which track's window contains this playback position. Returns the last
+  // track for a position past the final boundary, 0 for a position before the
+  // first track's timestamp (a set whose first track does not start at 0).
+  function trackIndexAt(seconds) {
+    if (!tracks.length) return null;
+    for (let i = tracks.length - 1; i >= 0; i--) {
+      if (seconds >= tracks[i].timestamp) return i;
+    }
+    return 0;
+  }
+
+  // "0:43 in" / "3:17 left" for the position within track i's window.
+  function fmtWindowTimes(i, seconds) {
+    const w = windowFor(i);
+    const into = Math.max(0, Math.min(seconds - w.start, w.length));
+    return { into: fmt(into) + " in", left: fmt(w.length - into) + " left" };
+  }
+
+  // Re-derive playingIndex from playingTrack after a mutation that can move
+  // array positions (splice, sort). Called at those two mutation sites, not
+  // generally -- reload via load() replaces every track object wholesale, and
+  // deliberately leaves playingIndex as a bare number: the reload preserves
+  // ordering, so the number is still correct, and the next setPlayingIndex()
+  // call (from render()) re-resolves playingTrack against the fresh objects.
+  function reindexPlayingTrack() {
+    if (!playingTrack) return;
+    const idx = tracks.indexOf(playingTrack);
+    playingIndex = idx === -1 ? null : idx;
+    if (idx === -1) playingTrack = null;
+  }
+
   function setDirty(v) { dirty = v; document.getElementById("save").disabled = !v; }
   function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); }
 
@@ -137,6 +208,11 @@
     list.innerHTML = "";
     tracks.forEach((t, i) => list.appendChild(rowEl(t, i)));
     updateCounts();
+    // Not just the highlight: an edit to the playing track's artist/title, or
+    // an insert that shifts its position, must also refresh the player bar's
+    // label/count/artwork. setPlayingIndex() no-ops safely when playingIndex
+    // is null and cannot recurse back into render().
+    setPlayingIndex(playingIndex, { scroll: false });
   }
 
   let artVersion = 0;  // bumped on save so re-requested thumbs bypass the browser's decoded-image cache
@@ -162,7 +238,27 @@
   }
   overlay.onclick = () => { overlay.classList.remove("open"); overlayImg.src = ""; };
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && overlay.classList.contains("open")) overlay.click();
+    if (e.key === "Escape" && overlay.classList.contains("open")) { overlay.click(); return; }
+    // Never steal keys from an editor: artist/title/time fields and the summary
+    // textarea all need Space and the arrows to behave normally. #seek is an
+    // INPUT too, but deliberately excluded -- e.preventDefault() below already
+    // blocks its native arrow-key stepping, so arrows should seek rather than
+    // get eaten here just because the scrubber has focus.
+    const el = document.activeElement;
+    if (el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && el.type !== "range"))) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (document.getElementById("player").classList.contains("disabled")) return;
+    switch (e.key) {
+      case " ":
+        // Space normally activates a focused button; only #pplay should
+        // intercept it here, so Tab-to-Save-and-press-Space still saves.
+        if (el && el.tagName === "BUTTON" && el.id !== "pplay") return;
+        e.preventDefault(); document.getElementById("pplay").click(); break;
+      case "ArrowLeft":  e.preventDefault(); skip(-SKIP_SECONDS); break;
+      case "ArrowRight": e.preventDefault(); skip(SKIP_SECONDS); break;
+      case "ArrowUp":    e.preventDefault(); prevTrack(); break;
+      case "ArrowDown":  e.preventDefault(); nextTrack(); break;
+    }
   });
 
   function rowEl(t, i) {
@@ -207,7 +303,7 @@
 
     const play = document.createElement("button");
     play.className = "iconbtn play"; play.textContent = "▶";
-    play.onclick = (e) => { e.stopPropagation(); playFrom(i); };
+    play.onclick = (e) => { e.stopPropagation(); playFrom(i, { scroll: false }); };
     row.appendChild(play);
 
     const rej = document.createElement("button");
@@ -239,6 +335,7 @@
     const cur = tracks[i], next = tracks[i + 1];
     const ts = next ? Math.floor((cur.timestamp + next.timestamp) / 2) : cur.timestamp + INSERT_TAIL_GAP;
     tracks.splice(i + 1, 0, { artist: "", title: "", timestamp: ts, time: fmt(ts), rejected: false, _new: true });
+    reindexPlayingTrack();  // the splice can shift the playing track's index
     setDirty(true);
     render();
     const row = document.getElementById("list").children[i + 1];
@@ -270,7 +367,11 @@
       if (na !== t.artist || nt !== t.title) { t.artist = na; t.title = nt; if (!isNew) t._edited = true; setDirty(true); }
       if (tm) {
         const secs = parseTime(tm.value);
-        if (secs !== null && secs !== t.timestamp) { t.timestamp = secs; setDirty(true); tracks.sort((x, y) => x.timestamp - y.timestamp); }
+        if (secs !== null && secs !== t.timestamp) {
+          t.timestamp = secs; setDirty(true);
+          tracks.sort((x, y) => x.timestamp - y.timestamp);
+          reindexPlayingTrack();  // the re-sort can shift the playing track's index
+        }
         t.time = fmt(t.timestamp);
       }
       render();
@@ -281,31 +382,136 @@
     wrap.addEventListener("focusout", () => { setTimeout(() => { if (!wrap.contains(document.activeElement)) commit(); }, 0); });
   }
 
-  function playFrom(i) {
-    const t = tracks[i];
+  // The highlight must be reapplied after render(), which rebuilds every row.
+  function highlightPlayingRow(scroll) {
+    const list = document.getElementById("list");
+    list.querySelectorAll(".row.playing").forEach(el => el.classList.remove("playing"));
+    if (playingIndex === null) return;
+    const row = list.children[playingIndex];
+    if (!row) return;
+    row.classList.add("playing");
+    if (scroll) row.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  const SKIP_SECONDS = 15;
+  const PREV_RESTART_THRESHOLD = 3;  // ⏮ within this many seconds goes to the previous track
+
+  // Seeks clamp to the audio's real bounds, never to the track window: crossing
+  // a boundary is how a user checks whether that boundary is right.
+  function seekTo(seconds) {
+    if (!audio.duration) return;
+    audio.currentTime = Math.max(0, Math.min(seconds, audio.duration));
+    syncPlayerUI();
+  }
+
+  // Point the player at track i without seeking. `scroll` brings its row into
+  // view -- true only on automatic advance, since a row the user just clicked is
+  // already under their cursor and yanking the list would be hostile.
+  function setPlayingIndex(i, opts) {
+    if (i === null || !tracks[i]) return;
     playingIndex = i;
-    document.getElementById("plabel").textContent = (t.artist || "Unidentified") + (t.title ? " — " + t.title : "");
+    const t = tracks[i];
+    playingTrack = t;
+    document.getElementById("plabel").textContent =
+      (t.artist || "Unidentified") + (t.title ? " — " + t.title : "");
+    document.getElementById("pcount").textContent = "track " + (i + 1) + " of " + tracks.length;
     const pt = document.getElementById("pthumb");
+    // backgroundImage, never the `background` shorthand -- see the CSS comment.
     pt.style.backgroundImage = t.coverart_url
       ? "url('" + t.coverart_url + "')"
       : GRADS[i % GRADS.length];
-    const start = () => { audio.currentTime = t.timestamp; audio.play(); };
+    highlightPlayingRow(opts && opts.scroll);
+  }
+
+  // `scroll` defaults to true: any jump the user did not initiate by clicking a
+  // specific row should bring the destination into view. Only the row's own ▶
+  // passes false, because that row is already under the cursor.
+  function playFrom(i, opts) {
+    const scroll = !opts || opts.scroll !== false;
+    setPlayingIndex(i, { scroll });
+    // Capture the track now, not inside start(): if metadata is still
+    // loading, start() runs later and a re-indexed `tracks[i]` at that point
+    // could be a different track (or throw if tracks was replaced by load()).
+    const track = tracks[i];
+    const start = () => { audio.currentTime = track.timestamp; audio.play(); };
     if (audio.readyState >= 1) start();
     else audio.addEventListener("loadedmetadata", start, { once: true });
   }
 
+  function skip(delta) { seekTo(audio.currentTime + delta); }
+
+  // Prev/next step through `tracks` by position, so rejected tracks are included
+  // -- a track is often auditioned before the decision to un-reject it.
+  function prevTrack() {
+    const i = playingIndex === null ? trackIndexAt(audio.currentTime) : playingIndex;
+    if (i === null) return;
+    // Familiar transport convention: restart this track unless already near its start.
+    const target = (audio.currentTime - tracks[i].timestamp > PREV_RESTART_THRESHOLD)
+      ? i : Math.max(0, i - 1);
+    playFrom(target);
+  }
+
+  function nextTrack() {
+    const i = playingIndex === null ? trackIndexAt(audio.currentTime) : playingIndex;
+    if (i === null) return;
+    playFrom(Math.min(tracks.length - 1, i + 1));
+  }
+
+  // Declared before syncPlayerUI, which reads it: `let` has no hoisted value,
+  // so defining it after would leave a temporal-dead-zone trap for any future
+  // caller that runs earlier than these listeners.
+  let seekDragging = false;
+
+  // Reflect audio state into the bar. Called on timeupdate and after any seek.
+  function syncPlayerUI() {
+    const seek = document.getElementById("seek");
+    document.getElementById("ptime").textContent =
+      fmt(audio.currentTime) + " / " + fmt(audio.duration);
+    if (playingIndex === null) return;
+    const w = windowFor(playingIndex);
+    const frac = Math.max(0, Math.min((audio.currentTime - w.start) / w.length, 1));
+    if (!seekDragging) seek.value = String(Math.round(frac * 1000));
+    const times = fmtWindowTimes(playingIndex, audio.currentTime);
+    document.getElementById("ppos").textContent = times.into + " · " + times.left;
+  }
+
   document.getElementById("pplay").onclick = () => { if (audio.paused) audio.play(); else audio.pause(); };
+  document.getElementById("pback15").onclick = () => skip(-SKIP_SECONDS);
+  document.getElementById("pfwd15").onclick = () => skip(SKIP_SECONDS);
+  document.getElementById("pprev").onclick = prevTrack;
+  document.getElementById("pnext").onclick = nextTrack;
+
   audio.addEventListener("play", () => document.getElementById("pplay").textContent = "⏸");
   audio.addEventListener("pause", () => document.getElementById("pplay").textContent = "▶");
-  audio.addEventListener("loadedmetadata", () => document.getElementById("player").classList.remove("disabled"));
-  audio.addEventListener("error", () => document.getElementById("player").classList.add("disabled"));
-  audio.addEventListener("timeupdate", () => {
-    const seek = document.getElementById("seek");
-    if (audio.duration) seek.value = (audio.currentTime / audio.duration) * 100;
-    document.getElementById("ptime").textContent = fmt(audio.currentTime) + " / " + fmt(audio.duration);
+  audio.addEventListener("loadedmetadata", () => {
+    document.getElementById("player").classList.remove("disabled");
+    syncPlayerUI();
   });
-  document.getElementById("seek").addEventListener("input", e => {
-    if (audio.duration) audio.currentTime = (e.target.value / 100) * audio.duration;
+  audio.addEventListener("error", () => document.getElementById("player").classList.add("disabled"));
+  audio.addEventListener("timeupdate", syncPlayerUI);
+  // Playback deliberately runs past a window's end: hearing the transition is
+  // how a boundary gets verified. Re-scope to whatever track we are now inside.
+  audio.addEventListener("timeupdate", () => {
+    const i = trackIndexAt(audio.currentTime);
+    if (i !== null && i !== playingIndex) {
+      setPlayingIndex(i, { scroll: true });
+      // The syncPlayerUI() listener above already ran this tick against the
+      // old index, so the thumb/position would otherwise show one stale
+      // frame (pegged to the old window's edge) until the next timeupdate.
+      syncPlayerUI();
+    }
+  });
+
+  const seekEl = document.getElementById("seek");
+  seekEl.addEventListener("pointerdown", () => { seekDragging = true; });
+  seekEl.addEventListener("pointerup", () => { seekDragging = false; });
+  seekEl.addEventListener("input", e => {
+    // Same fallback as skip()/prevTrack()/nextTrack(): before the first play
+    // playingIndex is null, but the scrubber should still work.
+    const i = playingIndex === null ? trackIndexAt(audio.currentTime) : playingIndex;
+    if (i === null) return;
+    const w = windowFor(i);
+    seekTo(w.start + (e.target.value / 1000) * w.length);
   });
 
   document.getElementById("save").onclick = async () => {
