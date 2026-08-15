@@ -258,7 +258,7 @@
 
     const play = document.createElement("button");
     play.className = "iconbtn play"; play.textContent = "▶";
-    play.onclick = (e) => { e.stopPropagation(); playFrom(i); };
+    play.onclick = (e) => { e.stopPropagation(); playFrom(i, { scroll: false }); };
     row.appendChild(play);
 
     const rej = document.createElement("button");
@@ -332,31 +332,107 @@
     wrap.addEventListener("focusout", () => { setTimeout(() => { if (!wrap.contains(document.activeElement)) commit(); }, 0); });
   }
 
-  function playFrom(i) {
-    const t = tracks[i];
+  function highlightPlayingRow(scroll) { /* implemented in the highlight task */ }
+
+  const SKIP_SECONDS = 15;
+  const PREV_RESTART_THRESHOLD = 3;  // ⏮ within this many seconds goes to the previous track
+
+  // Seeks clamp to the audio's real bounds, never to the track window: crossing
+  // a boundary is how a user checks whether that boundary is right.
+  function seekTo(seconds) {
+    if (!audio.duration) return;
+    audio.currentTime = Math.max(0, Math.min(seconds, audio.duration));
+    syncPlayerUI();
+  }
+
+  // Point the player at track i without seeking. `scroll` brings its row into
+  // view -- true only on automatic advance, since a row the user just clicked is
+  // already under their cursor and yanking the list would be hostile.
+  function setPlayingIndex(i, opts) {
+    if (i === null || !tracks[i]) return;
     playingIndex = i;
-    document.getElementById("plabel").textContent = (t.artist || "Unidentified") + (t.title ? " — " + t.title : "");
+    const t = tracks[i];
+    document.getElementById("plabel").textContent =
+      (t.artist || "Unidentified") + (t.title ? " — " + t.title : "");
+    document.getElementById("pcount").textContent = "track " + (i + 1) + " of " + tracks.length;
     const pt = document.getElementById("pthumb");
+    // backgroundImage, never the `background` shorthand -- see the CSS comment.
     pt.style.backgroundImage = t.coverart_url
       ? "url('" + t.coverart_url + "')"
       : GRADS[i % GRADS.length];
-    const start = () => { audio.currentTime = t.timestamp; audio.play(); };
+    highlightPlayingRow(opts && opts.scroll);
+  }
+
+  // `scroll` defaults to true: any jump the user did not initiate by clicking a
+  // specific row should bring the destination into view. Only the row's own ▶
+  // passes false, because that row is already under the cursor.
+  function playFrom(i, opts) {
+    const scroll = !opts || opts.scroll !== false;
+    setPlayingIndex(i, { scroll });
+    const start = () => { audio.currentTime = tracks[i].timestamp; audio.play(); };
     if (audio.readyState >= 1) start();
     else audio.addEventListener("loadedmetadata", start, { once: true });
   }
 
+  function skip(delta) { seekTo(audio.currentTime + delta); }
+
+  // Prev/next step through `tracks` by position, so rejected tracks are included
+  // -- a track is often auditioned before the decision to un-reject it.
+  function prevTrack() {
+    const i = playingIndex === null ? trackIndexAt(audio.currentTime) : playingIndex;
+    if (i === null) return;
+    // Familiar transport convention: restart this track unless already near its start.
+    const target = (audio.currentTime - tracks[i].timestamp > PREV_RESTART_THRESHOLD)
+      ? i : Math.max(0, i - 1);
+    playFrom(target);
+  }
+
+  function nextTrack() {
+    const i = playingIndex === null ? trackIndexAt(audio.currentTime) : playingIndex;
+    if (i === null) return;
+    playFrom(Math.min(tracks.length - 1, i + 1));
+  }
+
+  // Declared before syncPlayerUI, which reads it: `let` has no hoisted value,
+  // so defining it after would leave a temporal-dead-zone trap for any future
+  // caller that runs earlier than these listeners.
+  let seekDragging = false;
+
+  // Reflect audio state into the bar. Called on timeupdate and after any seek.
+  function syncPlayerUI() {
+    const seek = document.getElementById("seek");
+    document.getElementById("ptime").textContent =
+      fmt(audio.currentTime) + " / " + fmt(audio.duration);
+    if (playingIndex === null) return;
+    const w = windowFor(playingIndex);
+    const frac = Math.max(0, Math.min((audio.currentTime - w.start) / w.length, 1));
+    if (!seekDragging) seek.value = String(Math.round(frac * 1000));
+    const times = fmtWindowTimes(playingIndex, audio.currentTime);
+    document.getElementById("ppos").textContent = times.into + " · " + times.left;
+  }
+
   document.getElementById("pplay").onclick = () => { if (audio.paused) audio.play(); else audio.pause(); };
+  document.getElementById("pback15").onclick = () => skip(-SKIP_SECONDS);
+  document.getElementById("pfwd15").onclick = () => skip(SKIP_SECONDS);
+  document.getElementById("pprev").onclick = prevTrack;
+  document.getElementById("pnext").onclick = nextTrack;
+
   audio.addEventListener("play", () => document.getElementById("pplay").textContent = "⏸");
   audio.addEventListener("pause", () => document.getElementById("pplay").textContent = "▶");
-  audio.addEventListener("loadedmetadata", () => document.getElementById("player").classList.remove("disabled"));
-  audio.addEventListener("error", () => document.getElementById("player").classList.add("disabled"));
-  audio.addEventListener("timeupdate", () => {
-    const seek = document.getElementById("seek");
-    if (audio.duration) seek.value = (audio.currentTime / audio.duration) * 100;
-    document.getElementById("ptime").textContent = fmt(audio.currentTime) + " / " + fmt(audio.duration);
+  audio.addEventListener("loadedmetadata", () => {
+    document.getElementById("player").classList.remove("disabled");
+    syncPlayerUI();
   });
-  document.getElementById("seek").addEventListener("input", e => {
-    if (audio.duration) audio.currentTime = (e.target.value / 100) * audio.duration;
+  audio.addEventListener("error", () => document.getElementById("player").classList.add("disabled"));
+  audio.addEventListener("timeupdate", syncPlayerUI);
+
+  const seekEl = document.getElementById("seek");
+  seekEl.addEventListener("pointerdown", () => { seekDragging = true; });
+  seekEl.addEventListener("pointerup", () => { seekDragging = false; });
+  seekEl.addEventListener("input", e => {
+    if (playingIndex === null) return;
+    const w = windowFor(playingIndex);
+    seekTo(w.start + (e.target.value / 1000) * w.length);
   });
 
   document.getElementById("save").onclick = async () => {
