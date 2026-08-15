@@ -240,6 +240,50 @@ def resolve_audio_path(audio_path: Path | None, output_path: Path) -> Path | Non
     return find_audio_file(output_path)
 
 
+def apply_track_edit(
+    track: Track,
+    artist: str,
+    title: str,
+    corrections_db: "CorrectionsDB | None" = None,
+) -> bool:
+    """Apply an artist/title correction to one track, recording it for learning.
+
+    Shared by the TUI editor and the web editor so both front ends learn
+    corrections identically and cannot drift apart.
+
+    Clears ``coverart_url``. That URL is evidence attached to the *original*
+    Shazam identification, and ``fetch_artwork()`` tries it ahead of every
+    search. Left in place on a correction it short-circuits the waterfall, so
+    the chapter image keeps showing the misidentified track's cover under the
+    corrected text -- regenerating, because artist and title are in the cache
+    key, but regenerating the same wrong picture (#30). Dropping it lets iTunes
+    / Deezer / MusicBrainz search on what the user actually said the track is.
+
+    Returns True if the track changed.
+    """
+    if artist == track.artist and title == track.title:
+        return False
+
+    # Remember what Shazam said, so was_corrected and the display can tell
+    if track.original_artist is None:
+        track.original_artist = track.artist
+    if track.original_title is None:
+        track.original_title = track.title
+
+    track.artist = artist
+    track.title = title
+    track.coverart_url = None
+
+    if corrections_db and track.was_corrected:
+        corrections_db.add_correction(
+            original_artist=track.original_artist or "",
+            original_title=track.original_title or "",
+            corrected_artist=artist,
+            corrected_title=title,
+        )
+    return True
+
+
 def save_tracklist(
     tracklist: Tracklist,
     output_path: Path,
@@ -626,24 +670,8 @@ class TracklistEditor(App[None]):
             artist, title = result
             track = self.tracklist.tracks[idx]
 
-            # Store original values for correction learning
-            if track.original_artist is None:
-                track.original_artist = track.artist
-            if track.original_title is None:
-                track.original_title = track.title
-
-            track.artist = artist
-            track.title = title
-            self.unsaved_changes = True
-
-            # Record correction for learning
-            if self.corrections_db and track.was_corrected:
-                self.corrections_db.add_correction(
-                    original_artist=track.original_artist or "",
-                    original_title=track.original_title or "",
-                    corrected_artist=artist,
-                    corrected_title=title,
-                )
+            if apply_track_edit(track, artist, title, self.corrections_db):
+                self.unsaved_changes = True
 
             self._refresh_table()
             table = self.query_one("#track-table", DataTable)

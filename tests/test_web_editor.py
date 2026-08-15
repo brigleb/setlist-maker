@@ -61,6 +61,35 @@ def test_apply_edits_updates_and_records_correction(sample_tracklist, tmp_path):
     assert db.get_correction("Daft Punk", "Around the World") == ("Daft Punk", "Harder Better")
 
 
+def test_apply_edits_clears_stale_coverart_url_on_correction(sample_tracklist):
+    """Correcting a track retires the Shazam art URL so the waterfall re-searches (#30)."""
+    from setlist_maker.web_editor import apply_edits
+
+    track = sample_tracklist.tracks[0]
+    track.coverart_url = "https://cdn.shazam.com/wrong-album.jpg"
+
+    apply_edits(sample_tracklist, [{"index": 0, "artist": "Justice", "title": "Genesis"}], None)
+
+    assert track.coverart_url is None
+
+
+def test_apply_edits_keeps_coverart_url_when_only_rejecting(sample_tracklist):
+    """Rejecting a row re-sends its unchanged fields; that must not discard good art."""
+    from setlist_maker.web_editor import apply_edits
+
+    track = sample_tracklist.tracks[0]
+    track.coverart_url = "https://cdn.shazam.com/right-album.jpg"
+
+    apply_edits(
+        sample_tracklist,
+        [{"index": 0, "artist": "Daft Punk", "title": "Around the World", "rejected": True}],
+        None,
+    )
+
+    assert track.rejected is True
+    assert track.coverart_url == "https://cdn.shazam.com/right-album.jpg"
+
+
 def test_apply_edits_ignores_unknown_index(sample_tracklist):
     from setlist_maker.web_editor import apply_edits
 

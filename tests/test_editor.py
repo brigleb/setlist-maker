@@ -5,8 +5,53 @@ from setlist_maker.editor import (
     Track,
     Tracklist,
     TracklistEditor,
+    apply_track_edit,
     parse_markdown_tracklist,
 )
+
+
+class TestApplyTrackEdit:
+    """Tests for the correction step shared by the TUI and web front ends."""
+
+    def _track(self):
+        return Track(
+            timestamp=0,
+            artist="Wrong Artist",
+            title="Wrong Title",
+            coverart_url="https://cdn.shazam.com/wrong-album.jpg",
+        )
+
+    def test_correction_clears_stale_coverart_url(self):
+        """The Shazam URL belongs to the original ID; a correction retires it (#30)."""
+        track = self._track()
+        assert apply_track_edit(track, "Justice", "Genesis") is True
+        assert track.artist == "Justice"
+        assert track.title == "Genesis"
+        assert track.coverart_url is None
+
+    def test_unchanged_edit_keeps_artwork_and_reports_no_change(self):
+        """Re-sending an identical row must not discard artwork that is still right."""
+        track = self._track()
+        assert apply_track_edit(track, "Wrong Artist", "Wrong Title") is False
+        assert track.coverart_url == "https://cdn.shazam.com/wrong-album.jpg"
+        assert track.original_artist is None  # nothing to remember
+
+    def test_records_correction_and_remembers_original(self, temp_dir):
+        db = CorrectionsDB(db_path=temp_dir / "corrections.json")
+        track = self._track()
+        apply_track_edit(track, "Justice", "Genesis", db)
+        assert track.original_artist == "Wrong Artist"
+        assert track.original_title == "Wrong Title"
+        assert db.get_correction("Wrong Artist", "Wrong Title") == ("Justice", "Genesis")
+
+    def test_second_correction_keeps_the_first_original(self):
+        """original_* must stay pinned to what Shazam said, not the last guess."""
+        track = self._track()
+        apply_track_edit(track, "Justice", "Genesis")
+        apply_track_edit(track, "Justice", "D.A.N.C.E.")
+        assert track.original_artist == "Wrong Artist"
+        assert track.original_title == "Wrong Title"
+        assert track.coverart_url is None
 
 
 class TestTrack:

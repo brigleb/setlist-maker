@@ -22,6 +22,7 @@ from setlist_maker.editor import (
     CorrectionsDB,
     Track,
     Tracklist,
+    apply_track_edit,
     resolve_audio_path,
     save_tracklist,
 )
@@ -91,8 +92,9 @@ def apply_edits(
 ) -> None:
     """Apply per-track edits and rejections in place, recording corrections.
 
-    Mirrors ``editor._on_edit_complete`` + ``action_toggle_reject`` so the web
-    editor learns corrections identically to the TUI. Existing tracks are keyed
+    Corrections go through the shared ``editor.apply_track_edit`` -- the same
+    call the TUI makes -- so both front ends learn corrections and invalidate
+    stale artwork identically. Existing tracks are keyed
     by their stable ``index``; an edit with no ``index`` is a track the user
     inserted in the page, which is appended and re-sorted into chronological
     position. Inserted tracks are not Shazam corrections, so none is recorded.
@@ -122,20 +124,7 @@ def apply_edits(
         track = by_index.get(edit.get("index"))
         if track is None:
             continue
-        if new_artist != track.artist or new_title != track.title:
-            if track.original_artist is None:
-                track.original_artist = track.artist
-            if track.original_title is None:
-                track.original_title = track.title
-            track.artist = new_artist
-            track.title = new_title
-            if corrections_db and track.was_corrected:
-                corrections_db.add_correction(
-                    original_artist=track.original_artist or "",
-                    original_title=track.original_title or "",
-                    corrected_artist=new_artist,
-                    corrected_title=new_title,
-                )
+        apply_track_edit(track, new_artist, new_title, corrections_db)
         track.rejected = bool(edit.get("rejected", track.rejected))
 
     if inserted:
