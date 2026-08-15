@@ -110,6 +110,11 @@ CLI application with the following modules:
   feeds the editor or `chapters` must supply `coverart_url` (the JSON sidecar's, via
   `_load_tracklist_with_artwork_urls()`) — parsing markdown alone leaves it `None` and
   silently keys the preview differently from the embed.
+  Regeneration is necessary but **not sufficient** on a correction: `fetch_artwork()`
+  tries `coverart_url` ahead of every search, so a corrected track whose stale Shazam
+  URL survived would re-key, re-fetch, and composite the *same wrong cover* under the
+  new text. `editor.apply_track_edit()` clearing the URL is what makes the new key
+  resolve to new art (#30).
 - Per-key locks — `RLock`, since `chapter_image()` calls `source_artwork()` for the
   *same* key while still holding its own lock — dedupe concurrent requests; a
   semaphore caps simultaneous network fetches at 4 (compositing is local PIL work and
@@ -120,6 +125,12 @@ CLI application with the following modules:
 - **TracklistEditor:** Textual app providing spreadsheet-like interface
 - **EditTrackScreen:** Modal dialog for editing artist/title fields
 - **CorrectionsDB:** Persistent storage for user corrections (~/.config/setlist-maker/corrections.json)
+- **apply_track_edit():** The one place a correction lands on a `Track` — shared with the
+  web editor (like `save_tracklist()`) so the two front ends cannot drift. Stamps
+  `original_*` once, records the correction, and **clears `coverart_url`**: that URL is
+  evidence attached to the *original* identification, and leaving it attached pins the
+  chapter art to the misidentified track (#30). No-ops when nothing changed, so
+  rejecting a row — which re-sends its unchanged fields — keeps art that is still right.
 - **parse_markdown_tracklist():** Parses existing markdown files for editing
 - **Audio preview:** `p` previews the selected track's 30s window via `PlaybackController`
   (see `playback.py`). `_resolve_audio_path()` locates the source audio (threaded in from the
@@ -152,7 +163,8 @@ CLI application with the following modules:
   A rebound request still carries the attacker's `Host`, which is what this rejects (#26).
 - **Pure helpers:** `tracklist_to_api()` and `apply_edits()` are socket-free and
   unit-tested directly. `apply_edits()` maps edits onto existing tracks by stable
-  `index`; an edit with **no** `index` is a track inserted via the page's per-row
+  `index` and puts each one through `editor.apply_track_edit()` — the TUI's own
+  correction step; an edit with **no** `index` is a track inserted via the page's per-row
   "＋ Add below" control — it's appended with its own `timestamp` and the list is
   re-sorted into chronological position (inserts aren't corrections, so none is
   recorded). The page sends existing rows by `index` (not array position, which

@@ -340,3 +340,28 @@ def test_concurrent_calls_generate_once(monkeypatch):
     assert len(results) == 2
     assert results[0] == results[1]
     assert len(calls) == 1
+
+
+def test_corrected_track_searches_on_new_metadata_not_the_stale_url(monkeypatch):
+    """End-to-end guard for #30, spanning the editor's edit step and the lookup.
+
+    ``fetch_artwork()`` tries ``coverart_url`` ahead of every search, so a
+    correction that left the URL attached kept re-downloading the misidentified
+    track's cover -- regenerating (artist and title are in the cache key) but
+    regenerating the same wrong picture.
+    """
+    from setlist_maker.artwork_cache import source_artwork
+    from setlist_maker.editor import Track, apply_track_edit
+
+    track = Track(
+        timestamp=0,
+        artist="Wrong Artist",
+        title="Wrong Title",
+        coverart_url="https://cdn.shazam.com/wrong-album.jpg",
+    )
+    apply_track_edit(track, "Justice", "Genesis")
+
+    calls = _fake_art(monkeypatch)
+    source_artwork(track.artist, track.title, track.coverart_url)
+
+    assert calls == [("Justice", "Genesis", None)]
