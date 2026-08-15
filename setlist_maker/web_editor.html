@@ -115,6 +115,12 @@
   let tracks = [];
   let dirty = false;
   let playingIndex = null;
+  // The playing track *object*, held alongside the bare index. addBelow()'s
+  // splice and commit()'s re-sort can both move the playing track to a
+  // different array position without changing what's on screen for it --
+  // reindexPlayingTrack() re-derives playingIndex from this reference so a
+  // stale bare index never points at a different track after either mutation.
+  let playingTrack = null;
   const audio = document.getElementById("audio");
   const summaryEl = document.getElementById("summary");
   function autosizeSummary() { summaryEl.style.height = "auto"; summaryEl.style.height = summaryEl.scrollHeight + "px"; }
@@ -159,6 +165,19 @@
     return { into: fmt(into) + " in", left: fmt(w.length - into) + " left" };
   }
 
+  // Re-derive playingIndex from playingTrack after a mutation that can move
+  // array positions (splice, sort). Called at those two mutation sites, not
+  // generally -- reload via load() replaces every track object wholesale, and
+  // deliberately leaves playingIndex as a bare number: the reload preserves
+  // ordering, so the number is still correct, and the next setPlayingIndex()
+  // call (from render()) re-resolves playingTrack against the fresh objects.
+  function reindexPlayingTrack() {
+    if (!playingTrack) return;
+    const idx = tracks.indexOf(playingTrack);
+    playingIndex = idx === -1 ? null : idx;
+    if (idx === -1) playingTrack = null;
+  }
+
   function setDirty(v) { dirty = v; document.getElementById("save").disabled = !v; }
   function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); }
 
@@ -189,7 +208,11 @@
     list.innerHTML = "";
     tracks.forEach((t, i) => list.appendChild(rowEl(t, i)));
     updateCounts();
-    highlightPlayingRow(false);
+    // Not just the highlight: an edit to the playing track's artist/title, or
+    // an insert that shifts its position, must also refresh the player bar's
+    // label/count/artwork. setPlayingIndex() no-ops safely when playingIndex
+    // is null and cannot recurse back into render().
+    setPlayingIndex(playingIndex, { scroll: false });
   }
 
   let artVersion = 0;  // bumped on save so re-requested thumbs bypass the browser's decoded-image cache
@@ -217,13 +240,20 @@
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && overlay.classList.contains("open")) { overlay.click(); return; }
     // Never steal keys from an editor: artist/title/time fields and the summary
-    // textarea all need Space and the arrows to behave normally.
+    // textarea all need Space and the arrows to behave normally. #seek is an
+    // INPUT too, but deliberately excluded -- e.preventDefault() below already
+    // blocks its native arrow-key stepping, so arrows should seek rather than
+    // get eaten here just because the scrubber has focus.
     const el = document.activeElement;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return;
+    if (el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && el.type !== "range"))) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (document.getElementById("player").classList.contains("disabled")) return;
     switch (e.key) {
-      case " ":        e.preventDefault(); document.getElementById("pplay").click(); break;
+      case " ":
+        // Space normally activates a focused button; only #pplay should
+        // intercept it here, so Tab-to-Save-and-press-Space still saves.
+        if (el && el.tagName === "BUTTON" && el.id !== "pplay") return;
+        e.preventDefault(); document.getElementById("pplay").click(); break;
       case "ArrowLeft":  e.preventDefault(); skip(-SKIP_SECONDS); break;
       case "ArrowRight": e.preventDefault(); skip(SKIP_SECONDS); break;
       case "ArrowUp":    e.preventDefault(); prevTrack(); break;
@@ -305,6 +335,7 @@
     const cur = tracks[i], next = tracks[i + 1];
     const ts = next ? Math.floor((cur.timestamp + next.timestamp) / 2) : cur.timestamp + INSERT_TAIL_GAP;
     tracks.splice(i + 1, 0, { artist: "", title: "", timestamp: ts, time: fmt(ts), rejected: false, _new: true });
+    reindexPlayingTrack();  // the splice can shift the playing track's index
     setDirty(true);
     render();
     const row = document.getElementById("list").children[i + 1];
@@ -336,7 +367,11 @@
       if (na !== t.artist || nt !== t.title) { t.artist = na; t.title = nt; if (!isNew) t._edited = true; setDirty(true); }
       if (tm) {
         const secs = parseTime(tm.value);
-        if (secs !== null && secs !== t.timestamp) { t.timestamp = secs; setDirty(true); tracks.sort((x, y) => x.timestamp - y.timestamp); }
+        if (secs !== null && secs !== t.timestamp) {
+          t.timestamp = secs; setDirty(true);
+          tracks.sort((x, y) => x.timestamp - y.timestamp);
+          reindexPlayingTrack();  // the re-sort can shift the playing track's index
+        }
         t.time = fmt(t.timestamp);
       }
       render();
@@ -376,6 +411,7 @@
     if (i === null || !tracks[i]) return;
     playingIndex = i;
     const t = tracks[i];
+    playingTrack = t;
     document.getElementById("plabel").textContent =
       (t.artist || "Unidentified") + (t.title ? " — " + t.title : "");
     document.getElementById("pcount").textContent = "track " + (i + 1) + " of " + tracks.length;
@@ -393,7 +429,11 @@
   function playFrom(i, opts) {
     const scroll = !opts || opts.scroll !== false;
     setPlayingIndex(i, { scroll });
-    const start = () => { audio.currentTime = tracks[i].timestamp; audio.play(); };
+    // Capture the track now, not inside start(): if metadata is still
+    // loading, start() runs later and a re-indexed `tracks[i]` at that point
+    // could be a different track (or throw if tracks was replaced by load()).
+    const track = tracks[i];
+    const start = () => { audio.currentTime = track.timestamp; audio.play(); };
     if (audio.readyState >= 1) start();
     else audio.addEventListener("loadedmetadata", start, { once: true });
   }
@@ -453,15 +493,24 @@
   // how a boundary gets verified. Re-scope to whatever track we are now inside.
   audio.addEventListener("timeupdate", () => {
     const i = trackIndexAt(audio.currentTime);
-    if (i !== null && i !== playingIndex) setPlayingIndex(i, { scroll: true });
+    if (i !== null && i !== playingIndex) {
+      setPlayingIndex(i, { scroll: true });
+      // The syncPlayerUI() listener above already ran this tick against the
+      // old index, so the thumb/position would otherwise show one stale
+      // frame (pegged to the old window's edge) until the next timeupdate.
+      syncPlayerUI();
+    }
   });
 
   const seekEl = document.getElementById("seek");
   seekEl.addEventListener("pointerdown", () => { seekDragging = true; });
   seekEl.addEventListener("pointerup", () => { seekDragging = false; });
   seekEl.addEventListener("input", e => {
-    if (playingIndex === null) return;
-    const w = windowFor(playingIndex);
+    // Same fallback as skip()/prevTrack()/nextTrack(): before the first play
+    // playingIndex is null, but the scrubber should still work.
+    const i = playingIndex === null ? trackIndexAt(audio.currentTime) : playingIndex;
+    if (i === null) return;
+    const w = windowFor(i);
     seekTo(w.start + (e.target.value / 1000) * w.length);
   });
 

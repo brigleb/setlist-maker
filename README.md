@@ -161,6 +161,11 @@ previous/next track, and the playing row is highlighted in the list.
 | `←` / `→` | Back / forward 15 seconds |
 | `↑` / `↓` | Previous / next track |
 
+⏮ restarts the current track, unless you're within the first 3 seconds of
+it — then it jumps to the previous track instead, the familiar transport
+convention. ⏮, ⏭, and ↑/↓ all start playback if it's paused; ←/→ only seek
+and don't start playback on their own.
+
 Playback deliberately continues past the end of a track rather than stopping,
 so you can hear whether a boundary lands in the right place; the player follows
 along and re-scopes to the new track.

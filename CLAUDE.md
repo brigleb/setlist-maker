@@ -187,16 +187,28 @@ CLI application with the following modules:
 - **Track-focused player:** the scrubber spans the *current track's window*
   (its timestamp → the next track's; the last → audio duration), not the whole
   recording. On a 4-hour set the global bar was 13.6 s/px, so fine positioning
-  was unavailable; the window takes that to ~0.23 s/px. Windows come from
-  `windowFor(i)`, derived on demand so an inserted row needs no bookkeeping,
-  and clamped to ≥1s so duplicate timestamps cannot divide by zero. Playback
+  was unavailable; a window brings that down to roughly 0.1-0.2 s/px depending
+  on track length (measured ~0.143 s/px on a 3-minute track). Windows come from
+  `windowFor(i)`, derived on demand so an inserted row needs no bookkeeping for
+  its *window* — but the playing track's bare array index does: `addBelow()`'s
+  splice and `commit()`'s re-sort can both move it, so a module-scope
+  `playingTrack` reference is re-resolved to a fresh `playingIndex` via
+  `tracks.indexOf()` (`reindexPlayingTrack()`) at both mutation sites. Windows
+  are clamped to ≥1s so duplicate timestamps cannot divide by zero. Playback
   deliberately runs *past* a window's end and re-scopes via `trackIndexAt()` —
   hearing the transition is how a boundary gets verified — and ±15s seeks clamp
   only to `[0, duration]`, never to the window, for the same reason. The playing
-  row is highlighted (`.row.playing`) and scrolled into view whenever the playing
-  index changes for any reason other than the user clicking that row's own ▶ button —
-  so automatic advance and manual prev/next both scroll, and only a row's own ▶ does not.
-  Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, all suppressed while focus is in an input/textarea.
+  row is highlighted (`.row.playing`) and scrolled into view whenever
+  `setPlayingIndex()` is called with `scroll: true` — automatic boundary
+  advance and manual prev/next, *including* `prevTrack()`'s restart branch,
+  which scrolls even though the index is unchanged — and left unscrolled only
+  for a row's own ▶ button, since that row is already under the cursor.
+  `render()` also calls `setPlayingIndex()` (with `scroll: false`) so the
+  player bar's label/count/artwork stay correct after an edit or insert, not
+  just the row highlight.
+  Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, all suppressed while focus is in an
+  input/textarea — except `#seek`, a range input that's deliberately exempted
+  so the arrows still seek when the scrubber has focus.
 
 ### `setlist_maker/playback.py` - Editor audio preview
 - **PlaybackController:** Drives a non-blocking `ffplay` subprocess (`play()` / `stop()` /
