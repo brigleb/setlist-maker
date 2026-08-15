@@ -291,7 +291,8 @@ class TestPlayerCompatibility:
         chapters = json.loads(result.stdout)["chapters"]
         assert len(chapters) == len(sample_tracks)
 
-        # CHAP frame order in the file is arbitrary; players order by start time
+        # Sorted so this stays purely a #17 readability guard; physical CHAP
+        # order is TestChapterFrameOrder's job (#33).
         chapters.sort(key=lambda c: int(c["start"]))
         assert [c["tags"]["title"] for c in chapters] == [
             "Daft Punk - Around the World",
@@ -318,6 +319,82 @@ class TestPlayerCompatibility:
         slim_size = temp_mp3.stat().st_size
 
         assert slim_size < fat_size - 500_000
+
+
+class TestChapterFrameOrder:
+    """
+    Regression tests for issue #33: mutagen sorts frames by serialized size at
+    save time, so per-chapter artwork of differing sizes scatters CHAP frames
+    through the tag. CTOC still orders them for conforming players, but
+    ffprobe/ffmpeg -- and hosts and web players built on them -- enumerate CHAP
+    frames in file order and show a shuffled chapter list.
+    """
+
+    @staticmethod
+    def _shrinking_images(tracks):
+        """Artwork that gets *smaller* with each chapter.
+
+        mutagen's size sort then writes the CHAP frames in exact reverse, so an
+        unfixed embed fails these tests outright instead of passing by luck.
+        """
+        images = {i: _make_test_jpeg(300 - 100 * i) for i in range(len(tracks))}
+        sizes = [len(images[i]) for i in range(len(tracks))]
+        assert sizes == sorted(sizes, reverse=True) and len(set(sizes)) == len(sizes)
+        return images
+
+    def test_chap_frames_are_chronological_on_disk(self, temp_mp3, sample_tracks):
+        """mutagen reads frames back in physical order, so it doubles as the oracle."""
+        embed_chapters(
+            temp_mp3, sample_tracks, chapter_images=self._shrinking_images(sample_tracks)
+        )
+
+        chaps = MP3(str(temp_mp3)).tags.getall("CHAP")
+        assert [c.start_time for c in chaps] == [0, 90_000, 210_000]
+        assert [c.element_id for c in chaps] == ["chp000", "chp001", "chp002"]
+
+    def test_reordering_only_permutes_the_tag(self, temp_mp3, sample_tracks):
+        """The rewrite must not resize the tag or touch a byte of audio."""
+        audio_bytes = temp_mp3.read_bytes()  # the fixture has no tag yet: pure audio
+        embed_chapters(
+            temp_mp3, sample_tracks, chapter_images=self._shrinking_images(sample_tracks)
+        )
+        data = temp_mp3.read_bytes()
+        assert data[:6] == b"ID3\x03\x00\x00"
+        tag_size = 0  # syncsafe: 7 bits per byte
+        for byte in data[6:10]:
+            tag_size = (tag_size << 7) | (byte & 0x7F)
+        assert data[10 + tag_size :] == audio_bytes
+
+    @pytest.mark.skipif(shutil.which("ffprobe") is None, reason="ffprobe not installed")
+    def test_ffprobe_lists_chapters_in_order(self, temp_mp3, sample_tracks):
+        """The real consumer that reads physical order must now see them chronological."""
+        embed_chapters(
+            temp_mp3, sample_tracks, chapter_images=self._shrinking_images(sample_tracks)
+        )
+
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-loglevel",
+                "error",
+                "-print_format",
+                "json",
+                "-show_chapters",
+                str(temp_mp3),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        chapters = json.loads(result.stdout)["chapters"]
+        # Deliberately NOT sorted here: ffprobe reports frames in file order,
+        # and that order is exactly what this guards.
+        assert [int(c["start"]) for c in chapters] == [0, 90_000, 210_000]
+        assert [c["tags"]["title"] for c in chapters] == [
+            "Daft Punk - Around the World",
+            "The Chemical Brothers - Block Rockin' Beats",
+            "Fatboy Slim - Praise You",
+        ]
 
 
 class TestRemoveExistingChapters:

@@ -85,6 +85,16 @@ CLI application with the following modules:
   Saves as **ID3v2.3**, never mutagen's default v2.4 — players misparse v2.4 syncsafe
   CHAP sub-frame sizes once an artwork APIC sub-frame exceeds 128 bytes and silently
   drop every chapter (#17). Guarded by an ffprobe round-trip regression test.
+  After `save()`, `_order_chap_frames_chronologically()` rewrites the tag so the CHAP
+  frames sit in time order: mutagen sorts every frame by serialized size at save time
+  (only APIC keeps insertion order), so differing chapter artwork scatters them, and
+  while conforming players follow `CTOC`, ffprobe/ffmpeg — and hosts and web players
+  built on them — enumerate CHAP frames in file order and show a shuffled list (#33).
+  mutagen has no ordering hook and all its serialization is private, so this permutes
+  frames in the saved bytes instead: the tag is a fixed-size region, so the audio never
+  moves, and any layout it doesn't expect (other version, tag/frame flags, short frame)
+  leaves the file exactly as mutagen wrote it. Guarded by `TestChapterFrameOrder`, whose
+  artwork *shrinks* per chapter so an unfixed embed writes them in exact reverse.
 - **fetch_artwork():** Waterfall lookup across Shazam CDN, iTunes, Deezer, MusicBrainz/Cover Art Archive
 - **create_chapter_image():** Builds per-chapter artwork with an MTV-style lower-third overlay
 - **load_cover_image():** Normalizes a user-supplied episode cover (`--cover`) for embedding —

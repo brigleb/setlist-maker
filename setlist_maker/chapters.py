@@ -9,6 +9,7 @@ Uses the mutagen library to write ID3v2 tags following the
 ID3v2 Chapter Frame Addendum v1.0 specification.
 """
 
+import struct
 from pathlib import Path
 
 from mutagen.id3 import APIC, CHAP, CTOC, TIT2, CTOCFlags, Encoding, PictureType
@@ -141,7 +142,68 @@ def embed_chapters(
     # ffmpeg) misparse v2.4 syncsafe CHAP sub-frame sizes once artwork pushes
     # a sub-frame past 128 bytes, discarding all chapters (issue #17).
     audio.save(v2_version=3)
+    _order_chap_frames_chronologically(audio_path)
     return audio_path
+
+
+def _order_chap_frames_chronologically(audio_path: Path) -> None:
+    """Rewrite the just-saved ID3v2.3 tag so its CHAP frames sit in time order.
+
+    mutagen sorts every frame at save time by serialized size (only APIC keeps
+    insertion order), so per-chapter artwork of differing sizes scatters CHAP
+    frames through the tag. CTOC still names the presentation order and
+    conforming players follow it, but ffmpeg/ffprobe -- and every host or web
+    player built on them -- enumerate CHAP frames in file order and show a
+    shuffled chapter list (issue #33). mutagen exposes no ordering hook and all
+    of its serialization is private, so this permutes the frames in the bytes it
+    wrote instead. The tag is a fixed-size region (header, frames, padding), so
+    reordering frames inside it never moves the audio; anything this parser does
+    not expect (another version, tag or frame flags, a short frame) leaves the
+    file exactly as mutagen saved it, which is the pre-fix status quo.
+    """
+    with open(audio_path, "r+b") as f:
+        header = f.read(10)
+        # Only the shape save(v2_version=3) writes: v2.3, no unsync/extended
+        # header flags. Tag size is a 4-byte syncsafe integer (7 bits per byte).
+        if header[:6] != b"ID3\x03\x00\x00":
+            return
+        tag_size = 0
+        for byte in header[6:10]:
+            tag_size = (tag_size << 7) | (byte & 0x7F)
+        body = f.read(tag_size)
+
+        frames: list[tuple[bytes, bytes]] = []  # (frame id, raw frame incl. header)
+        try:
+            pos = 0
+            while pos + 10 <= len(body):
+                frame_id = body[pos : pos + 4]
+                if frame_id == b"\x00\x00\x00\x00":
+                    break  # padding
+                # v2.3 frame sizes are plain big-endian, not syncsafe
+                (size,) = struct.unpack(">L", body[pos + 4 : pos + 8])
+                end = pos + 10 + size
+                if end > len(body):
+                    raise ValueError("truncated frame")
+                frames.append((frame_id, body[pos:end]))
+                pos = end
+            chaps = [raw for frame_id, raw in frames if frame_id == b"CHAP"]
+            ordered = sorted(chaps, key=_chap_start_ms)
+        except (ValueError, struct.error):
+            return  # something this parser does not understand: leave the tag as saved
+        if ordered == chaps:
+            return
+
+        by_time = iter(ordered)
+        f.seek(10)
+        f.write(b"".join(next(by_time) if fid == b"CHAP" else raw for fid, raw in frames))
+
+
+def _chap_start_ms(raw: bytes) -> int:
+    """Start time of a raw v2.3 CHAP frame: NUL-terminated element id, then uint32 ms."""
+    if raw[8:10] != b"\x00\x00":
+        raise ValueError("frame flags would shift the CHAP payload")  # mutagen sets none
+    at = raw.index(b"\x00", 10) + 1
+    return struct.unpack(">L", raw[at : at + 4])[0]
 
 
 def _remove_existing_chapters(audio: MP3) -> None:
