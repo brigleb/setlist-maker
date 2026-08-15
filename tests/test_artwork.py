@@ -3,6 +3,7 @@
 import io
 from unittest.mock import MagicMock, patch
 
+import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from setlist_maker.artwork import (
@@ -449,3 +450,92 @@ class TestFetchArtworkWaterfall:
         result = fetch_artwork("Artist", "Title")
 
         assert result is None
+
+
+class TestLoadCoverImage:
+    """Tests for user-supplied episode cover images (--cover)."""
+
+    @staticmethod
+    def _write(path, size, color=(200, 30, 30)):
+        from PIL import Image
+
+        Image.new("RGB", size, color).save(path, format="JPEG")
+        return path
+
+    def test_square_cover_is_normalized_to_chapter_size(self, tmp_path):
+        from setlist_maker.artwork import CHAPTER_IMAGE_SIZE, load_cover_image
+
+        src = self._write(tmp_path / "cover.jpg", (1080, 1080))
+        data = load_cover_image(src)
+
+        from io import BytesIO
+
+        from PIL import Image
+
+        out = Image.open(BytesIO(data))
+        assert out.size == (CHAPTER_IMAGE_SIZE, CHAPTER_IMAGE_SIZE)
+        assert out.format == "JPEG"
+
+    def test_wide_cover_is_center_cropped_not_squashed(self, tmp_path):
+        """A 2:1 source must crop to square; squashing would distort the art.
+
+        The two are only distinguishable by content that a crop *discards*.
+        Colored bands at the far edges survive a squash (compressed inward) and
+        vanish under a center crop, so they are what this asserts on -- an
+        earlier version compared left/right halves, which a squash preserves
+        just as faithfully, and passed against a squashing implementation.
+        """
+        from io import BytesIO
+
+        from PIL import Image
+
+        from setlist_maker.artwork import load_cover_image
+
+        # 1200x600 red, with green bands in the outer 150px at each edge.
+        # A center crop keeps x=300..900, discarding both bands entirely.
+        img = Image.new("RGB", (1200, 600), (200, 30, 30))
+        band = Image.new("RGB", (150, 600), (0, 220, 0))
+        img.paste(band, (0, 0))
+        img.paste(band, (1050, 0))
+        src = tmp_path / "wide.jpg"
+        img.save(src, format="JPEG")
+
+        out = Image.open(BytesIO(load_cover_image(src))).convert("RGB")
+        assert out.size[0] == out.size[1]
+        for x in (5, out.size[0] - 6):
+            pixel = out.getpixel((x, out.size[1] // 2))
+            assert pixel[0] > pixel[1], (
+                f"edge pixel {pixel} at x={x} is still green -- the source was squashed "
+                f"into a square instead of center-cropped"
+            )
+
+    def test_no_lower_third_overlay_is_drawn(self, tmp_path):
+        """A hand-picked cover is finished art -- it must not get a text bar."""
+        from io import BytesIO
+
+        from PIL import Image
+
+        from setlist_maker.artwork import create_chapter_image, load_cover_image
+
+        src = self._write(tmp_path / "cover.jpg", (600, 600), color=(220, 40, 40))
+        plain = Image.open(BytesIO(load_cover_image(src)))
+        overlaid = Image.open(BytesIO(create_chapter_image(src.read_bytes(), "A", "T")))
+
+        # Sample inside the lower-third bar create_chapter_image draws at 72%
+        y = int(plain.size[1] * 0.85)
+        assert plain.getpixel((plain.size[0] // 2, y))[0] > 150  # still bright red
+        assert overlaid.getpixel((overlaid.size[0] // 2, y))[0] < 100  # darkened by the bar
+
+    def test_missing_file_raises_cover_image_error(self, tmp_path):
+        from setlist_maker.artwork import CoverImageError, load_cover_image
+
+        with pytest.raises(CoverImageError):
+            load_cover_image(tmp_path / "nope.jpg")
+
+    def test_non_image_raises_cover_image_error(self, tmp_path):
+        from setlist_maker.artwork import CoverImageError, load_cover_image
+
+        bogus = tmp_path / "notanimage.jpg"
+        bogus.write_text("this is not an image")
+        with pytest.raises(CoverImageError):
+            load_cover_image(bogus)

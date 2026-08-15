@@ -163,6 +163,9 @@ setlist-maker chapters my_set_tracklist.md --audio my_set.mp3
 
 # Chapters only, skip artwork fetching
 setlist-maker chapters my_set_tracklist.md --no-artwork
+
+# Use your own image as the episode cover
+setlist-maker chapters my_set_tracklist.md --cover artwork/keys-lounge.jpg
 ```
 
 You can also skip the separate step and chain chapter embedding directly onto
@@ -178,6 +181,65 @@ This writes ID3v2 CHAP/CTOC frames into the MP3. Podcast players (Apple Podcasts
 Tags are written as ID3v2.3 — the ecosystem convention for podcast chapters. Players widely misparse ID3v2.4's syncsafe CHAP sub-frame sizes once artwork pushes a sub-frame past 128 bytes, silently hiding every chapter (see issue #17).
 
 For each track, artwork is fetched using a waterfall of sources: Shazam CDN, iTunes, Deezer, and MusicBrainz/Cover Art Archive. Remix tags and featuring info are automatically stripped for smarter search fallbacks. Each chapter image gets an MTV-style lower-third overlay with the artist and title.
+
+#### Choosing your own episode cover
+
+By default the episode cover is the first track's artwork, relabelled with the
+set name. To use your own image instead — a poster, a flyer, a photo — pass
+`--cover`:
+
+```bash
+setlist-maker chapters my_set_tracklist.md --cover artwork/keys-lounge.jpg
+```
+
+Your image is used as-is, with **no lower-third overlay** — a cover you picked
+is finished art, not a generated chapter card. Non-square images are
+center-cropped rather than squashed. Per-track chapter artwork is untouched, so
+every track still shows its own album art as it plays.
+
+It also works with `--no-artwork`, if you want your cover but no per-track
+lookups, and on the `identify` chain:
+
+```bash
+setlist-maker my_set.mp3 -w --chapters --cover artwork/keys-lounge.jpg
+```
+
+### Finalizing a set
+
+Once the tracklist looks right in the editor — correct titles, artwork you're
+happy with — here's the path to a finished MP3.
+
+**In the browser, click Save before Done.** Done closes the editor and warns
+about unsaved changes, but it does not save them. Everything downstream reads
+from disk.
+
+**If you launched with `--chapters`, you're finished** — clicking Done chains
+straight into embedding:
+
+```bash
+setlist-maker my_set.mp3 -w --chapters
+```
+
+**Otherwise, run `chapters` when you're done editing:**
+
+```bash
+setlist-maker chapters my_set_tracklist.md
+```
+
+This is fast and holds no surprises: `chapters` builds each image through the
+same cached path the browser preview used, so the artwork you approved is
+byte-identical to the artwork embedded, and it's cache hits rather than fresh
+lookups.
+
+Worth knowing before you run it:
+
+- **It writes into the MP3 in place.** Tags only — the audio is untouched — but
+  no copy is made, so back up first if that matters.
+- **Rejected tracks are dropped** from the chapter list entirely.
+- **Unidentified tracks you didn't reject still get a chapter marker** at their
+  timestamp, just no image.
+- Add `--cover` for your own episode cover (above), or `--no-artwork` for
+  markers only.
 
 ### Learning from Corrections
 
@@ -197,6 +259,7 @@ setlist-maker recording.mp3 --no-learn
 | `-e, --edit` | Open interactive editor after processing |
 | `--chapters` | Embed chapter markers and artwork into each MP3 after identifying (and editing) |
 | `--no-artwork` | With `--chapters`, embed chapter markers only (skip artwork fetching) |
+| `--cover` | With `--chapters`, use this image as the episode cover instead of the first track's artwork |
 | `-o, --output-dir` | Output directory for tracklist files (default: same as input) |
 | `-d, --delay` | Delay in seconds between API calls (default: 15) |
 | `--no-resume` | Start fresh instead of resuming from previous progress |
@@ -209,6 +272,7 @@ setlist-maker recording.mp3 --no-learn
 |--------|-------------|
 | `--audio` | Path to the MP3 file (auto-detected from tracklist name if omitted) |
 | `--no-artwork` | Skip artwork fetching (embed chapter markers only) |
+| `--cover` | Use this image as the episode cover instead of the first track's artwork |
 
 ### Global Options
 

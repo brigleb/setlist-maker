@@ -39,6 +39,7 @@ def _identify_args(**overrides):
         singleton_confidence=SINGLETON_CONFIDENCE_KEEP,
         no_smoothing=False,
         web_edit=False,
+        cover=None,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -708,3 +709,112 @@ def test_episode_cover_reuses_cached_source_art(monkeypatch, tmp_path, sample_tr
     embed_chapters_for_tracklist(sample_tracklist, tmp_path / "set.mp3", fetch_art=True)
 
     assert embedded["episode_image"] is not None
+
+
+def _capture_embed(monkeypatch):
+    """Intercept embed_chapters and return the kwargs dict it was called with."""
+    embedded = {}
+    monkeypatch.setattr(
+        "setlist_maker.cli.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
+    )
+    return embedded
+
+
+def test_cover_image_replaces_episode_cover_and_leaves_chapter_art_alone(
+    monkeypatch, tmp_path, sample_tracklist
+):
+    """--cover overrides the episode cover; per-track chapter images keep their art."""
+    import io
+
+    from PIL import Image
+
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    track_art = (200, 20, 21)
+    cover_art = (20, 200, 30)
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: _jpeg(track_art),
+    )
+    embedded = _capture_embed(monkeypatch)
+
+    embed_chapters_for_tracklist(
+        sample_tracklist, tmp_path / "set.mp3", fetch_art=True, cover_image=_jpeg(cover_art)
+    )
+
+    cover = Image.open(io.BytesIO(embedded["episode_image"])).convert("RGB")
+    assert cover.getpixel((0, 0))[1] > cover.getpixel((0, 0))[0], (
+        "episode cover is not the supplied image"
+    )
+
+    # per-track composites still built from the fetched track art
+    assert embedded["chapter_images"], "chapter images were skipped"
+    first = Image.open(io.BytesIO(next(iter(embedded["chapter_images"].values())))).convert("RGB")
+    assert first.getpixel((0, 0))[0] > first.getpixel((0, 0))[1], "chapter art was overwritten"
+
+
+def test_cover_image_is_embedded_even_with_no_artwork(monkeypatch, tmp_path, sample_tracklist):
+    """--cover --no-artwork: the hand-picked cover survives, per-track art is skipped."""
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    embedded = _capture_embed(monkeypatch)
+    cover = _jpeg((20, 200, 30))
+
+    embed_chapters_for_tracklist(
+        sample_tracklist, tmp_path / "set.mp3", fetch_art=False, cover_image=cover
+    )
+
+    assert embedded["episode_image"] == cover
+    assert embedded["chapter_images"] is None
+
+
+def test_no_cover_keeps_deriving_from_first_track(monkeypatch, tmp_path, sample_tracklist):
+    """Without --cover, the pre-existing first-track-with-real-art rule still holds."""
+    import io
+
+    from PIL import Image
+
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    track_art = (200, 20, 21)
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: _jpeg(track_art),
+    )
+    embedded = _capture_embed(monkeypatch)
+
+    embed_chapters_for_tracklist(sample_tracklist, tmp_path / "set.mp3", fetch_art=True)
+
+    cover = Image.open(io.BytesIO(embedded["episode_image"])).convert("RGB")
+    assert cover.getpixel((0, 0))[0] > cover.getpixel((0, 0))[1]
+
+
+def test_cover_without_chapters_is_rejected(tmp_path, capsys):
+    """--cover only means something for chapter embedding; say so instead of ignoring it."""
+    import pytest
+
+    from setlist_maker.cli import cmd_identify
+
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(_jpeg((20, 200, 30)))
+
+    with pytest.raises(SystemExit) as exc:
+        cmd_identify(_identify_args(cover=str(cover), chapters=False))
+    assert exc.value.code == 1
+    assert "--chapters" in capsys.readouterr().out
+
+
+def test_missing_cover_file_fails_before_any_work(tmp_path, capsys):
+    """A bad --cover path must stop the run: chapter writing mutates the MP3 in place."""
+    import pytest
+
+    from setlist_maker.cli import _resolve_cover
+
+    with pytest.raises(SystemExit) as exc:
+        _resolve_cover(str(tmp_path / "nope.jpg"))
+    assert exc.value.code == 1
+    assert "not found" in capsys.readouterr().out
