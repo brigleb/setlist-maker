@@ -122,6 +122,8 @@
   // stale bare index never points at a different track after either mutation.
   let playingTrack = null;
   const audio = document.getElementById("audio");
+  const playerEl = document.getElementById("player");
+  const pplayEl = document.getElementById("pplay");
   const summaryEl = document.getElementById("summary");
   function autosizeSummary() { summaryEl.style.height = "auto"; summaryEl.style.height = summaryEl.scrollHeight + "px"; }
   summaryEl.addEventListener("input", () => { setDirty(true); autosizeSummary(); });
@@ -150,8 +152,17 @@
   // Which track's window contains this playback position. Returns the last
   // track for a position past the final boundary, 0 for a position before the
   // first track's timestamp (a set whose first track does not start at 0).
+  // The playing track keeps winning while the position is still inside its
+  // own window: the backwards walk resolves two tracks sharing a timestamp to
+  // the *later* one, which would otherwise re-scope (and scroll) away from
+  // the earlier duplicate on the first timeupdate tick after selecting it,
+  // leaving that row impossible to select at all.
   function trackIndexAt(seconds) {
     if (!tracks.length) return null;
+    if (playingIndex !== null && tracks[playingIndex]) {
+      const w = windowFor(playingIndex);
+      if (seconds >= w.start && seconds < w.end) return playingIndex;
+    }
     for (let i = tracks.length - 1; i >= 0; i--) {
       if (seconds >= tracks[i].timestamp) return i;
     }
@@ -244,16 +255,20 @@
     // INPUT too, but deliberately excluded -- e.preventDefault() below already
     // blocks its native arrow-key stepping, so arrows should seek rather than
     // get eaten here just because the scrubber has focus.
+    // tagName is enough because this page has no contenteditable surface (and
+    // no shadow root that could hide one behind its host). Anyone adding a
+    // rich-text field must extend this guard (e.g. el.isContentEditable), or
+    // Space and the arrows will be eaten while they type.
     const el = document.activeElement;
     if (el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && el.type !== "range"))) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (document.getElementById("player").classList.contains("disabled")) return;
+    if (playerEl.classList.contains("disabled")) return;
     switch (e.key) {
       case " ":
         // Space normally activates a focused button; only #pplay should
         // intercept it here, so Tab-to-Save-and-press-Space still saves.
         if (el && el.tagName === "BUTTON" && el.id !== "pplay") return;
-        e.preventDefault(); document.getElementById("pplay").click(); break;
+        e.preventDefault(); pplayEl.click(); break;
       case "ArrowLeft":  e.preventDefault(); skip(-SKIP_SECONDS); break;
       case "ArrowRight": e.preventDefault(); skip(SKIP_SECONDS); break;
       case "ArrowUp":    e.preventDefault(); prevTrack(); break;
@@ -475,19 +490,19 @@
     document.getElementById("ppos").textContent = times.into + " · " + times.left;
   }
 
-  document.getElementById("pplay").onclick = () => { if (audio.paused) audio.play(); else audio.pause(); };
+  pplayEl.onclick = () => { if (audio.paused) audio.play(); else audio.pause(); };
   document.getElementById("pback15").onclick = () => skip(-SKIP_SECONDS);
   document.getElementById("pfwd15").onclick = () => skip(SKIP_SECONDS);
   document.getElementById("pprev").onclick = prevTrack;
   document.getElementById("pnext").onclick = nextTrack;
 
-  audio.addEventListener("play", () => document.getElementById("pplay").textContent = "⏸");
-  audio.addEventListener("pause", () => document.getElementById("pplay").textContent = "▶");
+  audio.addEventListener("play", () => pplayEl.textContent = "⏸");
+  audio.addEventListener("pause", () => pplayEl.textContent = "▶");
   audio.addEventListener("loadedmetadata", () => {
-    document.getElementById("player").classList.remove("disabled");
+    playerEl.classList.remove("disabled");
     syncPlayerUI();
   });
-  audio.addEventListener("error", () => document.getElementById("player").classList.add("disabled"));
+  audio.addEventListener("error", () => playerEl.classList.add("disabled"));
   audio.addEventListener("timeupdate", syncPlayerUI);
   // Playback deliberately runs past a window's end: hearing the transition is
   // how a boundary gets verified. Re-scope to whatever track we are now inside.
@@ -504,7 +519,12 @@
 
   const seekEl = document.getElementById("seek");
   seekEl.addEventListener("pointerdown", () => { seekDragging = true; });
-  seekEl.addEventListener("pointerup", () => { seekDragging = false; });
+  // A drag the OS interrupts (gesture cancelled, pointer lost) ends in
+  // pointercancel with no pointerup; a flag stuck true would keep timeupdate
+  // from moving the thumb until the next complete drag cleared it.
+  const endSeekDrag = () => { seekDragging = false; };
+  seekEl.addEventListener("pointerup", endSeekDrag);
+  seekEl.addEventListener("pointercancel", endSeekDrag);
   seekEl.addEventListener("input", e => {
     // Same fallback as skip()/prevTrack()/nextTrack(): before the first play
     // playingIndex is null, but the scrubber should still work.
