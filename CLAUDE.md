@@ -152,7 +152,17 @@ CLI application with the following modules:
 - **Audio preview:** `p` previews the selected track's 30s window via `PlaybackController`
   (see `playback.py`). `_resolve_audio_path()` locates the source audio (threaded in from the
   CLI when known, else discovered beside the markdown). Playback stops on navigation/reject/edit
-  and on unmount; gated by `playback_enabled` (set once in `on_mount`)
+  and on unmount; gated by `playback_enabled` (set once in `on_mount`). The 0.5 s
+  `_tick_playback` readout poll returns early when `is_running` is false: Textual clears
+  that flag, unmounts the screens, and only then stops the app's timers, so a tick in that
+  window would otherwise `NoMatches` on the label during shutdown (#35).
+- **Pilot tests** (`tests/test_editor_edit.py`, `test_editor_playback.py`) drive the app via
+  `app.run_test()` inside `asyncio.run()` (no pytest-asyncio). A step that depends on a
+  multi-hop message chain — e.g. Enter → `Input.Submitted` → `focus()` → deferred
+  `set_focus` — must wait on that state with the shared `wait_until` fixture
+  (`tests/conftest.py`), not assume `pilot.pause()` let it settle: `pause()` only waits for
+  messages already queued plus a CPU-time idle heuristic that a *starved* process also
+  satisfies, which is why the roundtrip test flaked only under load (#35).
 
 ### `setlist_maker/web_editor.py` - Browser tracklist editor
 - **run_web_editor():** Drop-in sibling of `editor.run_editor()` that serves a
