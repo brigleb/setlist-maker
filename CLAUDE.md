@@ -193,9 +193,10 @@ CLI application with the following modules:
   deliberately runs *past* a window's end and re-scopes via `trackIndexAt()` —
   hearing the transition is how a boundary gets verified — and ±15s seeks clamp
   only to `[0, duration]`, never to the window, for the same reason. The playing
-  row is highlighted (`.row.playing`) and scrolled into view **only** on
-  automatic advance, never when the user clicked that row. Keyboard: Space,
-  ←/→ ±15s, ↑/↓ prev/next, all suppressed while focus is in an input/textarea.
+  row is highlighted (`.row.playing`) and scrolled into view whenever the playing
+  index changes for any reason other than the user clicking that row's own ▶ button —
+  so automatic advance and manual prev/next both scroll, and only a row's own ▶ does not.
+  Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, all suppressed while focus is in an input/textarea.
 
 ### `setlist_maker/playback.py` - Editor audio preview
 - **PlaybackController:** Drives a non-blocking `ffplay` subprocess (`play()` / `stop()` /
