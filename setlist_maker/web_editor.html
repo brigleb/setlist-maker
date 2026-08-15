@@ -107,6 +107,39 @@
     const mm = (h > 0) ? String(m).padStart(2, "0") : String(m);
     return (h > 0 ? h + ":" : "") + mm + ":" + String(sec).padStart(2, "0");
   }
+
+  // A track's window runs from its own timestamp to the next track's; the last
+  // runs to the end of the audio. Derived on demand, never cached, so inserting
+  // a row needs no separate bookkeeping. Clamped to >=1s so two tracks sharing a
+  // timestamp cannot produce a zero-width scrubber and a division by zero.
+  function windowFor(i) {
+    const t = tracks[i];
+    if (!t) return { start: 0, end: 1, length: 1 };
+    const start = t.timestamp;
+    const next = tracks[i + 1];
+    const rawEnd = next ? next.timestamp : (audio.duration || start + 1);
+    const end = Math.max(rawEnd, start + 1);
+    return { start, end, length: end - start };
+  }
+
+  // Which track's window contains this playback position. Returns the last
+  // track for a position past the final boundary, 0 for a position before the
+  // first track's timestamp (a set whose first track does not start at 0).
+  function trackIndexAt(seconds) {
+    if (!tracks.length) return null;
+    for (let i = tracks.length - 1; i >= 0; i--) {
+      if (seconds >= tracks[i].timestamp) return i;
+    }
+    return 0;
+  }
+
+  // "0:43 in" / "3:17 left" for the position within track i's window.
+  function fmtWindowTimes(i, seconds) {
+    const w = windowFor(i);
+    const into = Math.max(0, Math.min(seconds - w.start, w.length));
+    return { into: fmt(into) + " in", left: fmt(w.length - into) + " left" };
+  }
+
   function setDirty(v) { dirty = v; document.getElementById("save").disabled = !v; }
   function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); }
 
