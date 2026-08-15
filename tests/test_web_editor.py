@@ -27,6 +27,15 @@ def test_page_asset_has_player_controls():
         assert f'id="{element_id}"' in html, f"missing #{element_id}"
 
 
+def test_page_follows_color_scheme():
+    """Dark mode is tokens + a prefers-color-scheme block, and native controls
+    follow via color-scheme (#34). Substring-level: there is no JS/CSS harness."""
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    assert '<meta name="color-scheme" content="light dark">' in html
+    assert "color-scheme: light dark" in html  # on :root, for the seek slider et al.
+    assert "@media (prefers-color-scheme: dark)" in html
+
+
 def test_body_padding_clears_the_player_bar():
     """The list must not hide behind the fixed player.
 
