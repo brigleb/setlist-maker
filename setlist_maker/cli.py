@@ -46,7 +46,7 @@ import sys
 from pathlib import Path
 
 from setlist_maker import __version__
-from setlist_maker.artwork import create_chapter_image
+from setlist_maker.artwork import CoverImageError, create_chapter_image, load_cover_image
 from setlist_maker.artwork_cache import chapter_image, source_artwork
 from setlist_maker.audio import get_audio_file
 from setlist_maker.chapters import embed_chapters
@@ -73,6 +73,7 @@ def _chain_chapters_after_identify(
     output_path: Path,
     audio_path: Path | None,
     fetch_art: bool,
+    cover_image: bytes | None = None,
 ) -> None:
     """
     Embed chapters into the processed MP3 after `identify --chapters`.
@@ -100,7 +101,31 @@ def _chain_chapters_after_identify(
     print(f"\n{'=' * 60}")
     print(f"Embedding chapters into: {audio_path.name}")
     print(f"{'=' * 60}")
-    embed_chapters_for_tracklist(tracklist, audio_path, fetch_art=fetch_art)
+    embed_chapters_for_tracklist(
+        tracklist, audio_path, fetch_art=fetch_art, cover_image=cover_image
+    )
+
+
+def _resolve_cover(cover_arg: str | None) -> bytes | None:
+    """Turn a --cover path into embeddable JPEG bytes, or exit with a clear error.
+
+    Shared by `chapters` and the `identify --chapters` chain. Failing here rather
+    than mid-embed matters: chapter writing mutates the MP3 in place, so a bad
+    path should stop the run before anything is touched.
+    """
+    if not cover_arg:
+        return None
+    cover_path = Path(cover_arg)
+    if not cover_path.exists():
+        print(f"Error: Cover image not found: {cover_path}")
+        sys.exit(1)
+    try:
+        data = load_cover_image(cover_path)
+    except CoverImageError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    print(f"  Cover image: {cover_path.name}")
+    return data
 
 
 def cmd_identify(args: argparse.Namespace) -> None:
@@ -110,6 +135,14 @@ def cmd_identify(args: argparse.Namespace) -> None:
     if args.edit and args.web_edit:
         print("Error: choose either --edit (terminal) or --web-edit (browser), not both.")
         sys.exit(1)
+
+    if args.cover and not args.chapters:
+        print("Error: --cover sets the episode cover for chapter embedding; add --chapters.")
+        sys.exit(1)
+
+    # Resolve up front so a bad path fails before a long identification pass,
+    # not after it
+    cover_image = _resolve_cover(args.cover) if args.chapters else None
 
     # Editing an existing markdown tracklist
     if input_path.suffix.lower() == ".md" and input_path.is_file():
@@ -127,7 +160,9 @@ def cmd_identify(args: argparse.Namespace) -> None:
         editor_fn(tracklist, input_path, use_corrections=not args.no_learn)
 
         if args.chapters:
-            _chain_chapters_after_identify(input_path, None, fetch_art=not args.no_artwork)
+            _chain_chapters_after_identify(
+                input_path, None, fetch_art=not args.no_artwork, cover_image=cover_image
+            )
         return
 
     # Validate deduplication tuning flags up front so a bad value fails fast
@@ -207,7 +242,9 @@ def cmd_identify(args: argparse.Namespace) -> None:
         )
 
     if args.chapters:
-        _chain_chapters_after_identify(output_path, audio_path, fetch_art=not args.no_artwork)
+        _chain_chapters_after_identify(
+            output_path, audio_path, fetch_art=not args.no_artwork, cover_image=cover_image
+        )
 
 
 def _load_tracklist_with_artwork_urls(
@@ -268,6 +305,7 @@ def embed_chapters_for_tracklist(
     tracklist: Tracklist,
     audio_path: Path,
     fetch_art: bool = True,
+    cover_image: bytes | None = None,
 ) -> None:
     """
     Embed chapter markers (and, optionally, artwork) into an MP3 for a tracklist.
@@ -275,13 +313,20 @@ def embed_chapters_for_tracklist(
     Shared by the `chapters` command and the `identify --chapters` chain.
     Assumes audio_path is a validated, existing MP3 and the tracklist has at
     least one identified track.
+
+    ``cover_image`` (from --cover) becomes the episode cover verbatim, replacing
+    the one normally derived from the first track's art. It is independent of
+    ``fetch_art``, so a hand-picked cover can be embedded with or without
+    per-track chapter images.
     """
     # Get all non-rejected tracks (including unidentified) for chapter timing
     chapter_tracks = [t for t in tracklist.tracks if not t.rejected]
 
     # Fetch artwork and generate chapter images
     chapter_images: dict[int, bytes] = {}
-    episode_image: bytes | None = None
+    # Seeding with the supplied cover both uses it and short-circuits the
+    # first-track derivation below, which is already guarded on "still None"
+    episode_image: bytes | None = cover_image
 
     if fetch_art:
         print(f"\n{'─' * 60}")
@@ -327,7 +372,8 @@ def embed_chapters_for_tracklist(
         audio_path=audio_path,
         tracks=chapter_tracks,
         chapter_images=chapter_images if fetch_art else None,
-        episode_image=episode_image if fetch_art else None,
+        # Not gated on fetch_art: --cover --no-artwork embeds just the cover
+        episode_image=episode_image,
     )
 
     print(f"\n  Embedded {len(chapter_tracks)} chapter(s) into {audio_path.name}")
@@ -378,7 +424,10 @@ def cmd_chapters(args: argparse.Namespace) -> None:
 
     print(f"  Audio file: {audio_path.name}")
 
-    embed_chapters_for_tracklist(tracklist, audio_path, fetch_art=not args.no_artwork)
+    cover_image = _resolve_cover(args.cover)
+    embed_chapters_for_tracklist(
+        tracklist, audio_path, fetch_art=not args.no_artwork, cover_image=cover_image
+    )
 
 
 def main():
@@ -522,6 +571,13 @@ Examples:
     )
 
     identify_parser.add_argument(
+        "--cover",
+        metavar="IMAGE",
+        help="With --chapters, use this image file as the episode cover instead of "
+        "the first track's artwork (per-track chapter images are unaffected)",
+    )
+
+    identify_parser.add_argument(
         "--reidentify",
         action="store_true",
         help="Re-run identification from the audio even if a tracklist already "
@@ -619,6 +675,13 @@ Examples:
         "--no-artwork",
         action="store_true",
         help="Skip artwork fetching (embed chapter markers only)",
+    )
+
+    chapters_parser.add_argument(
+        "--cover",
+        metavar="IMAGE",
+        help="Use this image file as the episode cover instead of the first "
+        "track's artwork (per-track chapter images are unaffected)",
     )
 
     # ─────────────────────────────────────────────────────────────────────────

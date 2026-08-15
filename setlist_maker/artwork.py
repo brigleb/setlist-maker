@@ -13,10 +13,16 @@ import logging
 import re
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
+
+
+class CoverImageError(Exception):
+    """A user-supplied cover image could not be read."""
+
 
 # Target size for chapter artwork (square, pixels)
 CHAPTER_IMAGE_SIZE = 600
@@ -430,6 +436,46 @@ def _create_fallback_background(size: int) -> Image.Image:
         b = int(40 + 20 * ratio)
         draw.line([(0, y), (size, y)], fill=(r, g, b, 255))
     return img
+
+
+def load_cover_image(path: Path, size: int = CHAPTER_IMAGE_SIZE) -> bytes:
+    """Load a user-supplied episode cover, normalized for ID3 embedding.
+
+    Center-crops to square (a no-op on already-square art) and resizes to
+    ``size``, then compresses like every other embedded image.
+
+    Deliberately skips ``create_chapter_image``'s lower-third overlay: a cover
+    the user hand-picked is finished art, not a generated chapter card. Per-track
+    chapter images are unaffected and keep their overlays.
+
+    Args:
+        path: Image file to use as the episode cover.
+        size: Output dimensions (square).
+
+    Returns:
+        JPEG bytes, under MAX_IMAGE_BYTES.
+
+    Raises:
+        CoverImageError: The file is missing, unreadable, or not an image.
+    """
+    try:
+        with Image.open(path) as opened:
+            base = opened.convert("RGB")
+    except (OSError, ValueError) as e:
+        raise CoverImageError(f"Could not read cover image '{path}': {e}") from e
+
+    width, height = base.size
+    if width != height:
+        edge = min(width, height)
+        left = (width - edge) // 2
+        top = (height - edge) // 2
+        base = base.crop((left, top, left + edge, top + edge))
+        logger.debug("Center-cropped cover from %dx%d to %dx%d", width, height, edge, edge)
+
+    if base.size != (size, size):
+        base = base.resize((size, size), Image.LANCZOS)
+
+    return _compress_to_jpeg(base)
 
 
 def _compress_to_jpeg(image: Image.Image, max_bytes: int = MAX_IMAGE_BYTES) -> bytes:

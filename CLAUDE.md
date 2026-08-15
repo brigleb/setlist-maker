@@ -87,6 +87,13 @@ CLI application with the following modules:
   drop every chapter (#17). Guarded by an ffprobe round-trip regression test.
 - **fetch_artwork():** Waterfall lookup across Shazam CDN, iTunes, Deezer, MusicBrainz/Cover Art Archive
 - **create_chapter_image():** Builds per-chapter artwork with an MTV-style lower-third overlay
+- **load_cover_image():** Normalizes a user-supplied episode cover (`--cover`) for embedding —
+  center-crop to square (`create_chapter_image()` hard-resizes instead, which squashes), then
+  the shared `_compress_to_jpeg()`. Deliberately skips the lower-third overlay: hand-picked
+  cover art is finished, not a generated chapter card. Raises `CoverImageError`.
+  `embed_chapters_for_tracklist()` seeds `episode_image` with it, which both uses it and
+  short-circuits the first-track derivation (already guarded on "still `None`"). Independent
+  of `fetch_art`, so `--cover --no-artwork` embeds just the cover.
 
 ### `setlist_maker/artwork_cache.py` - Chapter image cache
 - **chapter_image():** The single path from a track to its chapter composite —
