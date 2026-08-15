@@ -204,7 +204,11 @@ CLI application with the following modules:
   splice and `commit()`'s re-sort can both move it, so a module-scope
   `playingTrack` reference is re-resolved to a fresh `playingIndex` via
   `tracks.indexOf()` (`reindexPlayingTrack()`) at both mutation sites. Windows
-  are clamped to ≥1s so duplicate timestamps cannot divide by zero. Playback
+  are clamped to ≥1s so duplicate timestamps cannot divide by zero, and
+  `trackIndexAt()` lets the playing track win while the position is still inside
+  its own window — its backwards walk otherwise resolves a shared timestamp to
+  the *later* track, which re-scoped (and scrolled) away from the earlier one on
+  the first `timeupdate` tick, so it could never be selected (#37). Playback
   deliberately runs *past* a window's end and re-scopes via `trackIndexAt()` —
   hearing the transition is how a boundary gets verified — and ±15s seeks clamp
   only to `[0, duration]`, never to the window, for the same reason. The playing
