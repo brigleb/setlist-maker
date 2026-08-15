@@ -150,6 +150,21 @@ anywhere a browser does). **Save** writes the same `.md` + `.json` outputs;
 **Done** closes the server and returns to the CLI (so `--web-edit --chapters`
 still chains). `--edit` and `--web-edit` cannot be combined.
 
+The player is scoped to whichever track is playing: the scrubber spans that
+track's window rather than the whole recording, so positioning inside a track
+is precise even on a four-hour set. Transport controls give you ±15 seconds and
+previous/next track, and the playing row is highlighted in the list.
+
+| Key | Action |
+|-----|--------|
+| `Space` | Play / pause |
+| `←` / `→` | Back / forward 15 seconds |
+| `↑` / `↓` | Previous / next track |
+
+Playback deliberately continues past the end of a track rather than stopping,
+so you can hear whether a boundary lands in the right place; the player follows
+along and re-scopes to the new track.
+
 ### Chapter Markers & Artwork (`chapters`)
 
 After identifying and editing a tracklist, embed it as navigable chapter markers in the MP3 — with per-chapter artwork fetched automatically:

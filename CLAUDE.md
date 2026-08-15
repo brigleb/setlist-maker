@@ -184,6 +184,18 @@ CLI application with the following modules:
   `summary` key leaves `tracklist.summary` untouched (so older clients can't wipe it),
   while a sent value is whitespace-normalized to one paragraph (blank/None clears it),
   keeping the `to_markdown()` ↔ `parse_markdown_tracklist()` round-trip lossless.
+- **Track-focused player:** the scrubber spans the *current track's window*
+  (its timestamp → the next track's; the last → audio duration), not the whole
+  recording. On a 4-hour set the global bar was 13.6 s/px, so fine positioning
+  was unavailable; the window takes that to ~0.23 s/px. Windows come from
+  `windowFor(i)`, derived on demand so an inserted row needs no bookkeeping,
+  and clamped to ≥1s so duplicate timestamps cannot divide by zero. Playback
+  deliberately runs *past* a window's end and re-scopes via `trackIndexAt()` —
+  hearing the transition is how a boundary gets verified — and ±15s seeks clamp
+  only to `[0, duration]`, never to the window, for the same reason. The playing
+  row is highlighted (`.row.playing`) and scrolled into view **only** on
+  automatic advance, never when the user clicked that row. Keyboard: Space,
+  ←/→ ±15s, ↑/↓ prev/next, all suppressed while focus is in an input/textarea.
 
 ### `setlist_maker/playback.py` - Editor audio preview
 - **PlaybackController:** Drives a non-blocking `ffplay` subprocess (`play()` / `stop()` /
