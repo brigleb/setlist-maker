@@ -215,7 +215,20 @@
   }
   overlay.onclick = () => { overlay.classList.remove("open"); overlayImg.src = ""; };
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && overlay.classList.contains("open")) overlay.click();
+    if (e.key === "Escape" && overlay.classList.contains("open")) { overlay.click(); return; }
+    // Never steal keys from an editor: artist/title/time fields and the summary
+    // textarea all need Space and the arrows to behave normally.
+    const el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (document.getElementById("player").classList.contains("disabled")) return;
+    switch (e.key) {
+      case " ":        e.preventDefault(); document.getElementById("pplay").click(); break;
+      case "ArrowLeft":  e.preventDefault(); skip(-SKIP_SECONDS); break;
+      case "ArrowRight": e.preventDefault(); skip(SKIP_SECONDS); break;
+      case "ArrowUp":    e.preventDefault(); prevTrack(); break;
+      case "ArrowDown":  e.preventDefault(); nextTrack(); break;
+    }
   });
 
   function rowEl(t, i) {
