@@ -508,6 +508,12 @@ class TracklistEditor(App[None]):
 
     def _tick_playback(self) -> None:
         """Refresh the now-playing readout; clear it when playback stops."""
+        if not self.is_running:
+            # Shutting down. Textual clears is_running, then unmounts the
+            # screens, and only then stops the app's own timers -- so a tick
+            # landing in that window would query a label that is already gone
+            # and raise NoMatches out of the exit path (#35).
+            return
         label = self.query_one("#playback-label", Label)
         if self.playback.is_playing() and self._playing_row is not None:
             elapsed = min(int(self.playback.elapsed()), PREVIEW_SECONDS)

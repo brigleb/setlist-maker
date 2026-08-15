@@ -1,11 +1,42 @@
 """Shared pytest fixtures for setlist-maker tests."""
 
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 
 from setlist_maker.editor import CorrectionsDB, Track, Tracklist
+
+
+@pytest.fixture
+def wait_until():
+    """Textual pilot helper: keep pausing until ``predicate()`` holds.
+
+    ``pilot.press()`` / ``pilot.pause()`` only wait for messages that were
+    already queued when they were called, plus a heuristic idle check that
+    treats "little CPU used in the last 20 ms" as "settled". A chain like Enter
+    -> Input.Submitted -> focus() -> deferred set_focus hops several queues, and
+    on a loaded machine a CPU-starved process looks idle by that heuristic
+    while its queues are still full -- so the next key could be sent before
+    focus had moved (#35). Waiting on the condition a step actually depends on
+    removes the timing assumption rather than padding it with sleeps. Fails
+    with an AssertionError naming ``what`` on timeout, so it reads like the
+    plain assert it replaces.
+
+    Usage inside a pilot routine::
+
+        await wait_until(pilot, lambda: app.focused is title_input, what="focus on title")
+    """
+
+    async def _wait_until(pilot, predicate, *, timeout: float = 5.0, what: str = "condition"):
+        deadline = time.monotonic() + timeout
+        while not predicate():
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"timed out after {timeout}s waiting for {what}")
+            await pilot.pause()
+
+    return _wait_until
 
 
 @pytest.fixture
