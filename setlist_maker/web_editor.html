@@ -3,26 +3,57 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Setlist Maker — Editor</title>
 <style>
-  :root { --accent:#0a84ff; --ok:#1f9d55; --warn:#c8860a; --bg:#f6f6f7; --card:#fff; --line:#eee; --muted:#8a8a8e; }
+  /* Tokenized, not forked: every rule below reads a token and the dark block
+     redefines only tokens, so there is one set of selectors for both schemes.
+     color-scheme (here and the <meta> in <head>) lets native controls -- the
+     seek slider, buttons, textarea, scrollbars -- follow the scheme too. The
+     deliberately scheme-free literals are the artwork overlay backdrop, the
+     thumb placeholder gradients (GRADS in the script), and white text on the
+     accent button and on those gradients. */
+  :root {
+    color-scheme: light dark;
+    --accent:#0a84ff; --ok:#1f9d55; --warn:#c8860a;
+    --bg:#f6f6f7; --card:#fff; --line:#eee; --hairline:#f4f4f4; --summary-line:#f1f1f1;
+    --text:#1c1c1e; --text-soft:#3a3a3c; --muted:#8a8a8e; --text-faint:#b0b0b5; --icon:#c8c8cd;
+    --focus-bg:#eef6ff; --playing-bg:#f0f7ff; --input-border:#b9d6ff;
+    --btn-bg:#fff; --btn-text:#555; --btn-border:#ddd;
+    /* Player bar and toast share these: dark chrome on the light page; on the
+       dark page an elevated surface with a hairline, so they still read as bars
+       instead of dissolving into the same grey as the list. */
+    --player-bg:#1c1c1e; --player-text:#fff; --player-hover:#2f2f33; --player-muted:#9a9a9e;
+    --player-thumb:#333; --player-line:transparent;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ok:#30d158; --warn:#f2b136;
+      --bg:#101012; --card:#1c1c1e; --line:#2c2c2e; --hairline:#2a2a2d; --summary-line:#2a2a2d;
+      --text:#f2f2f7; --text-soft:#d1d1d6; --muted:#98989d; --text-faint:#7c7c80; --icon:#5e5e63;
+      --focus-bg:#1b2b42; --playing-bg:#18243a; --input-border:#2f5a8f;
+      --btn-bg:#2c2c2e; --btn-text:#d1d1d6; --btn-border:#3a3a3c;
+      --player-bg:#2c2c2e; --player-hover:#3a3a3c; --player-muted:#a1a1a6;
+      --player-thumb:#3a3a3c; --player-line:#3a3a3c;
+    }
+  }
   * { box-sizing:border-box; }
-  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; background:var(--bg); color:#1c1c1e; padding-bottom:104px; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); padding-bottom:104px; }
   header { position:sticky; top:0; background:var(--card); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; align-items:center; justify-content:space-between; z-index:5; }
   .file { font-weight:700; font-size:15px; }
   .counts { color:var(--muted); font-size:12px; margin-top:2px; }
   .actions button { font:inherit; font-weight:600; font-size:13px; border-radius:7px; padding:7px 16px; cursor:pointer; border:1px solid transparent; margin-left:8px; }
   #save { background:var(--accent); color:#fff; }
   #save:disabled { opacity:.5; cursor:default; }
-  #done { background:#fff; color:#555; border-color:#ddd; }
-  .summary { display:block; width:100%; max-width:760px; margin:0 auto; padding:14px 20px; font:inherit; font-size:16px; line-height:1.5; color:#3a3a3c; background:var(--card); border:none; border-bottom:1px solid #f1f1f1; resize:none; overflow:hidden; }
-  .summary:focus { outline:none; background:#eef6ff; box-shadow:inset 0 0 0 2px var(--accent); }
+  #done { background:var(--btn-bg); color:var(--btn-text); border-color:var(--btn-border); }
+  .summary { display:block; width:100%; max-width:760px; margin:0 auto; padding:14px 20px; font:inherit; font-size:16px; line-height:1.5; color:var(--text-soft); background:var(--card); border:none; border-bottom:1px solid var(--summary-line); resize:none; overflow:hidden; }
+  .summary:focus { outline:none; background:var(--focus-bg); box-shadow:inset 0 0 0 2px var(--accent); }
   .summary::placeholder { color:var(--muted); font-style:italic; }
   main { max-width:760px; margin:0 auto; }
-  .row { display:flex; align-items:center; gap:13px; padding:11px 20px; border-bottom:1px solid #f4f4f4; background:var(--card); }
+  .row { display:flex; align-items:center; gap:13px; padding:11px 20px; border-bottom:1px solid var(--hairline); background:var(--card); }
   .row.rejected { opacity:.45; }
-  .row.editing { background:#eef6ff; outline:2px solid var(--accent); outline-offset:-2px; }
-  .row.playing { background:#f0f7ff; box-shadow:inset 3px 0 0 var(--accent); }
+  .row.editing { background:var(--focus-bg); outline:2px solid var(--accent); outline-offset:-2px; }
+  .row.playing { background:var(--playing-bg); box-shadow:inset 3px 0 0 var(--accent); }
   /* background-size/position must not be re-reset by a `background` shorthand,
      here or inline in JS -- the shorthand resets every background-* longhand,
      which renders a 600px composite at natural size anchored top-left, showing
@@ -39,31 +70,31 @@
   .row.rejected .artist, .row.rejected .title { text-decoration:line-through; }
   .row.unknown .artist { color:var(--warn); font-style:italic; }
   .editfields { flex:1; display:flex; gap:8px; }
-  .editfields input { flex:1; font:inherit; font-size:13px; padding:6px 9px; border:1px solid #b9d6ff; border-radius:6px; }
-  .time { color:#b0b0b5; font-size:12px; font-variant-numeric:tabular-nums; }
+  .editfields input { flex:1; font:inherit; font-size:13px; padding:6px 9px; border:1px solid var(--input-border); border-radius:6px; }
+  .time { color:var(--text-faint); font-size:12px; font-variant-numeric:tabular-nums; }
   .iconbtn { background:none; border:none; cursor:pointer; font-size:16px; padding:2px 4px; line-height:1; }
   .play { color:var(--accent); }
-  .reject { color:#c8c8cd; }
-  .add { color:#c8c8cd; font-weight:700; }
+  .reject { color:var(--icon); }
+  .add { color:var(--icon); font-weight:700; }
   .add:hover { color:var(--accent); }
   .editfields input.timefield { flex:0 0 80px; text-align:center; font-variant-numeric:tabular-nums; }
-  #player { position:fixed; left:0; right:0; bottom:0; background:#1c1c1e; color:#fff; display:flex; align-items:center; gap:14px; padding:10px 20px; }
+  #player { position:fixed; left:0; right:0; bottom:0; background:var(--player-bg); color:var(--player-text); box-shadow:0 -1px 0 var(--player-line); display:flex; align-items:center; gap:14px; padding:10px 20px; }
   #player.disabled { opacity:.4; pointer-events:none; }
   /* background-color, not the `background` shorthand: the shorthand would reset
      background-size:cover declared beside it and crop the artwork to its corner. */
-  #pthumb { width:48px; height:48px; border-radius:6px; flex:none; background-color:#333; background-size:cover; background-position:center; }
+  #pthumb { width:48px; height:48px; border-radius:6px; flex:none; background-color:var(--player-thumb); background-size:cover; background-position:center; }
   #pbody { flex:1; min-width:0; display:flex; flex-direction:column; gap:5px; }
   #ptop { display:flex; align-items:center; gap:14px; }
   #ptransport { display:flex; align-items:center; gap:2px; flex:none; }
-  #ptransport button { min-width:34px; height:28px; font-size:14px; background:none; border:none; color:#fff; cursor:pointer; border-radius:6px; line-height:1; }
-  #ptransport button:hover { background:#2f2f33; }
+  #ptransport button { min-width:34px; height:28px; font-size:14px; background:none; border:none; color:var(--player-text); cursor:pointer; border-radius:6px; line-height:1; }
+  #ptransport button:hover { background:var(--player-hover); }
   #ptransport button span { font-size:9px; vertical-align:super; }
   #pplay { font-size:17px; }
   #plabel { flex:1; min-width:0; font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #pcount, #ppos, #ptime { color:#9a9a9e; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; flex:none; }
+  #pcount, #ppos, #ptime { color:var(--player-muted); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; flex:none; }
   #seek { width:100%; margin:0; accent-color:var(--accent); }
   #pfoot { display:flex; justify-content:space-between; align-items:center; }
-  #toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:#1c1c1e; color:#fff; padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  #toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:var(--player-bg); color:var(--player-text); box-shadow:0 0 0 1px var(--player-line); padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
   #toast.show { opacity:1; }
 </style>
 </head>
@@ -559,7 +590,7 @@
     if (dirty && !confirm("You have unsaved changes. Close anyway?")) return;
     dirty = false;
     await fetch("/api/done", { method: "POST" }).catch(() => {});
-    document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#8a8a8e;font-family:sans-serif">Editor closed — you can close this tab.</div>';
+    document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:var(--muted);font-family:sans-serif">Editor closed — you can close this tab.</div>';
     setTimeout(() => { try { window.close(); } catch (e) {} }, 300);
   };
 

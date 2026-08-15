@@ -194,6 +194,15 @@ CLI application with the following modules:
   `summary` key leaves `tracklist.summary` untouched (so older clients can't wipe it),
   while a sent value is whitespace-normalized to one paragraph (blank/None clears it),
   keeping the `to_markdown()` ↔ `parse_markdown_tracklist()` round-trip lossless.
+- **Theming:** one set of selectors, two palettes. Every color on the page reads a
+  `:root` custom property; `@media (prefers-color-scheme: dark)` redefines only the
+  tokens, and `color-scheme: light dark` (on `:root` and as a `<meta>`) lets native
+  controls — seek slider, buttons, textarea, scrollbars — follow the OS. The player bar
+  and toast share `--player-*`: dark chrome on the light page, an elevated hairlined
+  surface on the dark one so they still read as bars. The only scheme-free literals
+  are the artwork overlay backdrop, the thumb placeholder gradients (`GRADS`), and
+  white text on the accent button / those gradients. Light mode is pixel-identical
+  to the pre-theming page (#34).
 - **Track-focused player:** the scrubber spans the *current track's window*
   (its timestamp → the next track's; the last → audio duration), not the whole
   recording. On a 4-hour set the global bar was 13.6 s/px, so fine positioning
