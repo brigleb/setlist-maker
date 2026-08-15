@@ -22,6 +22,7 @@
   .row { display:flex; align-items:center; gap:13px; padding:11px 20px; border-bottom:1px solid #f4f4f4; background:var(--card); }
   .row.rejected { opacity:.45; }
   .row.editing { background:#eef6ff; outline:2px solid var(--accent); outline-offset:-2px; }
+  .row.playing { background:#f0f7ff; box-shadow:inset 3px 0 0 var(--accent); }
   /* background-size/position must not be re-reset by a `background` shorthand,
      here or inline in JS -- the shorthand resets every background-* longhand,
      which renders a 600px composite at natural size anchored top-left, showing
@@ -188,6 +189,7 @@
     list.innerHTML = "";
     tracks.forEach((t, i) => list.appendChild(rowEl(t, i)));
     updateCounts();
+    highlightPlayingRow(false);
   }
 
   let artVersion = 0;  // bumped on save so re-requested thumbs bypass the browser's decoded-image cache
@@ -332,7 +334,16 @@
     wrap.addEventListener("focusout", () => { setTimeout(() => { if (!wrap.contains(document.activeElement)) commit(); }, 0); });
   }
 
-  function highlightPlayingRow(scroll) { /* implemented in the highlight task */ }
+  // The highlight must be reapplied after render(), which rebuilds every row.
+  function highlightPlayingRow(scroll) {
+    const list = document.getElementById("list");
+    list.querySelectorAll(".row.playing").forEach(el => el.classList.remove("playing"));
+    if (playingIndex === null) return;
+    const row = list.children[playingIndex];
+    if (!row) return;
+    row.classList.add("playing");
+    if (scroll) row.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 
   const SKIP_SECONDS = 15;
   const PREV_RESTART_THRESHOLD = 3;  // ⏮ within this many seconds goes to the previous track
@@ -425,6 +436,12 @@
   });
   audio.addEventListener("error", () => document.getElementById("player").classList.add("disabled"));
   audio.addEventListener("timeupdate", syncPlayerUI);
+  // Playback deliberately runs past a window's end: hearing the transition is
+  // how a boundary gets verified. Re-scope to whatever track we are now inside.
+  audio.addEventListener("timeupdate", () => {
+    const i = trackIndexAt(audio.currentTime);
+    if (i !== null && i !== playingIndex) setPlayingIndex(i, { scroll: true });
+  });
 
   const seekEl = document.getElementById("seek");
   seekEl.addEventListener("pointerdown", () => { seekDragging = true; });
