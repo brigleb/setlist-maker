@@ -247,6 +247,13 @@ def test_apply_edits_leaves_summary_unchanged_when_omitted(sample_tracklist):
 
 
 def test_apply_edits_normalizes_summary_whitespace(sample_tracklist):
+    """One paragraph is house style, not a format constraint (see #16).
+
+    Before the description was fenced, collapsing line breaks is what kept the
+    markdown round-trip lossless. It round-trips either way now — so don't
+    "fix" this test to preserve the breaks without deciding to change the shape
+    of every saved description along with it.
+    """
     from setlist_maker.web_editor import apply_edits
 
     apply_edits(sample_tracklist, [], None, summary="Line one.\n\nLine two.   Extra")
@@ -449,6 +456,52 @@ def test_post_save_absent_summary_leaves_existing_summary_unchanged(sample_track
     assert res["ok"] is True
     md = (tmp_path / "set_tracklist.md").read_text()
     assert "Original summary." in md
+
+
+def test_post_save_survives_a_track_shaped_description(sample_tracklist, tmp_path):
+    """The issue's own repro, end to end through the page's save (#16).
+
+    Typing a numbered, track-looking line into the description used to cost the
+    user the description *and* add a track they never played, the next time the
+    set was opened.
+    """
+    from setlist_maker.web_editor import EditorContext
+
+    description = "Closed with 1. **Test** - Song (0:00) — a phantom, once."
+    ctx = EditorContext(
+        tracklist=sample_tracklist,
+        output_path=tmp_path / "set_tracklist.md",
+        corrections_db=None,
+        audio_path=None,
+    )
+    payload = json.dumps(
+        {
+            "tracks": [
+                {"index": i, "artist": t.artist, "title": t.title, "rejected": False}
+                for i, t in enumerate(sample_tracklist.tracks)
+            ],
+            "summary": description,
+        }
+    ).encode()
+
+    with running_server(ctx) as base:
+        req = urllib.request.Request(
+            base + "/api/save",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            assert json.loads(r.read())["ok"] is True
+
+    from setlist_maker.editor import SUMMARY_OPEN_MARKER, parse_markdown_tracklist
+
+    md = (tmp_path / "set_tracklist.md").read_text()
+    reopened = parse_markdown_tracklist(md)
+
+    assert md.count(SUMMARY_OPEN_MARKER) == 1
+    assert reopened.summary == description
+    assert len(reopened.tracks) == len(sample_tracklist.tracks)
 
 
 def test_get_audio_full_and_range(sample_tracklist, tmp_path):

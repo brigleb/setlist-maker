@@ -58,14 +58,22 @@ A markdown tracklist with timestamps:
 
 *Generated on 2025-01-15 14:30*
 
+<!-- summary -->
+
 A propulsive late-night house set that leans on deep, dubby basslines and warm
 analog pads, building from hypnotic minimalism into brighter, vocal-driven peaks.
+
+<!-- /summary -->
 
 1. **Artist One** - Track Title (0:00)
 2. **Artist Two** - Another Track (2:30)
 3. *Unidentified* (5:00)
 4. **Artist Three** - Great Song (7:30)
 ```
+
+The comment markers around the description render as nothing, and they are what
+lets you write anything you like in there — including a line shaped like a track
+— without the editor mistaking it for one when the file is reopened.
 
 When you save from the editor, a JSON file is also generated alongside:
 

@@ -78,9 +78,11 @@ _UNSET = object()  # "summary not provided" — distinct from an empty/cleared s
 def _normalize_summary(value: str | None) -> str | None:
     """Collapse whitespace runs to single spaces; empty -> None.
 
-    Keeps the markdown round-trip lossless: parse_markdown_tracklist() joins
-    contiguous prose lines with spaces, so a single-paragraph summary reloads
-    byte-for-byte.
+    Once the description was fenced in the markdown (#16) its line breaks became
+    representable, so this is no longer what keeps the round-trip lossless --
+    it is now only a house style: one paragraph, the shape ``generate_summary``
+    produces and the shape a set description is asked for. Multi-paragraph
+    descriptions would round-trip fine if that ever stops being the house style.
     """
     text = re.sub(r"\s+", " ", value or "").strip()
     return text or None

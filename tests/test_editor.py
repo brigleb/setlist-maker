@@ -1,10 +1,16 @@
 """Tests for setlist_maker.editor module."""
 
+import pytest
+
 from setlist_maker.editor import (
+    SUMMARY_CLOSE_MARKER,
+    SUMMARY_OPEN_MARKER,
     CorrectionsDB,
     Track,
     Tracklist,
     TracklistEditor,
+    _escape_summary_line,
+    _unescape_summary_line,
     apply_track_edit,
     parse_markdown_tracklist,
 )
@@ -193,16 +199,23 @@ class TestTracklist:
         assert data == []
 
     def test_to_markdown_includes_summary(self, sample_tracklist):
-        """Summary paragraph is rendered before the listing, with a blank line."""
+        """Summary paragraph is fenced, and rendered before the listing.
+
+        The blank lines inside the fence are deliberate: without them a
+        renderer that escapes raw HTML folds the markers into the description's
+        own paragraph. Asserted here, on the bytes, because nothing downstream
+        would notice if they disappeared.
+        """
         sample_tracklist.summary = "A propulsive big-beat set with funk-laced breaks."
         md = sample_tracklist.to_markdown()
         lines = md.split("\n")
 
         summary_idx = lines.index(sample_tracklist.summary)
         first_track_idx = next(i for i, ln in enumerate(lines) if ln.startswith("1. "))
-        # Summary comes before the listing, separated by a blank line.
+        # Summary comes before the listing, fenced, separated by a blank line.
         assert summary_idx < first_track_idx
-        assert lines[summary_idx + 1] == ""
+        assert lines[summary_idx - 2 : summary_idx] == ["<!-- summary -->", ""]
+        assert lines[summary_idx + 1 : summary_idx + 4] == ["", "<!-- /summary -->", ""]
 
     def test_to_markdown_omits_summary_when_absent(self, sample_tracklist):
         """No summary means no extra prose lines are emitted."""
@@ -278,7 +291,12 @@ class TestParseMarkdownTracklist:
             assert parsed_track.timestamp == orig.timestamp
 
     def test_parse_summary(self):
-        """A prose paragraph between the date and listing is parsed as the summary."""
+        """A prose paragraph between the date and listing is parsed as the summary.
+
+        This input is the *legacy*, unfenced shape — files written before #16 —
+        not what ``to_markdown()`` produces now. It reads like a duplicate of
+        the fenced tests below and isn't: it is the back-compat guard.
+        """
         md = """# Tracklist: mix.mp3
 
 *Generated on 2026-01-31 20:00*
@@ -303,6 +321,244 @@ A driving techno set with dub-inflected low end and hypnotic, minimal arrangemen
         """Markdown without a summary parses to summary=None."""
         tracklist = parse_markdown_tracklist(sample_markdown)
         assert tracklist.summary is None
+
+
+class TestSummaryRoundTrip:
+    """A set description survives reopen whatever the user typed into it (#16).
+
+    The description is free text the user types in the web editor, so it can
+    contain any shape the tracklist format itself uses. Each case below used to
+    be silently destructive: the summary was truncated or lost outright, and a
+    description line shaped like a track was re-read as a real one, so reopening
+    a set grew a phantom track at whatever timestamp the prose happened to name.
+    """
+
+    EXPECTED_TRACKS = [
+        ("Daft Punk", "Around the World", 0),
+        ("The Chemical Brothers", "Block Rockin' Beats", 180),
+        ("", "", 360),
+        ("Fatboy Slim", "Praise You", 540),
+    ]
+
+    @pytest.mark.parametrize(
+        "summary",
+        [
+            pytest.param("1. **Test** - Song (0:00)", id="issue-repro-track-shaped-line"),
+            pytest.param("2. *Unidentified* (6:00)", id="unidentified-track-shape"),
+            pytest.param(
+                "Opens with 1. **Test** - Song (0:00) and never looks back.",
+                id="track-shape-mid-sentence",
+            ),
+            pytest.param("*Generated on* a rainy Tuesday.", id="collides-with-date-line"),
+            pytest.param("# Tracklist: not-a-real-file.mp3", id="collides-with-header"),
+            pytest.param("First paragraph.\n\nSecond paragraph.", id="blank-line-inside"),
+            pytest.param("A set with\ntwo prose lines.", id="hard-wrapped"),
+            pytest.param("Ends on a numbered thought.\n\n1. yes", id="trailing-list"),
+        ],
+    )
+    def test_description_survives_and_invents_no_tracks(self, sample_tracklist, summary):
+        sample_tracklist.summary = summary
+        parsed = parse_markdown_tracklist(sample_tracklist.to_markdown())
+
+        assert parsed.summary == summary
+        assert [(t.artist, t.title, t.timestamp) for t in parsed.tracks] == self.EXPECTED_TRACKS
+
+    @pytest.mark.parametrize(
+        "summary",
+        [
+            pytest.param(SUMMARY_CLOSE_MARKER, id="is-the-closing-marker"),
+            pytest.param(SUMMARY_OPEN_MARKER, id="is-the-opening-marker"),
+            pytest.param("\\" + SUMMARY_CLOSE_MARKER, id="is-an-escaped-marker"),
+            pytest.param("Fenced like\n<!-- /summary -->\nthis.", id="marker-on-an-inner-line"),
+        ],
+    )
+    def test_a_description_cannot_close_its_own_fence(self, sample_tracklist, summary):
+        """The one line that could break the fence is escaped on the way out."""
+        sample_tracklist.summary = summary
+        parsed = parse_markdown_tracklist(sample_tracklist.to_markdown())
+
+        assert parsed.summary == summary
+        assert [(t.artist, t.title, t.timestamp) for t in parsed.tracks] == self.EXPECTED_TRACKS
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "ordinary prose",
+            SUMMARY_OPEN_MARKER,
+            SUMMARY_CLOSE_MARKER,
+            "\\" + SUMMARY_CLOSE_MARKER,
+            "\\\\" + SUMMARY_OPEN_MARKER,
+            "  " + SUMMARY_CLOSE_MARKER + "  ",
+            "<!-- summary --> trailing",
+        ],
+    )
+    def test_escaping_a_line_is_an_involution(self, line):
+        """Stated as the property it is, at any backslash depth.
+
+        A near-miss like ``<!-- summary --> trailing`` must come back with no
+        backslash it did not have: escaping more than the fence would put marks
+        in the user's prose, which is its own small silent corruption.
+        """
+        assert _unescape_summary_line(_escape_summary_line(line)) == line
+
+    def test_header_and_date_come_from_the_file_not_the_description(self, sample_tracklist):
+        """The fence's line span is excluded from *every* scan, not just tracks.
+
+        Excluding it from the track scan alone still passes the round-trip
+        checks above while silently taking the source filename and generation
+        date from prose — and rewriting both into the file on the next save.
+        """
+        sample_tracklist.summary = "# Tracklist: fake.mp3\n*Generated on 1999-01-01 00:00*"
+        parsed = parse_markdown_tracklist(sample_tracklist.to_markdown())
+
+        assert parsed.source_file == "test_mix.mp3"
+        assert parsed.generated_on == "2026-01-31 20:00"
+        assert parsed.summary == sample_tracklist.summary
+
+    def test_empty_fence_parses_as_no_summary(self):
+        """A cleared description leaves None, not an empty string."""
+        md = f"""# Tracklist: mix.mp3
+
+*Generated on 2026-01-31 20:00*
+
+{SUMMARY_OPEN_MARKER}
+{SUMMARY_CLOSE_MARKER}
+
+1. **Artist** - Song (0:00)
+"""
+        tracklist = parse_markdown_tracklist(md)
+
+        assert tracklist.summary is None
+        assert len(tracklist.tracks) == 1
+
+    def test_whitespace_only_description_writes_no_fence(self, sample_tracklist):
+        """Nothing to fence means no fence — the file gains nothing."""
+        sample_tracklist.summary = "   "
+        md = sample_tracklist.to_markdown()
+
+        assert SUMMARY_OPEN_MARKER not in md
+        assert parse_markdown_tracklist(md).summary is None
+
+    def test_resaving_is_byte_identical(self, sample_tracklist):
+        """Reopening and saving again must not accumulate fences.
+
+        The failure this pins is quiet and cumulative: a parser that reads its
+        own markers back as prose re-wraps them on every save, so the file grows
+        a nested pair per round trip and the description drifts further from
+        what the user typed each time.
+        """
+        sample_tracklist.summary = "1. **Test** - Song (0:00)"
+        once = sample_tracklist.to_markdown()
+        twice = parse_markdown_tracklist(once).to_markdown()
+
+        assert twice == once
+        assert once.count(SUMMARY_OPEN_MARKER) == 1
+
+    def test_legacy_markdown_upgrades_in_place_on_the_next_save(self):
+        """An old file's description is carried into the fence, not dropped."""
+        legacy = """# Tracklist: mix.mp3
+
+*Generated on 2026-01-31 20:00*
+
+A driving techno set.
+
+1. **Artist** - Song (0:00)
+"""
+        upgraded = parse_markdown_tracklist(legacy).to_markdown()
+
+        assert SUMMARY_OPEN_MARKER in upgraded
+        assert parse_markdown_tracklist(upgraded).summary == "A driving techno set."
+
+    def test_a_carriage_return_cannot_split_a_line_open(self, sample_tracklist, tmp_path):
+        """A lone CR is a line break to the reader but not to the writer.
+
+        So it has to be one before the file is written: a description carrying
+        ``\\r<!-- /summary -->`` would otherwise reach disk unescaped, be split
+        there by the text-mode read, and close the fence from the inside --
+        this bug again, one input class over. Written through a real file
+        because it is ``open()``'s newline translation that does the splitting.
+        """
+        sample_tracklist.summary = "Opening line.\r<!-- /summary -->\r1. **Ghost** - It (9:00)"
+        path = tmp_path / "set_tracklist.md"
+        path.write_text(sample_tracklist.to_markdown())
+
+        with open(path) as f:
+            parsed = parse_markdown_tracklist(f.read())
+
+        assert parsed.summary == "Opening line.\n<!-- /summary -->\n1. **Ghost** - It (9:00)"
+        assert [(t.artist, t.title, t.timestamp) for t in parsed.tracks] == self.EXPECTED_TRACKS
+
+    def test_fence_closed_past_the_listing_says_so(self, capsys):
+        """Swallowing every track is loud, because the next save would seal it.
+
+        Only a hand edit can put the closing marker below the listing, and the
+        parse can't tell which half was meant to be prose -- but saving over it
+        would write the mistake back as a well-formed file and take the
+        sidecar's artwork with it, so this refuses to be quiet about it.
+        """
+        md = f"""# Tracklist: mix.mp3
+
+*Generated on 2026-01-31 20:00*
+
+{SUMMARY_OPEN_MARKER}
+A techno set.
+
+1. **Daft Punk** - Around the World (0:00)
+2. **Kraftwerk** - Autobahn (3:00)
+
+{SUMMARY_CLOSE_MARKER}
+"""
+        tracklist = parse_markdown_tracklist(md)
+
+        assert tracklist.tracks == []
+        assert "runs past the listing" in capsys.readouterr().out
+
+    def test_unclosed_fence_does_not_swallow_the_listing(self, capsys):
+        """A hand edit that loses the closing marker degrades, it doesn't destroy.
+
+        Reading to end-of-file would take the whole listing for prose and return
+        a tracklist with no tracks, so an unterminated fence falls back to the
+        legacy scan instead -- out loud, because a half-fence is a damaged file
+        rather than an old one, and this fix is about not losing text quietly.
+        """
+        md = f"""# Tracklist: mix.mp3
+
+*Generated on 2026-01-31 20:00*
+
+{SUMMARY_OPEN_MARKER}
+A driving techno set.
+
+1. **Artist** - Song (0:00)
+2. **Other** - Tune (4:00)
+"""
+        tracklist = parse_markdown_tracklist(md)
+
+        assert tracklist.summary == "A driving techno set."
+        assert [t.timestamp for t in tracklist.tracks] == [0, 240]
+        assert "no closing marker" in capsys.readouterr().out
+
+    def test_legacy_markdown_without_delimiters_still_parses(self, capsys):
+        """Files written before the delimiter existed keep reopening (back-compat).
+
+        Their descriptions are still ambiguous prose -- nothing can recover a
+        line the old format made indistinguishable from a track -- but an
+        ordinary one must survive untouched until the next save rewrites it.
+        """
+        md = """# Tracklist: mix.mp3
+
+*Generated on 2026-01-31 20:00*
+
+A driving techno set with dub-inflected low end.
+
+1. **Artist** - Song (0:00)
+2. **Other** - Tune (4:00)
+"""
+        tracklist = parse_markdown_tracklist(md)
+
+        assert tracklist.summary == "A driving techno set with dub-inflected low end."
+        assert [t.timestamp for t in tracklist.tracks] == [0, 240]
+        # An old file is expected, not damaged: reading one is not worth a warning.
+        assert capsys.readouterr().out == ""
 
 
 class TestCorrectionsDB:
