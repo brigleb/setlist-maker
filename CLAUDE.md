@@ -78,7 +78,9 @@ CLI application with the following modules:
   throwaway temp dir to produce a one-paragraph set description. Best-effort: returns `None`
   (warns and continues) if the CLI is missing, errors, times out, or returns nothing. On by
   default; suppressed by `identify --no-summary`. The result is stored on `Tracklist.summary`,
-  rendered by `to_markdown()`, and recovered by `parse_markdown_tracklist()` for editor round-trips.
+  rendered by `to_markdown()` inside the `<!-- summary -->` fence, and recovered from it by
+  `parse_markdown_tracklist()` for editor round-trips. The markdown is the summary's **only**
+  persistent store — `to_json()` deliberately omits it — so a parse that loses it loses it for good.
 
 ### `setlist_maker/chapters.py` + `setlist_maker/artwork.py` - Chapter markers & artwork
 - **embed_chapters():** Writes ID3v2 CHAP/CTOC frames into an MP3 for podcast players.
@@ -182,7 +184,30 @@ CLI application with the following modules:
   The one exception is `Track.artwork_pinned`, set when the user picked a cover in the web
   editor's picker: that URL is not Shazam's guess about a stale identification but the user's
   answer about *this* track, so clearing it on a later typo fix would silently discard it (#20).
-- **parse_markdown_tracklist():** Parses existing markdown files for editing
+- **parse_markdown_tracklist():** Parses existing markdown files for editing. The set
+  description is read from the `<!-- summary -->` … `<!-- /summary -->` fence `to_markdown()`
+  writes, and the lines it occupies are then **excluded from every other scan** — header, date
+  and tracks. Both halves matter: without the fence a description shaped like `1. **X** - Y
+  (0:00)` ended the summary early, and without the exclusion that same line was *also* read as
+  a real track, so reopening a set silently traded the description for a phantom track (#16).
+  HTML comments because the `.md` is a published artifact and they render as nothing; a
+  description line that reads exactly like a marker is escaped with a backslash on write and
+  unescaped on read (an involution, so `\<!-- /summary -->` survives too). A file with **no**
+  fence — anything written before this existed — falls back to the old heuristic (prose after
+  `*Generated on*`, ending at the first blank or track-shaped line), which is why old
+  tracklists still reopen; the next save rewrites them fenced. Nothing can disambiguate a
+  legacy file, and nothing else can recover from it: the summary is not in the sidecar.
+  Two hand-edit shapes the fence can't fix are **warned about** rather than fixed silently,
+  since a fix for silent loss shouldn't add a quiet failure of its own: an opening marker
+  with no closing one (falls back to the legacy scan rather than reading to EOF and returning
+  a tracklist with no tracks), and a closing marker moved *below* the listing, which swallows
+  every track — loud because the next save would write that reading back as a well-formed
+  file and take the sidecar's artwork with it. Two write-side details are also load-bearing:
+  `to_markdown()` normalizes carriage returns (the reader opens in text mode, where a lone CR
+  *is* a line break, so an un-normalized one splits a line the writer never escaped and can
+  close the fence from inside), and it leaves a blank line inside each marker so renderers
+  that escape raw HTML instead of honoring it don't fold the markers into the description's
+  paragraph.
 - **Audio preview:** `p` previews the selected track's 30s window via `PlaybackController`
   (see `playback.py`). `_resolve_audio_path()` locates the source audio (threaded in from the
   CLI when known, else discovered beside the markdown). Playback stops on navigation/reject/edit
@@ -239,8 +264,11 @@ CLI application with the following modules:
   text rides along in the `POST /api/save` body; `_handle_save()` forwards it as
   `apply_edits(..., summary=...)`, which uses an `_UNSET` sentinel — an absent
   `summary` key leaves `tracklist.summary` untouched (so older clients can't wipe it),
-  while a sent value is whitespace-normalized to one paragraph (blank/None clears it),
-  keeping the `to_markdown()` ↔ `parse_markdown_tracklist()` round-trip lossless.
+  while a sent value is whitespace-normalized to one paragraph (blank/None clears it).
+  That normalization used to be what kept the `to_markdown()` ↔ `parse_markdown_tracklist()`
+  round-trip lossless; since #16 fenced the description the round-trip is lossless for *any*
+  text, so it is now only house style — whatever the user types, including a numbered line
+  that looks exactly like a track, comes back verbatim.
 - **Artwork curation (#20):** clicking a row's thumbnail opens `#artwork-overlay`, which is
   no longer just an enlarger — the composite sits above an **☆ Episode cover** toggle and a
   **Choose artwork…** button that reveals a candidate grid, a paste-a-URL box and **Automatic**.

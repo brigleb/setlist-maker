@@ -25,6 +25,60 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Sta
 from setlist_maker import AUDIO_EXTENSIONS
 from setlist_maker.playback import PREVIEW_SECONDS, PlaybackController, playback_available
 
+# The set description is free text the user types, so it can contain any shape
+# this format otherwise uses -- including a line that reads exactly like a
+# track. Fencing it makes the file unambiguous instead of merely unlikely (#16).
+# HTML comments because the .md is a published artifact (show notes) and these
+# leave the rendered page untouched: checked against markdown-it, python-markdown,
+# mistune and commonmark, all of which end the HTML block on the line carrying
+# `-->` (CommonMark block type 2, so cmark-gfm and GitHub agree) and render the
+# description as its own paragraph, exactly as before.
+SUMMARY_OPEN_MARKER = "<!-- summary -->"
+SUMMARY_CLOSE_MARKER = "<!-- /summary -->"
+
+# Either marker, with any number of backslashes already in front of it. Built
+# from the markers themselves: spelled out again, a renamed marker would stop
+# being escaped and the fence would quietly become breakable.
+_SUMMARY_MARKER_LOOKALIKE = re.compile(
+    rf"^\\*(?:{re.escape(SUMMARY_OPEN_MARKER)}|{re.escape(SUMMARY_CLOSE_MARKER)})$"
+)
+
+# "1. **Artist** - Title (MM:SS)" or "1. *Unidentified* (MM:SS)"
+TRACK_LINE_PATTERN = re.compile(
+    r"^\d+\.\s+"
+    r"(?:"
+    r"\*\*(.+?)\*\*\s*-\s*(.+?)"  # **Artist** - Title
+    r"|"
+    r"\*Unidentified\*"  # *Unidentified*
+    r")\s*"
+    r"\((\d+:\d+(?::\d+)?)\)"  # (MM:SS) or (H:MM:SS)
+)
+
+
+def _escape_summary_line(line: str) -> str:
+    """Neutralize a description line that would otherwise read as a marker.
+
+    One leading backslash, which markdown renders away, so the line still reads
+    as itself; ``_unescape_summary_line`` removes exactly one. Prefixing and
+    stripping one is an involution, so a description that genuinely contains
+    ``\\<!-- /summary -->`` survives the round trip too. The backslash is spliced
+    into the line rather than replacing it, so the user's own indentation --
+    which decides nothing here, since the fence is matched on stripped lines --
+    comes back untouched as well.
+    """
+    stripped = line.strip()
+    if not _SUMMARY_MARKER_LOOKALIKE.match(stripped):
+        return line
+    return line.replace(stripped, f"\\{stripped}", 1)
+
+
+def _unescape_summary_line(line: str) -> str:
+    """Undo :func:`_escape_summary_line` for one line of a fenced description."""
+    stripped = line.strip()
+    if stripped.startswith("\\") and _SUMMARY_MARKER_LOOKALIKE.match(stripped):
+        return line.replace(stripped, stripped[1:], 1)
+    return line
+
 
 @dataclass
 class Track:
@@ -88,8 +142,28 @@ class Tracklist:
             "",
         ]
 
-        if self.summary:
-            lines.append(self.summary)
+        if self.summary and self.summary.strip():
+            # Fenced so reopening cannot mistake the description for the
+            # listing, and vice versa (#16). The markers render as nothing.
+            #
+            # Carriage returns are normalized here rather than at the far end
+            # because this is the side that decides where the lines are: the
+            # reader opens the file in text mode, where a lone CR is a line
+            # break, so a description carrying one would be split at a point
+            # this never escaped -- and a "<!-- /summary -->" after it would
+            # close the fence from the inside.
+            #
+            # The blank lines inside the fence are for renderers that escape
+            # raw HTML instead of honoring it (some podcast hosts): they cost
+            # nothing where comments are invisible, and where they are not,
+            # they keep the description a paragraph of its own instead of one
+            # run-on with the markers.
+            summary = self.summary.replace("\r\n", "\n").replace("\r", "\n").strip()
+            lines.append(SUMMARY_OPEN_MARKER)
+            lines.append("")
+            lines.extend(_escape_summary_line(ln) for ln in summary.split("\n"))
+            lines.append("")
+            lines.append(SUMMARY_CLOSE_MARKER)
             lines.append("")
 
         track_num = 1
@@ -137,19 +211,87 @@ class Tracklist:
         ]
 
 
+def _parse_summary(lines: list[str]) -> tuple[str | None, set[int]]:
+    """Recover the set description, and which lines it occupies.
+
+    Two forms, because files written before the fence existed have to keep
+    reopening. Fenced (what ``to_markdown`` now writes): everything between the
+    markers verbatim, bar the whitespace around the block as a whole, which is
+    stripped on both sides -- so blank lines and track-shaped lines *inside* a
+    description are just text. Legacy (no markers): the old heuristic --
+    contiguous prose after the "*Generated on*" line, ending at the first blank
+    or track-shaped line. That form is structurally ambiguous and nothing can
+    recover a description the format itself made indistinguishable from a
+    track; the next save rewrites the file fenced.
+
+    The returned line numbers are what keeps the *other* half of #16 from
+    happening: every later scan skips them, so a description can no longer
+    contribute a phantom track, date or header.
+    """
+    start = next((i for i, ln in enumerate(lines) if ln.strip() == SUMMARY_OPEN_MARKER), None)
+    if start is not None:
+        end = next(
+            (i for i in range(start + 1, len(lines)) if lines[i].strip() == SUMMARY_CLOSE_MARKER),
+            None,
+        )
+        if end is not None:
+            text = "\n".join(_unescape_summary_line(ln) for ln in lines[start + 1 : end]).strip()
+            return text or None, set(range(start, end + 1))
+        # An opening marker with nothing closing it is a damaged file, not an
+        # old one, and the two are distinguishable -- so say so. Degrading
+        # silently here would reintroduce, one case over, the quiet loss this
+        # fence exists to end.
+        print(f"  Warning: '{SUMMARY_OPEN_MARKER}' has no closing marker; reading the")
+        print("  set description as unfenced prose. Some of it may be missing.")
+
+    # No fence, or an opening marker a hand edit left unclosed: fall back to the
+    # legacy scan rather than swallow the rest of the file as a description.
+    summary_lines: list[str] = []
+    span: set[int] = set()
+    seen_generated = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("*Generated on"):
+            seen_generated = True
+            continue
+        if not seen_generated:
+            continue
+        if stripped in (SUMMARY_OPEN_MARKER, SUMMARY_CLOSE_MARKER):
+            span.add(i)
+            continue
+        if TRACK_LINE_PATTERN.match(stripped):
+            break
+        if stripped:
+            summary_lines.append(stripped)
+            span.add(i)
+        elif summary_lines:
+            break
+    return (" ".join(summary_lines) or None), span
+
+
 def parse_markdown_tracklist(content: str) -> Tracklist:
     """Parse a markdown tracklist file into a Tracklist object."""
-    lines = content.strip().split("\n")
+    # Line endings are normalized once, up front, because the fenced description
+    # is now kept *verbatim*: every other field is matched with .strip(), which
+    # absorbs a stray CR, but a multi-line description would carry one into the
+    # middle of the text and back out to the editor.
+    lines = content.replace("\r\n", "\n").replace("\r", "\n").strip().split("\n")
     tracklist = Tracklist(source_file="")
 
+    # The description comes first, and everything below reads around it: it is
+    # user-typed prose that may contain a header, a date or a track line, none
+    # of which are this file's own (#16).
+    tracklist.summary, summary_span = _parse_summary(lines)
+    body = [line for i, line in enumerate(lines) if i not in summary_span]
+
     # Parse header: # Tracklist: filename.mp3
-    for line in lines:
+    for line in body:
         if line.startswith("# Tracklist:"):
             tracklist.source_file = line.replace("# Tracklist:", "").strip()
             break
 
     # Parse generation date: *Generated on YYYY-MM-DD HH:MM*
-    for line in lines:
+    for line in body:
         if line.startswith("*Generated on"):
             match = re.search(r"\*Generated on (.+)\*", line)
             if match:
@@ -157,38 +299,8 @@ def parse_markdown_tracklist(content: str) -> Tracklist:
             break
 
     # Parse tracks: "1. **Artist** - Title (MM:SS)" or "1. *Unidentified* (MM:SS)"
-    track_pattern = re.compile(
-        r"^\d+\.\s+"
-        r"(?:"
-        r"\*\*(.+?)\*\*\s*-\s*(.+?)"  # **Artist** - Title
-        r"|"
-        r"\*Unidentified\*"  # *Unidentified*
-        r")\s*"
-        r"\((\d+:\d+(?::\d+)?)\)"  # (MM:SS) or (H:MM:SS)
-    )
-
-    # Parse the optional summary paragraph: contiguous prose lines sitting
-    # between the "*Generated on*" line and the first numbered track.
-    summary_lines: list[str] = []
-    seen_generated = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("*Generated on"):
-            seen_generated = True
-            continue
-        if not seen_generated:
-            continue
-        if track_pattern.match(stripped):
-            break
-        if stripped:
-            summary_lines.append(stripped)
-        elif summary_lines:
-            break
-    if summary_lines:
-        tracklist.summary = " ".join(summary_lines)
-
-    for line in lines:
-        match = track_pattern.match(line.strip())
+    for line in body:
+        match = TRACK_LINE_PATTERN.match(line.strip())
         if match:
             artist = match.group(1) or ""
             title = match.group(2) or ""
@@ -209,6 +321,20 @@ def parse_markdown_tracklist(content: str) -> Tracklist:
                 original_title=title.strip() if title else None,
             )
             tracklist.tracks.append(track)
+
+    # A closing marker moved to the far side of the listing -- only a hand edit
+    # puts one there -- swallows every track into the description, and the next
+    # save writes that reading back as a perfectly well-formed file, taking the
+    # sidecar's cover art with it. The parse stands (guessing which half is the
+    # description would be its own silent failure), but it says so first.
+    if not tracklist.tracks and any(
+        TRACK_LINE_PATTERN.match(lines[i].strip()) for i in summary_span
+    ):
+        print(
+            f"  Warning: the set description runs past the listing; check the "
+            f"'{SUMMARY_CLOSE_MARKER}'"
+        )
+        print("  marker's position. No tracks were read from this file.")
 
     return tracklist
 

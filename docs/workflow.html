@@ -164,7 +164,7 @@
 
 <figure>
   <div class="diagram-scroll">
-  <svg viewBox="0 0 960 1330" role="img" aria-label="Flow diagram of the Setlist Maker pipeline: entry, reuse check, audio load with truncation guard, 30-second slicing, per-sample Shazam recognition loop with progress saving, deduplication, corrections, Claude summary, markdown and JSON outputs, the terminal and web editors (issues 10 and 16) which feed corrections back, and the optional chapters chain.">
+  <svg viewBox="0 0 960 1330" role="img" aria-label="Flow diagram of the Setlist Maker pipeline: entry, reuse check, audio load with truncation guard, 30-second slicing, per-sample Shazam recognition loop with progress saving, deduplication, corrections, Claude summary, markdown and JSON outputs, the terminal and web editors (issue 10) which feed corrections back, and the optional chapters chain.">
     <defs>
       <marker id="arrI" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0,0 L10,5 L0,10 z" class="fI"></path>
@@ -281,12 +281,9 @@
     <text class="bd" x="120" y="1096"><tspan class="noteh">Web</tspan>  loopback HTTP · audio scrubber · insert rows</text>
     <text class="bd" x="120" y="1114">editable set description · saves via /api/save</text>
     <text class="bd" x="110" y="1134">both write back through save_tracklist()</text>
-    <rect class="ipill" x="478" y="1006" width="38" height="17" rx="8.5"></rect>
-    <text class="itext" x="497" y="1018" text-anchor="middle">#16</text>
-    <text class="note" x="500" y="1052"><tspan class="iref">#16</tspan> The reopen trap: a set description that</text>
-    <text class="note" x="500" y="1068">contains numbered, track-looking lines gets</text>
-    <text class="note" x="500" y="1084">misparsed when a .md comes back in through</text>
-    <text class="note" x="500" y="1100">parse_markdown_tracklist().</text>
+    <text class="note" x="500" y="1052">The set description is fenced in the .md</text>
+    <text class="note" x="500" y="1068">(&lt;!-- summary --&gt;), so a reopen can't mistake</text>
+    <text class="note" x="500" y="1084">prose for a track, or the reverse (#16, closed).</text>
     <text class="note" x="500" y="1124"><tspan class="iref">#10</tspan> TUI preview can't scrub within a track.</text>
 
     <!-- ══ Learning loop ══ -->
@@ -315,13 +312,6 @@
 <h2>The open issues, mapped</h2>
 <ul class="issues">
   <li>
-    <span class="num">#16</span>
-    <span class="where">reopen path · parse_markdown_tracklist</span>
-    <span class="what">A set description containing numbered track-format lines is misparsed when the
-    <code>.md</code> is reopened for editing. Until fixed, keep descriptions free of
-    <code>1. Artist – Title</code>-style lines.</span>
-  </li>
-  <li>
     <span class="num">#10</span>
     <span class="where">tui editor · playback</span>
     <span class="what"><code>p</code> previews the selected track's 30-second window; there's no
@@ -335,6 +325,15 @@
     filter alone and sits below what <code>estimate_confidence()</code> gives a clean single match
     (~0.667), so <code>A·B·A</code> smoothing rarely fires on real sets. Open question, not a
     regression — wants data from real runs before anyone picks a new number.</span>
+  </li>
+  <li class="shipped">
+    <span class="num">#16</span>
+    <span class="where">reopen path · closed aug 2026</span>
+    <span class="what">A set description containing numbered, track-looking lines used to be
+    misparsed when the <code>.md</code> came back in — the description was lost and a phantom
+    track appeared. The description is now fenced in <code>&lt;!-- summary --&gt;</code> markers that
+    render as nothing, and those lines are excluded from the track scan, so anything you type
+    survives a reopen. Older, unfenced files still parse, and upgrade on their next save.</span>
   </li>
   <li class="shipped">
     <span class="num">#7</span>
@@ -374,7 +373,7 @@
 <pre>setlist-maker set.mp3              <span class="c"># identify → print → write set.md + set.json</span>
 setlist-maker set.mp3 -w           <span class="c"># …then review in the browser editor</span>
 setlist-maker set.mp3 --edit       <span class="c"># …then review in the terminal editor</span>
-setlist-maker set.md -w            <span class="c"># reopen an existing tracklist (mind #16)</span>
+setlist-maker set.md -w            <span class="c"># reopen an existing tracklist</span>
 setlist-maker set.mp3 --chapters   <span class="c"># full run, then embed ID3 chapters</span>
 setlist-maker chapters set.md --audio set.mp3</pre>
 

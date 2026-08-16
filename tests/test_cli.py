@@ -333,6 +333,47 @@ class TestLoadTracklistWithArtworkUrls:
         assert tracklist.tracks[1].coverart_url == "https://example.com/art2.jpg"
         assert urls == {0: "https://example.com/art1.jpg", 1: "https://example.com/art2.jpg"}
 
+    def test_reopening_recovers_a_fenced_description(self, temp_dir):
+        """The reopen path carries the set description back, whatever it says (#16).
+
+        This is the door every saved tracklist comes back through -- both
+        editors and `chapters` -- and the markdown is the description's only
+        home, so a description lost here is lost for good. A phantom track read
+        out of the prose cost more than a wrong row here: the sidecar is joined
+        to the markdown positionally for artwork, so it also shifted every
+        track's cover by one and put a bogus chapter in the embedded MP3.
+        """
+        markdown = """# Tracklist: test.mp3
+
+*Generated on 2026-01-31 20:00*
+
+<!-- summary -->
+Peaked on 1. **Artist One** - Track One (0:00), a line shaped like a track.
+<!-- /summary -->
+
+1. **Artist One** - Track One (0:00)
+2. **Artist Two** - Track Two (3:00)
+"""
+        tracks_json = [
+            {
+                "timestamp": 0,
+                "time": "0:00",
+                "artist": "Artist One",
+                "title": "Track One",
+                "coverart_url": "https://example.com/art1.jpg",
+            },
+            {"timestamp": 180, "time": "3:00", "artist": "Artist Two", "title": "Track Two"},
+        ]
+
+        md_path = self._write_tracklist_files(temp_dir, tracks_json, markdown)
+        tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+
+        assert tracklist.summary == (
+            "Peaked on 1. **Artist One** - Track One (0:00), a line shaped like a track."
+        )
+        assert [t.timestamp for t in tracklist.tracks] == [0, 180]
+        assert urls == {0: "https://example.com/art1.jpg"}
+
     def test_matches_by_timestamp_not_index(self, temp_dir):
         """Test that timestamp matching works when rejected tracks cause index mismatch."""
         # Markdown includes a rejected track that got re-added during editing
