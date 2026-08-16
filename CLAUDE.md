@@ -95,7 +95,32 @@ CLI application with the following modules:
   moves, and any layout it doesn't expect (other version, tag/frame flags, short frame)
   leaves the file exactly as mutagen wrote it. Guarded by `TestChapterFrameOrder`, whose
   artwork *shrinks* per chapter so an unfixed embed writes them in exact reverse.
-- **fetch_artwork():** Waterfall lookup across Shazam CDN, iTunes, Deezer, MusicBrainz/Cover Art Archive
+- **embed_chapters_for_tracklist() / _episode_cover_image():** The episode cover comes from the
+  track starred in the web editor (`Track.is_episode_cover`), falling back to the original rule —
+  the first track with *real* artwork — when nothing is starred **or** the starred track's lookup
+  turns up nothing. `--cover` still outranks both, being seeded before the derivation runs.
+  `source_artwork()` returning `None` must keep meaning *skip*: feeding it to
+  `create_chapter_image()` yields a gradient card whose truthy bytes permanently block every
+  later track from supplying a real cover, a regression that already happened once.
+- **fetch_artwork():** Waterfall lookup across Shazam CDN, iTunes, Deezer, MusicBrainz/Cover Art
+  Archive. Short-circuits on the first source that yields bytes.
+- **artwork_candidates():** The picker's counterpart — asks *every* source and returns what each
+  offers, deduplicated by URL in waterfall order (#20). Each source's single-result helper
+  (`search_*_artwork`) is now a thin wrapper over its `*_artwork_candidates` sibling called with
+  `limit=1`, so the two paths cannot drift. Only MusicBrainz costs more per candidate: Cover Art
+  Archive reveals whether a release has a front cover only by being asked, one request each.
+  `deezer_artwork_candidates()` retries with a **plain term query** when Deezer's advanced
+  `artist:"..." track:"..."` syntax comes back empty, which it does for a large share of real
+  tracks (measured: 0 rows for Daft Punk / One More Time and Kraftwerk / Autobahn, against 48 and
+  164 plain) — so Deezer had been contributing nothing to the waterfall either. The retry fires
+  only when Deezer *answered* with no rows: `_deezer_search()` returns `None` for a failed request
+  and `[]` for an empty one, so an unreachable Deezer still costs one timeout, not two. Existing cached
+  composites are unaffected (the key doesn't change); only fresh lookups can now resolve to Deezer,
+  and tracks already marked artless keep their sticky `.fallback` marker until the cache is cleared.
+- **download_image():** Refuses anything but `http(s)` via `is_fetchable_url()`. `urlopen`'s default
+  opener handles `file:`, `ftp:` and `data:`, and since the picker lets a user *type* a cover URL
+  that is persisted to the sidecar and re-fetched by this process on every later run, an unfiltered
+  one would be a local-file read primitive reachable from a page (#20).
 - **create_chapter_image():** Builds per-chapter artwork with an MTV-style lower-third overlay
 - **load_cover_image():** Normalizes a user-supplied episode cover (`--cover`) for embedding —
   center-crop to square (`create_chapter_image()` hard-resizes instead, which squashes), then
@@ -132,6 +157,12 @@ CLI application with the following modules:
   URL survived would re-key, re-fetch, and composite the *same wrong cover* under the
   new text. `editor.apply_track_edit()` clearing the URL is what makes the new key
   resolve to new art (#30).
+- **artwork_options():** The picker's cached fan-out. Keyed with `coverart_url` **omitted** —
+  which alternates exist depends on artist/title/size, while a saved URL is one particular
+  *answer*, not an input — so the `.cands` entry sits beside the no-URL variant's files.
+  Unlike `source_artwork()`, an empty result is **not** cached: "no alternates" far more often
+  means the network was down than that the track has none, and this is an interactive surface
+  where retrying costs one click rather than a whole re-run.
 - Per-key locks — `RLock`, since `chapter_image()` calls `source_artwork()` for the
   *same* key while still holding its own lock — dedupe concurrent requests; a
   semaphore caps simultaneous network fetches at 4 (compositing is local PIL work and
@@ -148,6 +179,9 @@ CLI application with the following modules:
   evidence attached to the *original* identification, and leaving it attached pins the
   chapter art to the misidentified track (#30). No-ops when nothing changed, so
   rejecting a row — which re-sends its unchanged fields — keeps art that is still right.
+  The one exception is `Track.artwork_pinned`, set when the user picked a cover in the web
+  editor's picker: that URL is not Shazam's guess about a stale identification but the user's
+  answer about *this* track, so clearing it on a later typo fix would silently discard it (#20).
 - **parse_markdown_tracklist():** Parses existing markdown files for editing
 - **Audio preview:** `p` previews the selected track's 30s window via `PlaybackController`
   (see `playback.py`). `_resolve_audio_path()` locates the source audio (threaded in from the
@@ -178,7 +212,10 @@ CLI application with the following modules:
   page re-requests after a save. 404s on an unparseable or out-of-range `index`, and
   on an unidentified track, which `chapters` skips too. Keyed by **saved** track
   state, not the page's live fields, so the preview always reflects what would be
-  embedded), `POST /api/done` (graceful shutdown → returns control to the CLI).
+  embedded), `GET /api/artwork/options?index=N` (the picker's candidate list — see
+  **Artwork curation** below), `POST /api/done` (graceful shutdown → returns control
+  to the CLI). Both artwork endpoints resolve `index` through the shared
+  `_track_for_query()`, so they answer for exactly the same set of tracks and 404 alike.
 - **Host-header guard:** `_reject_foreign_host()` runs at the top of both `do_GET`
   and `do_POST` — a single gate, so a new endpoint cannot forget it. Requires the
   loopback name (`127.0.0.1`/`localhost`, case-insensitive) **and** this server's
@@ -204,6 +241,38 @@ CLI application with the following modules:
   `summary` key leaves `tracklist.summary` untouched (so older clients can't wipe it),
   while a sent value is whitespace-normalized to one paragraph (blank/None clears it),
   keeping the `to_markdown()` ↔ `parse_markdown_tracklist()` round-trip lossless.
+- **Artwork curation (#20):** clicking a row's thumbnail opens `#artwork-overlay`, which is
+  no longer just an enlarger — the composite sits above an **☆ Episode cover** toggle and a
+  **Choose artwork…** button that reveals a candidate grid, a paste-a-URL box and **Automatic**.
+  Consequences of it becoming interactive: only a click whose `e.target` *is* the backdrop
+  dismisses it; the global keydown handler returns early while it is open (its tiles are
+  `BUTTON`s, and the focus guard exempts only inputs, so the arrows would seek the audio while
+  the user browses covers); the ★ toggle is disabled for a rejected track, which the sidecar does
+  not carry (the server refuses the star for one too, so a stale client cannot clear a valid choice
+  and store nothing in its place); `#toast` needs `z-index:60` or a toast raised over it renders behind
+  the backdrop; and `[hidden] { display:none !important; }` is required because the panel's
+  author `display:flex` otherwise beats the UA stylesheet's `[hidden]` rule.
+  It lives in the static markup **outside `#list`**, since `render()` rebuilds every row, and it
+  holds the open track as an **object reference** (`artTrack`) for the same reason
+  `playingTrack` exists — a re-sort or insert moves array positions underneath it.
+  Tiles load candidate URLs **directly from the source**, like the player bar's thumbnail: the
+  covers differ only in the picture, and compositing each one server-side to show the identical
+  lower-third would add latency and nothing else. Which tile reads as in use comes from the
+  server's own `current` flag (`artCurrentUrl`), *not* from comparing `artTrack.coverart_url`:
+  the endpoint offers the in-use cover through `resize_cover_art_url()` at the chapter size, so
+  a Shazam URL saved at 400px arrives as the 600px one and a raw string compare marks nothing.
+  Live page state outranks saved state in three places, all for the same reason -- the panel is
+  the surface where the two most often differ: `showArtwork()` restores an unsaved pick instead of
+  requesting the (pre-pick) server composite; `loadAlternates()` adopts the server's `current`
+  flag only when the track has no pick; and the *search* is run on the artist/title the page
+  passes, since correcting a misidentification and fixing its cover is one workflow and the stale
+  name would offer covers for the song being corrected away.
+  A pick sets `coverart_url` (the artwork cache's key, so it regenerates on its own) plus a
+  client-only `_art` flag, which is both why the save payload includes the URL at all — sending
+  it for every row would re-pin art `apply_track_edit()` means to drop — and why the row
+  previews the raw image until the save rebuilds the composite. A pasted URL is loaded into an
+  `Image` first: the server falls *through* its waterfall on a URL that will not download, so a
+  dead link would not error, it would quietly composite another source's art under this track.
 - **Theming:** one set of selectors, two palettes. Every color on the page reads a
   `:root` custom property; `@media (prefers-color-scheme: dark)` redefines only the
   tokens, and `color-scheme: light dark` (on `:root` and as a `<meta>`) lets native
@@ -254,6 +323,28 @@ CLI application with the following modules:
 Key classes:
 - `Track`: Dataclass representing a single track with timestamp, artist, title, rejected status
 - `Tracklist`: Collection of tracks with markdown/JSON export methods
+
+### The JSON sidecar's shape
+
+`Tracklist.to_json()` returns a **bare list** and must keep doing so. The curated
+episode-cover choice is conceptually a property of the *set*, but it is stored as a flag on the
+one track whose art is used precisely so the top level never changes: wrapping the list in an
+object does not raise for existing readers, it degrades **silently** —
+`_load_tracklist_with_artwork_urls()` iterates the loaded JSON, iterating a dict yields its keys
+as strings, `"timestamp" in "tracks"` is a false substring test rather than a `TypeError`, and
+the loader's `except` never fires. Every track would quietly lose its `coverart_url`, re-key the
+artwork cache and re-fetch. The list is also joined back to the markdown **by timestamp**, not
+by position (`to_json()` drops rejected tracks, so positions do not line up), which is why a
+curated choice is a per-track flag rather than an index into anything.
+
+### Test network guard
+
+`tests/conftest.py` has an autouse fixture that fails any test resolving a non-loopback host.
+It raises `NetworkAccessBlocked`, deliberately a **`BaseException`**: every artwork source
+helper wraps its request in `except Exception` and returns `None`, so an ordinary error would be
+swallowed and the unpatched test would pass quietly with no artwork — the exact silence the
+guard exists to end. Patch seams instead: `setlist_maker.artwork.urllib.request.urlopen` for a
+source helper, or `fetch_artwork` / `artwork_candidates` **in the module that imported it**.
 
 ## Code Style
 

@@ -12,7 +12,7 @@
      seek slider, buttons, textarea, scrollbars -- follow the scheme too. The
      deliberately scheme-free literals are the artwork overlay backdrop, the
      thumb placeholder gradients (GRADS in the script), and white text on the
-     accent button and on those gradients. */
+     accent buttons and on those gradients. */
   :root {
     color-scheme: light dark;
     --accent:#0a84ff; --ok:#1f9d55; --warn:#c8860a;
@@ -38,6 +38,9 @@
     }
   }
   * { box-sizing:border-box; }
+  /* An author `display` rule beats the UA stylesheet's [hidden] rule, so the
+     flex containers below would ignore the attribute without this. */
+  [hidden] { display:none !important; }
   body { margin:0; font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); padding-bottom:104px; }
   header { position:sticky; top:0; background:var(--card); border-bottom:1px solid var(--line); padding:14px 20px; display:flex; align-items:center; justify-content:space-between; z-index:5; }
   .file { font-weight:700; font-size:15px; }
@@ -60,10 +63,34 @@
      only its corner and hiding the lower-third label entirely. */
   .thumb { width:42px; height:42px; border-radius:6px; flex:none; background-size:cover; background-position:center; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; cursor:zoom-in; }
   #artwork-overlay { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none;
-    align-items:center; justify-content:center; z-index:50; cursor:zoom-out; }
+    align-items:center; justify-content:center; z-index:50; cursor:zoom-out; padding:24px; overflow:auto; }
   #artwork-overlay.open { display:flex; }
-  #artwork-overlay img { width:min(90vw,600px); height:auto; border-radius:10px;
-    box-shadow:0 12px 48px rgba(0,0,0,.5); }
+  /* The panel is interactive now, so it neither inherits the backdrop's
+     dismiss cursor nor closes on click -- the overlay's handler checks that
+     the click landed on the backdrop itself. */
+  #artwork-panel { cursor:default; width:min(90vw,600px); margin:auto; display:flex; flex-direction:column; gap:12px; }
+  #artwork-large { width:100%; height:auto; border-radius:10px; box-shadow:0 12px 48px rgba(0,0,0,.5); }
+  /* Sits on the backdrop rather than on a card, so it takes the player bar's
+     muted token, which is legible against dark chrome in both schemes. */
+  #artwork-note { color:var(--player-muted); font-size:12px; }
+  #artwork-tools { display:flex; gap:8px; flex-wrap:wrap; }
+  .artbtn { font:inherit; font-size:13px; font-weight:600; padding:7px 14px; border-radius:7px; cursor:pointer;
+    background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
+  .artbtn.on { background:var(--accent); color:#fff; border-color:transparent; }
+  .artbtn:disabled { opacity:.5; cursor:default; }
+  #artwork-alts { background:var(--card); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:10px; }
+  #artwork-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(92px,1fr)); gap:10px; }
+  #artwork-grid .status { grid-column:1/-1; color:var(--muted); font-size:13px; }
+  .alt { padding:0; border:2px solid transparent; border-radius:8px; background:none; cursor:pointer;
+    display:flex; flex-direction:column; gap:3px; }
+  .alt.current { border-color:var(--accent); }
+  .alt img { width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:6px; display:block;
+    background-color:var(--player-thumb); }
+  .alt span { font-size:10px; color:var(--muted); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #artwork-url { display:flex; gap:8px; }
+  #artwork-url input { flex:1; font:inherit; font-size:13px; padding:6px 9px; border:1px solid var(--input-border);
+    border-radius:6px; background:var(--card); color:var(--text); }
+  .star { color:var(--warn); font-size:13px; flex:none; }
   .meta { flex:1; min-width:0; cursor:text; }
   .artist { font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .title { color:var(--muted); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -94,7 +121,9 @@
   #pcount, #ppos, #ptime { color:var(--player-muted); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; flex:none; }
   #seek { width:100%; margin:0; accent-color:var(--accent); }
   #pfoot { display:flex; justify-content:space-between; align-items:center; }
-  #toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:var(--player-bg); color:var(--player-text); box-shadow:0 0 0 1px var(--player-line); padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  /* Above the artwork overlay's z-index:50 -- without it, a toast raised while
+     the picker is open renders behind the backdrop and is never seen. */
+  #toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:var(--player-bg); color:var(--player-text); box-shadow:0 0 0 1px var(--player-line); padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:60; }
   #toast.show { opacity:1; }
 </style>
 </head>
@@ -134,7 +163,24 @@
   </div>
   <audio id="audio" src="/api/audio" preload="metadata"></audio>
   <div id="toast"></div>
-  <div id="artwork-overlay"><img alt="Chapter artwork preview"></div>
+  <div id="artwork-overlay">
+    <div id="artwork-panel">
+      <img id="artwork-large" alt="Chapter artwork preview">
+      <div id="artwork-note" hidden></div>
+      <div id="artwork-tools">
+        <button id="art-cover" class="artbtn" type="button">☆ Episode cover</button>
+        <button id="art-choose" class="artbtn" type="button">Choose artwork…</button>
+      </div>
+      <div id="artwork-alts" hidden>
+        <div id="artwork-grid"></div>
+        <div id="artwork-url">
+          <input id="art-url" type="url" placeholder="…or paste an image URL" aria-label="Cover art URL">
+          <button id="art-url-use" class="artbtn" type="button">Use</button>
+          <button id="art-auto" class="artbtn" type="button">Automatic</button>
+        </div>
+      </div>
+    </div>
+  </div>
 <script>
   const GRADS = [
     "linear-gradient(135deg,#6a5acd,#0a84ff)",
@@ -273,14 +319,230 @@
   }, { rootMargin: "200px" });  // start just before the row scrolls into view
 
   const overlay = document.getElementById("artwork-overlay");
-  const overlayImg = overlay.querySelector("img");
-  function showArtwork(index) {
-    overlayImg.src = "/api/artwork?index=" + index + "&v=" + artVersion;
+  const overlayImg = document.getElementById("artwork-large");
+  const artNote = document.getElementById("artwork-note");
+  const artAlts = document.getElementById("artwork-alts");
+  const artGrid = document.getElementById("artwork-grid");
+  const artUrlEl = document.getElementById("art-url");
+  const artCoverBtn = document.getElementById("art-cover");
+
+  // The track the panel is showing, held as an object reference rather than a
+  // position: render() rebuilds every row and addBelow()/commit() can re-sort
+  // the array while the panel is open, so a stored index would go stale the
+  // same way playingIndex does (hence reindexPlayingTrack).
+  let artTrack = null;
+  // Which tile the grid marks as in use. Seeded from the server's own `current`
+  // flag rather than compared against artTrack.coverart_url: the server offers
+  // the in-use cover at the size the picker uses, so a Shazam URL saved at 400px
+  // arrives as the 600px one, and comparing raw strings marks nothing.
+  let artCurrentUrl = null;
+  let artProbeSeq = 0;   // orders overlapping paste-a-URL probes; see useTypedUrl
+
+  function setPickNote(url) {
+    artNote.textContent = url
+      ? "Chosen — Save to apply it to the chapter image."
+      : "Back to automatic — Save to look the artwork up again.";
+    artNote.hidden = false;
+  }
+
+  function showArtwork(t) {
+    artTrack = t;
+    artAlts.hidden = true;
+    artGrid.innerHTML = "";
+    artUrlEl.value = "";
+    if (t._art) {
+      // An unsaved pick has to survive closing and reopening the panel. The
+      // server composite is still built from saved state, so showing it here
+      // would contradict the row's own thumb and quietly re-mark the replaced
+      // cover as the one in use.
+      artCurrentUrl = t.coverart_url || null;
+      overlayImg.hidden = !t.coverart_url;
+      if (t.coverart_url) overlayImg.src = t.coverart_url;
+      setPickNote(t.coverart_url);
+    } else {
+      artCurrentUrl = null;
+      overlayImg.hidden = false;
+      overlayImg.src = "/api/artwork?index=" + t.index + "&v=" + artVersion;
+      artNote.hidden = true;
+    }
+    syncCoverButton();
     overlay.classList.add("open");
   }
-  overlay.onclick = () => { overlay.classList.remove("open"); overlayImg.src = ""; };
+
+  function closeArtwork() {
+    overlay.classList.remove("open");
+    overlayImg.src = "";
+    artTrack = null;
+  }
+
+  // Only the backdrop dismisses; the panel is full of controls now. Escape
+  // still routes through here, since overlay.click() targets the overlay itself.
+  overlay.onclick = (e) => { if (e.target === overlay) closeArtwork(); };
+
+  function syncCoverButton() {
+    const on = !!(artTrack && artTrack.episode_cover);
+    const rejected = !!(artTrack && artTrack.rejected);
+    artCoverBtn.textContent = (on ? "★" : "☆") + " Episode cover";
+    artCoverBtn.classList.toggle("on", on);
+    // A rejected track is absent from the output, and from the sidecar the star
+    // is stored in, so it cannot be the cover. The server refuses the star for
+    // one; this stops the page offering a choice that would silently evaporate.
+    artCoverBtn.disabled = rejected;
+    artCoverBtn.title = rejected
+      ? "A rejected track cannot be the episode cover"
+      : on
+        ? "This track's artwork is the episode cover"
+        : "Use this track's artwork as the episode cover";
+  }
+
+  // Exactly one track can be the episode cover, so starring one clears the
+  // rest. The server re-applies the same rule on save, so a stale page cannot
+  // leave two starred in the sidecar.
+  artCoverBtn.onclick = () => {
+    if (!artTrack || artTrack.rejected) return;
+    const on = !artTrack.episode_cover;
+    tracks.forEach(t => { t.episode_cover = false; });
+    artTrack.episode_cover = on;
+    setDirty(true);
+    syncCoverButton();
+    render();
+  };
+
+  document.getElementById("art-choose").onclick = () => {
+    if (!artTrack) return;
+    artAlts.hidden = !artAlts.hidden;
+    if (!artAlts.hidden && !artGrid.childElementCount) loadAlternates(artTrack);
+  };
+
+  // Lazy and per-track: the server asks every source here instead of stopping
+  // at the first that answers, so this costs a handful of third-party requests
+  // and must never run for a track the user did not open.
+  async function loadAlternates(t) {
+    artGrid.innerHTML = '<div class="status">Searching iTunes, Deezer and Cover Art Archive…</div>';
+    let data;
+    try {
+      // The live artist/title, not the saved ones: correcting a bad
+      // identification and then fixing its cover is one workflow, and searching
+      // the stale name would offer covers for the song being corrected away.
+      const query = "/api/artwork/options?index=" + t.index
+        + "&artist=" + encodeURIComponent(t.artist || "")
+        + "&title=" + encodeURIComponent(t.title || "");
+      data = await (await fetch(query)).json();
+    } catch (e) {
+      artGrid.innerHTML = '<div class="status">Could not reach the artwork sources.</div>';
+      return;
+    }
+    if (t !== artTrack) return;  // the panel moved to another track while we waited
+    const found = (data && data.candidates) || [];
+    const failed = !!(data && data.error);
+    if (!found.length) {
+      // "Nothing found" and "the lookup blew up" are different answers, and the
+      // second one is worth retrying.
+      artGrid.innerHTML = failed
+        ? '<div class="status">Could not reach the artwork sources.</div>'
+        : '<div class="status">No alternates found for this track.</div>';
+      return;
+    }
+    artGrid.innerHTML = "";
+    // The server's flag reflects *saved* state; an unsaved pick made on this
+    // page is the better answer and keeps its marker.
+    if (!t._art) {
+      const inUse = found.find(c => c.current);
+      artCurrentUrl = inUse ? inUse.url : null;
+    }
+    for (const c of found) {
+      const tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = "alt";
+      tile.dataset.url = c.url;
+      tile.title = c.label ? c.source + " — " + c.label : c.source;
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.alt = tile.title;
+      // Loaded straight from the source, like the player bar's thumbnail: the
+      // covers differ only in the picture, and the identical lower-third they
+      // would all be composited under adds nothing to the comparison.
+      img.src = c.url;
+      const cap = document.createElement("span");
+      cap.textContent = c.source;  // textContent, not innerHTML — no XSS surface
+      tile.append(img, cap);
+      tile.onclick = () => chooseArtwork(c.url);
+      artGrid.append(tile);
+    }
+    if (failed) {
+      // Some tiles arrived, but not all of them: say so rather than let a short
+      // grid read as "this is everything there is".
+      const status = document.createElement("div");
+      status.className = "status";
+      status.textContent = "Some artwork sources could not be reached.";
+      artGrid.append(status);
+    }
+    markCurrentAlt();
+  }
+
+  function markCurrentAlt() {
+    artGrid.querySelectorAll(".alt").forEach(
+      el => el.classList.toggle("current", !!artCurrentUrl && el.dataset.url === artCurrentUrl));
+  }
+
+  // A pick lands in coverart_url, which is what the artwork cache keys on and
+  // what the embed reads. `_art` marks the row as carrying a deliberate choice:
+  // it is why the save payload includes the URL at all, and why the thumb
+  // previews the raw image until the server has rebuilt the composite.
+  function chooseArtwork(url) {
+    if (!artTrack) return;
+    artTrack.coverart_url = url || null;
+    artTrack._art = true;
+    artCurrentUrl = url || null;
+    setDirty(true);
+    overlayImg.hidden = !url;
+    if (url) overlayImg.src = url;
+    setPickNote(url);
+    markCurrentAlt();
+    render();
+  }
+
+  document.getElementById("art-auto").onclick = () => chooseArtwork(null);
+  document.getElementById("art-url-use").onclick = () => useTypedUrl();
+  artUrlEl.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); useTypedUrl(); }
+  });
+
+  // Load the URL here before pinning it. The server falls through its waterfall
+  // when a cover URL fails to download, so a dead link would not error -- it
+  // would quietly composite some other source's art under this track's name.
+  function useTypedUrl() {
+    const url = artUrlEl.value.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url)) {
+      artNote.textContent = "Artwork URLs must start with http:// or https://.";
+      artNote.hidden = false;
+      return;
+    }
+    artNote.textContent = "Loading that image…";
+    artNote.hidden = false;
+    // Captured, like loadAlternates does: the probe resolves asynchronously, so
+    // pinning to whatever artTrack happens to be by then would land the URL on a
+    // different track (or on none, if the panel was closed meanwhile). The
+    // sequence number covers the other direction -- two pastes for the *same*
+    // track, where a slower first probe would otherwise land last and win.
+    const target = artTrack;
+    const seq = ++artProbeSeq;
+    const live = () => seq === artProbeSeq && target === artTrack;
+    const probe = new Image();
+    probe.onload = () => { if (live()) chooseArtwork(url); };
+    probe.onerror = () => {
+      if (live()) artNote.textContent = "That URL did not load as an image.";
+    };
+    probe.src = url;
+  }
+
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && overlay.classList.contains("open")) { overlay.click(); return; }
+    // The artwork panel owns the keyboard while it is open: its candidate tiles
+    // are BUTTONs, and the guard below exempts only inputs, so the arrows would
+    // seek the audio while the user is browsing covers.
+    if (overlay.classList.contains("open")) return;
     // Never steal keys from an editor: artist/title/time fields and the summary
     // textarea all need Space and the arrows to behave normally. #seek is an
     // INPUT too, but deliberately excluded -- e.preventDefault() below already
@@ -324,8 +586,16 @@
     } else if (hasIndex) {
       // The gradient stays until the composite lands, so rows never jump.
       thumb.dataset.index = t.index;
-      thumb.onclick = (e) => { e.stopPropagation(); showArtwork(t.index); };
-      artObserver.observe(thumb);
+      thumb.onclick = (e) => { e.stopPropagation(); showArtwork(t); };
+      if (t._art) {
+        // Picked in this session and not saved yet. The server's composite is
+        // still built from the old art, so requesting it would contradict what
+        // the user just chose; show the raw choice instead. "Automatic" leaves
+        // no URL to show, so the gradient placeholder stands in until the save.
+        if (t.coverart_url) thumb.style.backgroundImage = "url('" + t.coverart_url + "')";
+      } else {
+        artObserver.observe(thumb);
+      }
     }
     // else: an unsaved inserted row has no server index yet -- keep the
     // gradient placeholder and skip the artwork request entirely.
@@ -343,6 +613,16 @@
     meta.onclick = () => startEdit(row, i);
     row.appendChild(meta);
 
+    // Passive badge, not a control: the choice is made in the artwork panel,
+    // but which track carries it has to be visible without opening every row.
+    if (t.episode_cover) {
+      const star = document.createElement("div");
+      star.className = "star";
+      star.textContent = "★";
+      star.title = "This track's artwork is the episode cover";
+      row.appendChild(star);
+    }
+
     const time = document.createElement("div");
     time.className = "time"; time.textContent = t.time;
     row.appendChild(time);
@@ -354,7 +634,17 @@
 
     const rej = document.createElement("button");
     rej.className = "iconbtn reject"; rej.textContent = t.rejected ? "↩" : "✕";
-    rej.onclick = (e) => { e.stopPropagation(); t.rejected = !t.rejected; setDirty(true); render(); };
+    rej.onclick = (e) => {
+      e.stopPropagation();
+      t.rejected = !t.rejected;
+      // A rejected track is absent from the output entirely -- including from
+      // the sidecar, which is where the star is stored -- so it cannot be the
+      // episode cover. Clearing it here keeps the ★ from lingering on a row
+      // whose choice would silently vanish on the next reload.
+      if (t.rejected) t.episode_cover = false;
+      setDirty(true);
+      render();
+    };
     row.appendChild(rej);
 
     const add = document.createElement("button");
@@ -569,9 +859,16 @@
     // Existing rows map back by their stable server index (NOT array position,
     // which inserted rows shift); new rows carry a timestamp and no index.
     const hasNew = tracks.some(t => t._new);
-    const payload = { summary: summaryEl.value, tracks: tracks.map(t => t._new
-      ? { artist: t.artist, title: t.title, timestamp: t.timestamp, rejected: !!t.rejected }
-      : { index: t.index, artist: t.artist, title: t.title, rejected: !!t.rejected }) };
+    const payload = { summary: summaryEl.value, tracks: tracks.map(t => {
+      if (t._new) return { artist: t.artist, title: t.title, timestamp: t.timestamp, rejected: !!t.rejected };
+      const edit = { index: t.index, artist: t.artist, title: t.title,
+                     rejected: !!t.rejected, episode_cover: !!t.episode_cover };
+      // Only rows whose artwork the user actually picked carry a coverart_url.
+      // Sending it for every row would re-pin the art that apply_track_edit()
+      // deliberately drops when an artist/title is corrected (#30).
+      if (t._art) edit.coverart_url = t.coverart_url;
+      return edit;
+    }) };
     try {
       const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const res = await r.json();
@@ -579,6 +876,13 @@
         // Always re-render: an edited artist/title changes the composite, and
         // the thumb must re-request against the now-saved server state.
         artVersion++;
+        // The picks are on the server now, so rows go back to previewing its
+        // regenerated composite instead of the raw image that was chosen.
+        tracks.forEach(t => { delete t._art; });
+        // The open panel is showing a pre-save preview and a "Save to apply"
+        // note, and after a reload its track object is stale; close it rather
+        // than leave either lying.
+        if (overlay.classList.contains("open")) closeArtwork();
         if (hasNew) await load();  // inserted rows also need real indices
         else render();
         setDirty(false); toast("Saved");

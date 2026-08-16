@@ -17,7 +17,8 @@ from importlib.resources import files
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from setlist_maker.artwork_cache import chapter_image
+from setlist_maker.artwork import CHAPTER_IMAGE_SIZE, is_fetchable_url, resize_cover_art_url
+from setlist_maker.artwork_cache import artwork_options, chapter_image
 from setlist_maker.editor import (
     CorrectionsDB,
     Track,
@@ -62,6 +63,7 @@ def tracklist_to_api(tracklist: Tracklist) -> dict:
                 "rejected": t.rejected,
                 "is_unidentified": t.is_unidentified,
                 "coverart_url": t.coverart_url,
+                "episode_cover": t.is_episode_cover,
                 "original_artist": t.original_artist,
                 "original_title": t.original_title,
             }
@@ -84,6 +86,20 @@ def _normalize_summary(value: str | None) -> str | None:
     return text or None
 
 
+def _picked_artwork_url(edit: dict) -> str | None:
+    """The artwork URL an edit pins, validated. None means "back to automatic".
+
+    Refusing anything but http(s) here matters because this URL is persisted to
+    the JSON sidecar and handed to ``urlopen`` by this process on every later
+    run; its default opener would treat ``file://`` as a perfectly good source
+    of "cover art".
+    """
+    url = (edit.get("coverart_url") or "").strip() or None
+    if url is not None and not is_fetchable_url(url):
+        raise ValueError(f"artwork URL must be http:// or https:// -- got {url!r}")
+    return url
+
+
 def apply_edits(
     tracklist: Tracklist,
     edits: list[dict],
@@ -101,9 +117,24 @@ def apply_edits(
     An optional ``summary`` (when omitted, the tracklist summary is left
     unchanged) replaces ``tracklist.summary``, normalized to a single
     paragraph; blank/None clears it.
+
+    Two artwork keys are also optional, and both are absent from an edit the
+    user did not make in the picker. ``coverart_url`` pins a chosen cover: it is
+    applied *after* ``apply_track_edit``, which clears that field on a
+    correction, so picking art and fixing a typo in one save keeps the art.
+    ``episode_cover`` marks whose art becomes the episode-level cover. It is
+    exclusive -- the last track a payload marks wins and every other is cleared
+    -- and is refused on a rejected track, which the sidecar does not carry.
     """
+    # Validate before mutating anything: a bad URL must not leave half the
+    # payload applied and the rest dropped.
+    for edit in edits:
+        if "coverart_url" in edit:
+            _picked_artwork_url(edit)
+
     by_index = dict(enumerate(tracklist.tracks))
     inserted: list[Track] = []
+    chosen_cover: Track | None = None
     for edit in edits:
         new_artist = (edit.get("artist") or "").strip()
         new_title = (edit.get("title") or "").strip()
@@ -126,6 +157,28 @@ def apply_edits(
             continue
         apply_track_edit(track, new_artist, new_title, corrections_db)
         track.rejected = bool(edit.get("rejected", track.rejected))
+        if "coverart_url" in edit:
+            # After apply_track_edit, never before: it clears coverart_url on a
+            # correction, which would otherwise discard a pick made in the same
+            # save. Supplying a URL is what pins it; clearing unpins.
+            track.coverart_url = _picked_artwork_url(edit)
+            track.artwork_pinned = track.coverart_url is not None
+        if "episode_cover" in edit:
+            # Never on a rejected track: to_json() drops those, so the star
+            # could not be stored -- and accepting it would still clear the
+            # previous, valid choice, leaving the set with no cover at all and
+            # nothing to say so.
+            starred = bool(edit["episode_cover"]) and not track.rejected
+            track.is_episode_cover = starred
+            if starred:
+                chosen_cover = track
+
+    if chosen_cover is not None:
+        # One cover per set. Clearing here rather than trusting the page keeps
+        # the invariant true for any client, and for a payload that marks two.
+        for other in tracklist.tracks:
+            if other is not chosen_cover:
+                other.is_episode_cover = False
 
     if inserted:
         tracklist.tracks.extend(inserted)
@@ -247,8 +300,95 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_audio()
         elif path == "/api/artwork":
             self._send_artwork()
+        elif path == "/api/artwork/options":
+            self._send_artwork_options()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _track_for_query(self) -> Track | None:
+        """Resolve ``?index=N`` to a track, sending the 404 itself on failure.
+
+        Shared by both artwork endpoints so they answer for exactly the same
+        set of tracks: a bad or out-of-range index, and an unidentified track,
+        which ``chapters`` skips too.
+        """
+        params = parse_qs(urlparse(self.path).query)
+        try:
+            index = int(params.get("index", [""])[0])
+        except (TypeError, ValueError):
+            self.send_error(HTTPStatus.NOT_FOUND, "bad index")
+            return None
+
+        tracks = self._ctx.tracklist.tracks
+        if not 0 <= index < len(tracks):
+            self.send_error(HTTPStatus.NOT_FOUND, "no such track")
+            return None
+
+        track = tracks[index]
+        if track.is_unidentified:
+            # chapters skips unidentified tracks, so there is nothing to preview
+            self.send_error(HTTPStatus.NOT_FOUND, "track is unidentified")
+            return None
+        return track
+
+    def _send_artwork_options(self) -> None:
+        """Serve the alternate covers one track could use.
+
+        Lazy on purpose. Unlike the composite endpoint this asks *every* source
+        rather than stopping at the first that answers, so it costs a handful of
+        third-party requests per track -- affordable when the user opened the
+        picker on one track, ruinous if it ran for all sixty on load.
+
+        The track's own URL is offered first and labelled, so the grid shows
+        what is in use beside the alternatives rather than making the user
+        remember it.
+
+        Searches on the artist/title the page passes -- what the user is
+        *currently* looking at -- rather than on saved state, which is the one
+        place in this server where those differ deliberately. Someone who has
+        just corrected a misidentification and not yet saved is exactly who
+        reaches for this: searching the stale name would offer covers for the
+        wrong song and then pin one. The composite endpoint does the opposite,
+        and must, because it has to show what would be embedded.
+        """
+        track = self._track_for_query()
+        if track is None:
+            return
+
+        params = parse_qs(urlparse(self.path).query)
+        artist = (params.get("artist", [""])[0] or track.artist).strip()
+        title = (params.get("title", [""])[0] or track.title).strip()
+
+        candidates: list[dict] = []
+        # Offered at the chapter image's size, which is the URL fetch_artwork
+        # would actually request anyway. It also makes a Shazam URL (an Apple
+        # CDN link, normally saved at 400px) collapse into iTunes' own tile for
+        # the same cover instead of sitting beside it as a visual duplicate.
+        in_use = (
+            resize_cover_art_url(track.coverart_url, CHAPTER_IMAGE_SIZE)
+            if track.coverart_url
+            else None
+        )
+        if in_use:
+            candidates.append({"source": "In use", "url": in_use, "label": ""})
+        error = None
+        try:
+            candidates += [
+                {"source": c.source, "url": c.url, "label": c.label}
+                for c in artwork_options(artist, title)
+            ]
+        except Exception as exc:  # a handler that raises sends no response at all
+            error = str(exc)
+
+        seen: set[str] = set()
+        unique = []
+        for candidate in candidates:
+            if candidate["url"] in seen:
+                continue  # the in-use URL is normally also offered by its source
+            seen.add(candidate["url"])
+            candidate["current"] = candidate["url"] == in_use
+            unique.append(candidate)
+        self._send_json({"candidates": unique, "error": error})
 
     def _send_artwork(self) -> None:
         """Serve the chapter composite for one track, generating it on demand.
@@ -257,22 +397,8 @@ class _Handler(BaseHTTPRequestHandler):
         cache is authoritative, so the preview must reflect *saved* state --
         that is what ``chapters`` will embed.
         """
-        params = parse_qs(urlparse(self.path).query)
-        try:
-            index = int(params.get("index", [""])[0])
-        except (TypeError, ValueError):
-            self.send_error(HTTPStatus.NOT_FOUND, "bad index")
-            return
-
-        tracks = self._ctx.tracklist.tracks
-        if not 0 <= index < len(tracks):
-            self.send_error(HTTPStatus.NOT_FOUND, "no such track")
-            return
-
-        track = tracks[index]
-        if track.is_unidentified:
-            # chapters skips unidentified tracks, so there is nothing to preview
-            self.send_error(HTTPStatus.NOT_FOUND, "track is unidentified")
+        track = self._track_for_query()
+        if track is None:
             return
 
         data = chapter_image(

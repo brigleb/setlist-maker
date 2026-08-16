@@ -1,5 +1,6 @@
 """Shared pytest fixtures for setlist-maker tests."""
 
+import socket
 import tempfile
 import time
 from pathlib import Path
@@ -7,6 +8,48 @@ from pathlib import Path
 import pytest
 
 from setlist_maker.editor import CorrectionsDB, Track, Tracklist
+
+# Hostnames a test may legitimately resolve: its own loopback server, nothing else.
+_ALLOWED_HOSTS = frozenset({"", "127.0.0.1", "::1", "localhost", "localhost."})
+
+
+class NetworkAccessBlocked(BaseException):
+    """Raised when a test tries to resolve a real host.
+
+    Deliberately a BaseException. Every artwork source helper wraps its request
+    in ``except Exception`` and returns None, so an ordinary error here would be
+    swallowed and the unpatched test would quietly pass with no artwork instead
+    of reporting the leak -- exactly the silence this guard exists to end.
+    """
+
+
+@pytest.fixture(autouse=True)
+def block_outbound_network(monkeypatch):
+    """Fail any test that tries to reach a real host.
+
+    Nothing structurally stopped a test from hitting iTunes, Deezer or the
+    Cover Art Archive: one that forgot to patch its seam simply passed --
+    slowly, at a rate limiter's mercy, and only until the machine had no
+    network. That risk grew with the artwork picker, which asks every source
+    instead of stopping at the first that answers.
+
+    Name resolution is the choke point every outbound connection goes through,
+    so refusing to resolve anything but loopback catches the mistake where it
+    is made and names the fix. The web editor's own tests talk to a loopback
+    server on an ephemeral port and are unaffected.
+    """
+    real_getaddrinfo = socket.getaddrinfo
+
+    def guarded(host, *args, **kwargs):
+        if host is not None and str(host).lower() not in _ALLOWED_HOSTS:
+            raise NetworkAccessBlocked(
+                f"test tried to resolve {host!r} -- patch the network seam instead: "
+                f"'setlist_maker.artwork.urllib.request.urlopen' for a source helper, "
+                f"or fetch_artwork/artwork_candidates in the module that imported it"
+            )
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", guarded)
 
 
 @pytest.fixture

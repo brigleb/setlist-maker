@@ -52,6 +52,7 @@ from setlist_maker.audio import get_audio_file
 from setlist_maker.chapters import embed_chapters
 from setlist_maker.editor import (
     CorrectionsDB,
+    Track,
     Tracklist,
     find_audio_file,
     parse_markdown_tracklist,
@@ -282,9 +283,15 @@ def _load_tracklist_with_artwork_urls(
                 jt = json_by_timestamp.get(track.timestamp)
                 if jt:
                     url = jt.get("coverart_url")
-                    if url:
+                    # isinstance, not truthiness: a hand-edited sidecar holding
+                    # a number here would reach cache_key's str join and
+                    # resize_cover_art_url's re.sub, both outside this try.
+                    if url and isinstance(url, str):
                         track.coverart_url = url
                         coverart_urls[i] = url
+                        track.artwork_pinned = bool(jt.get("artwork_pinned"))
+                    # Curated in the editor: whose art becomes the episode cover.
+                    track.is_episode_cover = bool(jt.get("episode_cover"))
 
             return tracklist, coverart_urls
         except (json.JSONDecodeError, IOError, TypeError):
@@ -299,6 +306,38 @@ def _load_tracklist_with_artwork_urls(
         tracklist = parse_markdown_tracklist(f.read())
 
     return tracklist, coverart_urls
+
+
+def _episode_cover_image(tracklist: Tracklist, chapter_tracks: list[Track]) -> bytes | None:
+    """Build the episode-level cover from one track's artwork, relabelled for the set.
+
+    Prefers the track the user starred in the editor; otherwise falls back to
+    the original rule, the first track with *real* artwork. The starred track
+    is only a preference, not a guarantee -- if its lookup turns up nothing the
+    search continues down the list, because a set with a usable cover somewhere
+    should get one rather than none.
+
+    ``source_artwork()`` returns the same fetched image that track's chapter
+    composite already used (a cache hit, no network) or None when nothing was
+    findable, so one call answers both "is there art here" and "which art".
+    None must keep meaning *skip*: handing it to ``create_chapter_image`` would
+    produce a gradient card and, being truthy bytes, permanently block every
+    later track from supplying a real cover.
+    """
+    identified = [t for t in chapter_tracks if not t.is_unidentified]
+    starred = next((t for t in identified if t.is_episode_cover), None)
+    if starred is not None:
+        identified = [starred] + [t for t in identified if t is not starred]
+
+    for track in identified:
+        src = source_artwork(track.artist, track.title, track.coverart_url)
+        if src:
+            return create_chapter_image(
+                artwork_bytes=src,
+                artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
+                title="Tracklist",
+            )
+    return None
 
 
 def embed_chapters_for_tracklist(
@@ -348,21 +387,10 @@ def embed_chapters_for_tracklist(
                 coverart_url=track.coverart_url,
             )
 
-            # Episode cover: first track with *real* artwork, relabelled for the
-            # set. source_artwork() returns the same fetched image this track's
-            # chapter composite used (normally a cache hit, no network), or None
-            # when nothing was findable -- which is exactly the pre-cache rule
-            # for skipping a track, so one call answers both questions.
-            if episode_image is None:
-                src = source_artwork(track.artist, track.title, track.coverart_url)
-                if src:
-                    episode_image = create_chapter_image(
-                        artwork_bytes=src,
-                        artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
-                        title="Tracklist",
-                    )
-
         print(f"  Generated {len(chapter_images)} chapter image(s)")
+
+        if episode_image is None:
+            episode_image = _episode_cover_image(tracklist, chapter_tracks)
 
     # Embed chapters into MP3
     print(f"\n{'─' * 60}")
@@ -574,7 +602,7 @@ Examples:
         "--cover",
         metavar="IMAGE",
         help="With --chapters, use this image file as the episode cover instead of "
-        "the first track's artwork (per-track chapter images are unaffected)",
+        "the derived one (per-track chapter images are unaffected)",
     )
 
     identify_parser.add_argument(
@@ -680,8 +708,8 @@ Examples:
     chapters_parser.add_argument(
         "--cover",
         metavar="IMAGE",
-        help="Use this image file as the episode cover instead of the first "
-        "track's artwork (per-track chapter images are unaffected)",
+        help="Use this image file as the episode cover instead of the derived "
+        "one (per-track chapter images are unaffected)",
     )
 
     # ─────────────────────────────────────────────────────────────────────────

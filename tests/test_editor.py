@@ -484,3 +484,64 @@ class TestResolveAudioPath:
         md = temp_dir / "set_tracklist.md"
         editor = self._editor(md, audio_path=missing)
         assert editor._resolve_audio_path() is None
+
+
+class TestPinnedArtwork:
+    """A cover the user picked outlives a later text correction (#20)."""
+
+    def _pinned(self):
+        return Track(
+            timestamp=0,
+            artist="Daft Punk",
+            title="Around the Wold",
+            coverart_url="https://itunes/discovery.jpg",
+            artwork_pinned=True,
+        )
+
+    def test_correction_keeps_a_pinned_coverart_url(self):
+        """#30 clears the URL because it is Shazam's evidence about the *old*
+        identification. A picked cover is the opposite -- the user's answer
+        about this track -- so a typo fix must not throw it away."""
+        track = self._pinned()
+        assert apply_track_edit(track, "Daft Punk", "Around the World") is True
+        assert track.coverart_url == "https://itunes/discovery.jpg"
+
+    def test_correction_still_clears_an_unpinned_coverart_url(self):
+        """The #30 behavior is untouched for art nobody chose."""
+        track = self._pinned()
+        track.artwork_pinned = False
+        assert apply_track_edit(track, "Justice", "Genesis") is True
+        assert track.coverart_url is None
+
+    def test_tracks_default_to_unpinned_and_uncovered(self):
+        track = Track(timestamp=0, artist="A", title="B")
+        assert track.artwork_pinned is False
+        assert track.is_episode_cover is False
+
+
+class TestCurationRoundTrip:
+    """The curated choices ride in the JSON sidecar, which stays a bare list."""
+
+    def test_to_json_carries_the_curation_fields(self):
+        tracklist = Tracklist(source_file="set.mp3")
+        tracklist.tracks = [
+            Track(
+                timestamp=0,
+                artist="Daft Punk",
+                title="Around the World",
+                coverart_url="https://itunes/discovery.jpg",
+                artwork_pinned=True,
+                is_episode_cover=True,
+            )
+        ]
+        exported = tracklist.to_json()
+        assert isinstance(exported, list), "the sidecar's top level must not become an object"
+        assert exported[0]["coverart_url"] == "https://itunes/discovery.jpg"
+        assert exported[0]["artwork_pinned"] is True
+        assert exported[0]["episode_cover"] is True
+
+    def test_untouched_tracks_export_the_fields_as_false(self):
+        tracklist = Tracklist(source_file="set.mp3")
+        tracklist.tracks = [Track(timestamp=0, artist="A", title="B")]
+        assert tracklist.to_json()[0]["artwork_pinned"] is False
+        assert tracklist.to_json()[0]["episode_cover"] is False

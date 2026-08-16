@@ -37,6 +37,12 @@ class Track:
     shazam_url: str | None = None
     album: str | None = None
     coverart_url: str | None = None
+    # True once the user picked this cover in the editor, which turns
+    # coverart_url from "what Shazam said" into "what the user chose" -- the
+    # difference apply_track_edit() needs to know about (#20).
+    artwork_pinned: bool = False
+    # Whose artwork becomes the episode-level cover; at most one track carries it.
+    is_episode_cover: bool = False
     confidence: float | None = None  # Shazam match-confidence proxy, if known
     original_artist: str | None = None  # For tracking corrections
     original_title: str | None = None
@@ -101,7 +107,17 @@ class Tracklist:
         return "\n".join(lines)
 
     def to_json(self) -> list[dict]:
-        """Export tracklist as JSON-serializable list."""
+        """Export tracklist as JSON-serializable list.
+
+        Stays a bare list even though the episode-cover choice is conceptually
+        a property of the *set*: it is expressed as a flag on the one track
+        whose art is used, so the sidecar's top-level shape never changes.
+        Wrapping it in an object would be read as a dict by every existing
+        reader -- ``_load_tracklist_with_artwork_urls`` iterates it, and
+        iterating a dict yields harmless-looking strings rather than raising,
+        so the failure is silent: every track loses its ``coverart_url`` and
+        re-keys the artwork cache.
+        """
         return [
             {
                 "timestamp": t.timestamp,
@@ -112,6 +128,8 @@ class Tracklist:
                 "shazam_url": t.shazam_url,
                 "album": t.album,
                 "coverart_url": t.coverart_url,
+                "artwork_pinned": t.artwork_pinned,
+                "episode_cover": t.is_episode_cover,
                 "confidence": t.confidence,
             }
             for t in self.tracks
@@ -251,13 +269,19 @@ def apply_track_edit(
     Shared by the TUI editor and the web editor so both front ends learn
     corrections identically and cannot drift apart.
 
-    Clears ``coverart_url``. That URL is evidence attached to the *original*
-    Shazam identification, and ``fetch_artwork()`` tries it ahead of every
-    search. Left in place on a correction it short-circuits the waterfall, so
-    the chapter image keeps showing the misidentified track's cover under the
-    corrected text -- regenerating, because artist and title are in the cache
-    key, but regenerating the same wrong picture (#30). Dropping it lets iTunes
-    / Deezer / MusicBrainz search on what the user actually said the track is.
+    Clears ``coverart_url`` unless the user pinned it. That URL is normally
+    evidence attached to the *original* Shazam identification, and
+    ``fetch_artwork()`` tries it ahead of every search. Left in place on a
+    correction it short-circuits the waterfall, so the chapter image keeps
+    showing the misidentified track's cover under the corrected text --
+    regenerating, because artist and title are in the cache key, but
+    regenerating the same wrong picture (#30). Dropping it lets iTunes /
+    Deezer / MusicBrainz search on what the user actually said the track is.
+
+    ``artwork_pinned`` is the exception, and the reason the field exists: a
+    cover chosen in the editor's picker is not Shazam's guess about the old
+    identification, it is the user's answer about this track, and clearing it
+    on a later typo fix would silently throw that answer away (#20).
 
     Returns True if the track changed.
     """
@@ -272,7 +296,8 @@ def apply_track_edit(
 
     track.artist = artist
     track.title = title
-    track.coverart_url = None
+    if not track.artwork_pinned:
+        track.coverart_url = None
 
     if corrections_db and track.was_corrected:
         corrections_db.add_correction(
