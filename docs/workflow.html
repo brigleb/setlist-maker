@@ -345,13 +345,14 @@
   </li>
   <li class="shipped">
     <span class="num">#16</span>
-    <span class="where">reopen path · fixed in PR #43, pending merge</span>
+    <span class="where">reopen path · closed aug 2026</span>
     <span class="what">A set description containing numbered, track-looking lines used to be
     misparsed when the <code>.md</code> came back in — the description was lost <em>and</em> a
     phantom track appeared, at the head of the list, out of order, taking a bogus chapter into
     the MP3. The description is now fenced in <code>&lt;!-- summary --&gt;</code> markers that render
     as nothing, and those lines are excluded from every other scan, so anything you type survives
-    a reopen. Older, unfenced files still parse, and upgrade on their next save.</span>
+    a reopen. Older, unfenced files still parse, and upgrade on their next save. Shipped in
+    PR #43 (<code>c2f8a21</code>).</span>
   </li>
   <li class="shipped">
     <span class="num">#7</span>
@@ -395,7 +396,7 @@ setlist-maker set.md -w            <span class="c"># reopen an existing tracklis
 setlist-maker set.mp3 --chapters   <span class="c"># full run, then embed ID3 chapters</span>
 setlist-maker chapters set.md --audio set.mp3</pre>
 
-<footer>Drawn from the code on <code>main</code> (<code>c60dd6c</code>) plus the open PR #43, and the
-GitHub issues as of August 16, 2026. Module map lives in CLAUDE.md; this page adds the flow between
-the modules. The web-editor issues (#19–#22) still aren't mapped here.</footer>
+<footer>Drawn from the code on <code>main</code> (<code>0d8f0ed</code>) and the GitHub issues as of
+August 16, 2026. Module map lives in CLAUDE.md; this page adds the flow between the modules.
+The web-editor issues (#19–#22) still aren't mapped here.</footer>
 </main>
