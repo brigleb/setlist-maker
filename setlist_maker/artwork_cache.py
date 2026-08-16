@@ -8,13 +8,21 @@ the MP3, and a post-editing ``--chapters`` run costs no network.
 """
 
 import hashlib
+import json
 import logging
 import os
 import tempfile
 import threading
+from dataclasses import asdict
 from pathlib import Path
 
-from setlist_maker.artwork import CHAPTER_IMAGE_SIZE, create_chapter_image, fetch_artwork
+from setlist_maker.artwork import (
+    CHAPTER_IMAGE_SIZE,
+    ArtworkCandidate,
+    artwork_candidates,
+    create_chapter_image,
+    fetch_artwork,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +194,62 @@ def source_artwork(
         else:
             _write_cached(path, artwork_bytes)
         return artwork_bytes
+
+
+def _read_cached_candidates(path: Path) -> list[ArtworkCandidate] | None:
+    """Return a cached candidate list, or None if absent, unreadable or stale-shaped."""
+    try:
+        raw = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return None
+    try:
+        return [ArtworkCandidate(**item) for item in raw]
+    except TypeError:
+        # Written by a version with different fields: regenerate rather than
+        # serve something the picker cannot render.
+        return None
+
+
+def artwork_options(
+    artist: str,
+    title: str,
+    size: int = CHAPTER_IMAGE_SIZE,
+) -> list[ArtworkCandidate]:
+    """Return the alternate cover-art options for a track, cached on disk.
+
+    Keyed *without* a ``coverart_url``: which alternates a search turns up
+    depends on artist, title and size alone -- a saved URL is one particular
+    answer, not an input to the question -- so the ``.cands`` entry sits beside
+    the ``.src``/``.jpg`` files of the no-URL variant of the same key. Reopening
+    the picker on a track is then free, which matters because the fan-out here
+    is the expensive one: every source is asked, instead of stopping at the
+    first that answers.
+
+    An empty result is deliberately *not* cached, unlike ``source_artwork``'s
+    ``.fallback`` marker. "No alternates" much more often means the network was
+    down than that the track has none, and this is an interactive surface where
+    retrying costs the user one click rather than a whole re-run.
+    """
+    key = cache_key(artist, title, None, size)
+    path = cache_dir() / f"{key}.cands"
+
+    cached = _read_cached_candidates(path)
+    if cached is not None:
+        return cached
+
+    # Key lock first, then the semaphore -- the same order source_artwork()
+    # takes, so the two paths cannot deadlock against each other.
+    with _lock_for(key):
+        cached = _read_cached_candidates(path)
+        if cached is not None:
+            return cached
+
+        with _generation_slots:
+            found = artwork_candidates(artist, title, size=size)
+
+        if found:
+            _write_cached(path, json.dumps([asdict(c) for c in found]).encode("utf-8"))
+        return found
 
 
 def chapter_image(

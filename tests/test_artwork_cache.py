@@ -365,3 +365,89 @@ def test_corrected_track_searches_on_new_metadata_not_the_stale_url(monkeypatch)
     source_artwork(track.artist, track.title, track.coverart_url)
 
     assert calls == [("Justice", "Genesis", None)]
+
+
+def _one_candidate(url="https://x/a.jpg", label="Discovery"):
+    from setlist_maker.artwork import ArtworkCandidate
+
+    return ArtworkCandidate("iTunes", url, label)
+
+
+def test_artwork_options_caches_the_candidate_list(monkeypatch):
+    """Reopening the picker on a track must not re-run the fan-out.
+
+    This is the expensive lookup in the module -- every source is asked rather
+    than stopping at the first that answers -- and comparing covers means
+    opening, closing and reopening the panel.
+    """
+    from setlist_maker import artwork_cache
+
+    calls = []
+
+    def fake_candidates(artist, title, size=600, per_source=3):
+        calls.append((artist, title, size))
+        return [_one_candidate()]
+
+    monkeypatch.setattr(artwork_cache, "artwork_candidates", fake_candidates)
+
+    first = artwork_cache.artwork_options("Daft Punk", "Around the World")
+    second = artwork_cache.artwork_options("Daft Punk", "Around the World")
+
+    assert first == second == [_one_candidate()]
+    assert len(calls) == 1  # the second answer came off disk
+    key = artwork_cache.cache_key("Daft Punk", "Around the World", None, 600)
+    assert (artwork_cache.cache_dir() / f"{key}.cands").exists()
+
+
+def test_artwork_options_key_ignores_the_saved_coverart_url(monkeypatch):
+    """Which alternates exist depends on artist/title/size, not on the answer
+    currently in use -- so picking one must not orphan the cached list."""
+    from setlist_maker import artwork_cache
+
+    calls = []
+    monkeypatch.setattr(
+        artwork_cache,
+        "artwork_candidates",
+        lambda artist, title, size=600, per_source=3: calls.append(1) or [_one_candidate()],
+    )
+
+    artwork_cache.artwork_options("Daft Punk", "Around the World")
+    # The key is the no-URL variant, so a later pick lands on the same file.
+    no_url_key = artwork_cache.cache_key("Daft Punk", "Around the World", None, 600)
+    assert (artwork_cache.cache_dir() / f"{no_url_key}.cands").exists()
+    assert len(calls) == 1
+
+
+def test_artwork_options_does_not_cache_an_empty_result(monkeypatch):
+    """Unlike source_artwork's .fallback marker, "no alternates" is not worth
+    remembering: it far more often means the network was down than that the
+    track has none, and a retry here costs the user one click, not a re-run."""
+    from setlist_maker import artwork_cache
+
+    calls = []
+    monkeypatch.setattr(
+        artwork_cache,
+        "artwork_candidates",
+        lambda artist, title, size=600, per_source=3: calls.append(1) or [],
+    )
+
+    assert artwork_cache.artwork_options("Nobody", "Nothing") == []
+    assert artwork_cache.artwork_options("Nobody", "Nothing") == []
+    assert len(calls) == 2
+
+
+def test_artwork_options_regenerates_a_cache_file_it_cannot_parse(monkeypatch):
+    """A file from another version must regenerate, not crash the picker."""
+    from setlist_maker import artwork_cache
+
+    key = artwork_cache.cache_key("Daft Punk", "Around the World", None, 600)
+    path = artwork_cache.cache_dir() / f"{key}.cands"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'[{"unexpected": "shape"}]')
+
+    monkeypatch.setattr(
+        artwork_cache,
+        "artwork_candidates",
+        lambda artist, title, size=600, per_source=3: [_one_candidate()],
+    )
+    assert artwork_cache.artwork_options("Daft Punk", "Around the World") == [_one_candidate()]

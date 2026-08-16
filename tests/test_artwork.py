@@ -1,6 +1,7 @@
 """Tests for setlist_maker.artwork module."""
 
 import io
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,12 +10,19 @@ from PIL import Image, ImageDraw, ImageFont
 from setlist_maker.artwork import (
     CHAPTER_IMAGE_SIZE,
     MAX_IMAGE_BYTES,
+    ArtworkCandidate,
     _clean_query,
     _compress_to_jpeg,
     _create_fallback_background,
     _draw_text_fitted,
+    artwork_candidates,
     create_chapter_image,
+    deezer_artwork_candidates,
+    download_image,
     fetch_artwork,
+    is_fetchable_url,
+    itunes_artwork_candidates,
+    musicbrainz_artwork_candidates,
     resize_cover_art_url,
     search_deezer_artwork,
     search_itunes_artwork,
@@ -28,6 +36,24 @@ def _make_test_image(size: int = 600, color: tuple = (255, 0, 0)) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     return buf.getvalue()
+
+
+def _json_response(payload: dict) -> MagicMock:
+    """A urlopen context-manager stub that hands back ``payload`` as JSON."""
+    response = MagicMock()
+    response.read.return_value = json.dumps(payload).encode()
+    response.__enter__ = lambda s: s
+    response.__exit__ = MagicMock(return_value=False)
+    return response
+
+
+def _redirect_response(url: str) -> MagicMock:
+    """A urlopen stub standing in for a Cover Art Archive redirect."""
+    response = MagicMock()
+    response.url = url
+    response.__enter__ = lambda s: s
+    response.__exit__ = MagicMock(return_value=False)
+    return response
 
 
 class TestResizeCoverArtUrl:
@@ -539,3 +565,261 @@ class TestLoadCoverImage:
         bogus.write_text("this is not an image")
         with pytest.raises(CoverImageError):
             load_cover_image(bogus)
+
+
+class TestDownloadImageScheme:
+    """download_image only speaks http(s) (#20).
+
+    Cover-art URLs used to come only from Shazam and the search APIs. The
+    editor's picker lets a user type one, and it is persisted to the JSON
+    sidecar and handed to urlopen by this process on every later run --
+    whose default opener treats file:, ftp: and data: as perfectly good
+    sources of "cover art".
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "file:///etc/passwd",
+            "data:image/png;base64,iVBORw0KGgo=",
+            "ftp://example.com/cover.jpg",
+            "javascript:alert(1)",
+            "//example.com/cover.jpg",  # scheme-relative: no scheme at all
+            "not a url",
+            "",
+        ],
+    )
+    def test_refuses_anything_but_http(self, url):
+        with patch("setlist_maker.artwork.urllib.request.urlopen") as mock_urlopen:
+            assert download_image(url) is None
+            mock_urlopen.assert_not_called()
+
+    def test_does_not_read_a_local_file(self, tmp_path):
+        """The end-to-end version: a real file: URL, no mock in the way."""
+        secret = tmp_path / "secret.txt"
+        secret.write_text("this is not cover art")
+        assert download_image(secret.as_uri()) is None
+
+    @pytest.mark.parametrize(
+        "url,ok",
+        [
+            ("https://example.com/a.jpg", True),
+            ("http://example.com/a.jpg", True),
+            ("https:///a.jpg", False),  # no host
+            ("HTTPS://example.com/a.jpg", True),  # urlparse lowercases the scheme
+        ],
+    )
+    def test_is_fetchable_url(self, url, ok):
+        assert is_fetchable_url(url) is ok
+
+
+class TestItunesArtworkCandidates:
+    """iTunes' contribution to the picker."""
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_offers_one_candidate_per_distinct_album(self, mock_urlopen):
+        mock_urlopen.return_value = _json_response(
+            {
+                "resultCount": 3,
+                "results": [
+                    {"collectionName": "Discovery", "artworkUrl100": "https://x/a/100x100bb.jpg"},
+                    {"collectionName": "Musique", "artworkUrl100": "https://x/b/100x100bb.jpg"},
+                    # Same album as the first result: one tile, not two.
+                    {"collectionName": "Discovery", "artworkUrl100": "https://x/a/100x100bb.jpg"},
+                ],
+            }
+        )
+
+        found = itunes_artwork_candidates("Daft Punk", "One More Time", 600, limit=3)
+
+        assert [c.url for c in found] == [
+            "https://x/a/600x600bb.jpg",
+            "https://x/b/600x600bb.jpg",
+        ]
+        assert [c.source for c in found] == ["iTunes", "iTunes"]
+        assert found[0].label == "Discovery"  # what distinguishes two iTunes tiles
+        # Still one request whatever the limit: the API's own limit does the work,
+        # so widening iTunes for the picker costs nothing the waterfall didn't pay.
+        assert mock_urlopen.call_count == 1
+        assert "limit=3" in mock_urlopen.call_args[0][0].full_url
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_network_failure_yields_no_candidates(self, mock_urlopen):
+        mock_urlopen.side_effect = Exception("Network error")
+        assert itunes_artwork_candidates("Artist", "Title") == []
+
+
+class TestDeezerArtworkCandidates:
+    """Deezer's contribution, including the query that returned nothing."""
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_retries_with_a_plain_term_when_the_advanced_query_is_empty(self, mock_urlopen):
+        """Deezer's advanced syntax demands an exact field match and misses a
+        large share of real tracks -- measured returning 0 rows for both
+        'Daft Punk / One More Time' and 'Kraftwerk / Autobahn' while the plain
+        term returns 48 and 164. Without the retry Deezer contributes nothing
+        to the picker, and nothing to the waterfall either.
+        """
+        mock_urlopen.side_effect = [
+            _json_response({"total": 0, "data": []}),
+            _json_response(
+                {
+                    "data": [
+                        {
+                            "album": {
+                                "title": "Discovery",
+                                "cover_xl": "https://dz/cover/hash/1000x1000-000.jpg",
+                            }
+                        }
+                    ]
+                }
+            ),
+        ]
+
+        found = deezer_artwork_candidates("Daft Punk", "One More Time", 600, limit=3)
+
+        assert [c.url for c in found] == ["https://dz/cover/hash/600x600-000.jpg"]
+        assert found[0].label == "Discovery"
+        assert mock_urlopen.call_count == 2
+        advanced, plain = (call[0][0].full_url for call in mock_urlopen.call_args_list)
+        assert "artist%3A" in advanced  # the exact-field query is still tried first
+        assert "artist%3A" not in plain
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_does_not_retry_when_the_advanced_query_answers(self, mock_urlopen):
+        mock_urlopen.return_value = _json_response(
+            {
+                "data": [
+                    {
+                        "album": {
+                            "title": "Dig Your Own Hole",
+                            "cover_big": "https://dz/c/500x500-0.jpg",
+                        }
+                    }
+                ]
+            }
+        )
+        found = deezer_artwork_candidates("The Chemical Brothers", "Block Rockin' Beats")
+        assert len(found) == 1
+        assert mock_urlopen.call_count == 1
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_does_not_retry_when_the_request_itself_failed(self, mock_urlopen):
+        """Retrying a different *query* only helps when Deezer answered. After a
+        network failure the second query just buys another 15s timeout, so the
+        rung costs exactly what it did before this retry existed."""
+        mock_urlopen.side_effect = Exception("Network error")
+        assert deezer_artwork_candidates("Artist", "Title") == []
+        assert mock_urlopen.call_count == 1
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_single_result_helper_gains_the_retry(self, mock_urlopen):
+        """search_deezer_artwork is now a wrapper, so the waterfall benefits too."""
+        mock_urlopen.side_effect = [
+            _json_response({"data": []}),
+            _json_response({"data": [{"album": {"cover_big": "https://dz/c/500x500-0.jpg"}}]}),
+        ]
+        assert search_deezer_artwork("Daft Punk", "One More Time", 600) == (
+            "https://dz/c/600x600-0.jpg"
+        )
+
+
+class TestMusicbrainzArtworkCandidates:
+    """MusicBrainz + Cover Art Archive: the only source whose cost grows with limit."""
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_offers_one_candidate_per_release_and_skips_coverless_ones(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            _json_response(
+                {
+                    "recordings": [
+                        {
+                            "releases": [
+                                {"id": "r1", "title": "Discovery"},
+                                {"id": "r2", "title": "Coverless Comp"},
+                            ]
+                        }
+                    ]
+                }
+            ),
+            _redirect_response("https://archive.org/mbid-r1/front-500.jpg"),
+            Exception("404 Not Found"),  # r2 has no front cover in the archive
+        ]
+
+        found = musicbrainz_artwork_candidates("Daft Punk", "One More Time", limit=2)
+
+        # A release with no cover is dropped, not offered as a tile that 404s.
+        assert [(c.source, c.url, c.label) for c in found] == [
+            ("Cover Art Archive", "https://archive.org/mbid-r1/front-500.jpg", "Discovery")
+        ]
+        assert mock_urlopen.call_count == 3  # one search, one lookup per release
+
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_collects_distinct_releases_across_recordings(self, mock_urlopen):
+        """Several recordings routinely name the same release; it is one tile."""
+        mock_urlopen.side_effect = [
+            _json_response(
+                {
+                    "recordings": [
+                        {"releases": [{"id": "shared", "title": "Discovery"}]},
+                        {"releases": [{"id": "shared", "title": "Discovery"}]},
+                        {"releases": [{"id": "other", "title": "Alive 2007"}]},
+                    ]
+                }
+            ),
+            _redirect_response("https://archive.org/mbid-shared/front-500.jpg"),
+            _redirect_response("https://archive.org/mbid-other/front-500.jpg"),
+        ]
+
+        found = musicbrainz_artwork_candidates("Daft Punk", "One More Time", limit=3)
+
+        assert [c.label for c in found] == ["Discovery", "Alive 2007"]
+        assert mock_urlopen.call_count == 3  # two lookups, not three
+
+
+class TestArtworkCandidates:
+    """The whole picker list: every source asked, none skipped."""
+
+    @patch("setlist_maker.artwork.musicbrainz_artwork_candidates")
+    @patch("setlist_maker.artwork.deezer_artwork_candidates")
+    @patch("setlist_maker.artwork.itunes_artwork_candidates")
+    def test_asks_every_source_and_dedupes_across_them(self, mock_itunes, mock_deezer, mock_mb):
+        mock_itunes.return_value = [ArtworkCandidate("iTunes", "https://shared/c.jpg", "Discovery")]
+        mock_deezer.return_value = [
+            ArtworkCandidate("Deezer", "https://shared/c.jpg", "Discovery"),
+            ArtworkCandidate("Deezer", "https://dz/other.jpg", "Alive 2007"),
+        ]
+        mock_mb.return_value = [ArtworkCandidate("Cover Art Archive", "https://caa/r1.jpg", "D")]
+
+        found = artwork_candidates("Daft Punk", "One More Time")
+
+        # The contrast with fetch_artwork: an early answer does not stop the rest.
+        assert mock_itunes.called and mock_deezer.called and mock_mb.called
+        assert [c.url for c in found] == [
+            "https://shared/c.jpg",
+            "https://dz/other.jpg",
+            "https://caa/r1.jpg",
+        ]
+        # First-seen wins, so the list keeps the waterfall's own source priority.
+        assert found[0].source == "iTunes"
+
+    @patch("setlist_maker.artwork.musicbrainz_artwork_candidates", return_value=[])
+    @patch("setlist_maker.artwork.deezer_artwork_candidates", return_value=[])
+    @patch("setlist_maker.artwork.itunes_artwork_candidates", return_value=[])
+    def test_asks_itunes_twice_when_the_cleaned_query_differs(self, mock_itunes, _dz, _mb):
+        artwork_candidates("Daft Punk", "One More Time (Radio Edit)")
+        assert mock_itunes.call_count == 2
+        assert mock_itunes.call_args_list[1][0][1] == "One More Time"
+
+    @patch("setlist_maker.artwork.musicbrainz_artwork_candidates", return_value=[])
+    @patch("setlist_maker.artwork.deezer_artwork_candidates", return_value=[])
+    @patch("setlist_maker.artwork.itunes_artwork_candidates", return_value=[])
+    def test_asks_itunes_once_when_the_cleaned_query_is_the_same(self, mock_itunes, _dz, _mb):
+        artwork_candidates("Daft Punk", "One More Time")
+        assert mock_itunes.call_count == 1
+
+    @patch("setlist_maker.artwork.musicbrainz_artwork_candidates", return_value=[])
+    @patch("setlist_maker.artwork.deezer_artwork_candidates", return_value=[])
+    @patch("setlist_maker.artwork.itunes_artwork_candidates", return_value=[])
+    def test_no_source_answering_is_an_empty_list_not_an_error(self, _it, _dz, _mb):
+        assert artwork_candidates("Nobody", "Nothing") == []

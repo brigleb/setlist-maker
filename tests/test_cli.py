@@ -818,3 +818,177 @@ def test_missing_cover_file_fails_before_any_work(tmp_path, capsys):
         _resolve_cover(str(tmp_path / "nope.jpg"))
     assert exc.value.code == 1
     assert "not found" in capsys.readouterr().out
+
+
+def test_episode_cover_prefers_the_starred_track(monkeypatch, tmp_path, sample_tracklist):
+    """The curated choice beats the "first track with real art" default (#20).
+
+    Pixel-level for the same reason as the tests above: chapter_image() always
+    returns bytes, so asserting not-None would pass even if the cover silently
+    came from the wrong track or degraded to the gradient.
+    """
+    import io
+
+    from PIL import Image
+
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    opener_color = (200, 20, 21)
+    starred_color = (20, 21, 200)
+
+    def art_by_artist(artist, title, coverart_url=None, size=600):
+        if artist == "Daft Punk":  # the opener: what the old rule would pick
+            return _jpeg(opener_color)
+        if artist == "Fatboy Slim":  # the last track, starred below
+            return _jpeg(starred_color)
+        return None
+
+    monkeypatch.setattr("setlist_maker.artwork_cache.fetch_artwork", art_by_artist)
+    sample_tracklist.tracks[3].is_episode_cover = True
+
+    embedded = {}
+    monkeypatch.setattr(
+        "setlist_maker.cli.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
+    )
+
+    embed_chapters_for_tracklist(sample_tracklist, tmp_path / "set.mp3", fetch_art=True)
+
+    cover = Image.open(io.BytesIO(embedded["episode_image"])).convert("RGB")
+    pixel = cover.getpixel((0, 0))
+    assert all(abs(pixel[c] - starred_color[c]) <= 20 for c in range(3)), (
+        f"episode cover top-left pixel {pixel} is not the starred track's art "
+        f"{starred_color} -- it looks like the opener's, or the gradient"
+    )
+
+
+def test_episode_cover_falls_back_when_the_starred_track_has_no_art(
+    monkeypatch, tmp_path, sample_tracklist
+):
+    """A star is a preference, not a guarantee. A set with a usable cover
+    somewhere should still get one rather than none."""
+    import io
+
+    from PIL import Image
+
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    art_color = (200, 20, 21)
+
+    def art_for_the_opener_only(artist, title, coverart_url=None, size=600):
+        return _jpeg(art_color) if artist == "Daft Punk" else None
+
+    monkeypatch.setattr("setlist_maker.artwork_cache.fetch_artwork", art_for_the_opener_only)
+    sample_tracklist.tracks[3].is_episode_cover = True  # Fatboy Slim: nothing findable
+
+    embedded = {}
+    monkeypatch.setattr(
+        "setlist_maker.cli.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
+    )
+
+    embed_chapters_for_tracklist(sample_tracklist, tmp_path / "set.mp3", fetch_art=True)
+
+    cover = Image.open(io.BytesIO(embedded["episode_image"])).convert("RGB")
+    pixel = cover.getpixel((0, 0))
+    assert all(abs(pixel[c] - art_color[c]) <= 20 for c in range(3)), (
+        f"episode cover top-left pixel {pixel} is not the fallback track's art {art_color}"
+    )
+
+
+def test_explicit_cover_flag_still_outranks_a_starred_track(
+    monkeypatch, tmp_path, sample_tracklist
+):
+    """--cover is an explicit override typed at the moment of the run; the star
+    is a saved preference. The flag wins, and costs no artwork lookup."""
+    from setlist_maker.cli import embed_chapters_for_tracklist
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: _jpeg((20, 21, 200)),
+    )
+    sample_tracklist.tracks[3].is_episode_cover = True
+
+    embedded = {}
+    monkeypatch.setattr(
+        "setlist_maker.cli.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
+    )
+
+    embed_chapters_for_tracklist(
+        sample_tracklist, tmp_path / "set.mp3", fetch_art=True, cover_image=b"supplied-cover"
+    )
+    assert embedded["episode_image"] == b"supplied-cover"
+
+
+def test_sidecar_round_trips_the_curation_flags(tmp_path):
+    """A curated choice saved by the editor has to reach a later chapters run."""
+    from setlist_maker.cli import _load_tracklist_with_artwork_urls
+
+    md_path = tmp_path / "set_tracklist.md"
+    md_path.write_text(
+        "# Tracklist: set.mp3\n\n*Generated on 2026-01-31 20:00*\n\n"
+        "1. **Daft Punk** - Around the World (0:00)\n"
+        "2. **Justice** - Genesis (3:00)\n"
+    )
+    md_path.with_suffix(".json").write_text(
+        json.dumps(
+            [
+                {"timestamp": 0, "artist": "Daft Punk", "title": "Around the World"},
+                {
+                    "timestamp": 180,
+                    "artist": "Justice",
+                    "title": "Genesis",
+                    "coverart_url": "https://itunes/cross.jpg",
+                    "artwork_pinned": True,
+                    "episode_cover": True,
+                },
+            ]
+        )
+    )
+
+    tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+
+    assert [t.is_episode_cover for t in tracklist.tracks] == [False, True]
+    assert tracklist.tracks[1].artwork_pinned is True
+    assert urls == {1: "https://itunes/cross.jpg"}
+
+
+def test_sidecar_without_curation_flags_still_loads(tmp_path):
+    """Sidecars written before this feature carry neither key."""
+    from setlist_maker.cli import _load_tracklist_with_artwork_urls
+
+    md_path = tmp_path / "set_tracklist.md"
+    md_path.write_text(
+        "# Tracklist: set.mp3\n\n*Generated on 2026-01-31 20:00*\n\n"
+        "1. **Daft Punk** - Around the World (0:00)\n"
+    )
+    md_path.with_suffix(".json").write_text(
+        json.dumps([{"timestamp": 0, "coverart_url": "https://cdn.shazam.com/a.jpg"}])
+    )
+
+    tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+    assert tracklist.tracks[0].coverart_url == "https://cdn.shazam.com/a.jpg"
+    assert tracklist.tracks[0].artwork_pinned is False
+    assert tracklist.tracks[0].is_episode_cover is False
+
+
+def test_sidecar_with_a_non_string_coverart_url_does_not_crash(tmp_path):
+    """A hand-edited sidecar holding a number here would reach cache_key's str
+    join and resize_cover_art_url's re.sub, both outside the loader's guard."""
+    from setlist_maker.cli import _load_tracklist_with_artwork_urls
+
+    md_path = tmp_path / "set_tracklist.md"
+    md_path.write_text(
+        "# Tracklist: set.mp3\n\n*Generated on 2026-01-31 20:00*\n\n"
+        "1. **Daft Punk** - Around the World (0:00)\n"
+    )
+    md_path.with_suffix(".json").write_text(json.dumps([{"timestamp": 0, "coverart_url": 42}]))
+
+    tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+    assert tracklist.tracks[0].coverart_url is None
+    assert urls == {}

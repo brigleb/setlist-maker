@@ -621,6 +621,7 @@ def _request(base, path, host=None, method="GET", body=None):
         ("/api/tracklist", "GET", None),
         ("/api/audio", "GET", None),
         ("/api/artwork?index=0", "GET", None),
+        ("/api/artwork/options?index=0", "GET", None),
         ("/api/save", "POST", b'{"tracks": []}'),
         ("/api/done", "POST", b"{}"),
     ],
@@ -667,3 +668,265 @@ def test_host_must_carry_this_servers_port(sample_tracklist, tmp_path, bad_host)
         with pytest.raises(urllib.error.HTTPError) as exc:
             _request(base, "/api/tracklist", host=bad_host)
     assert exc.value.code == 403
+
+
+# --- Artwork curation (#20) -------------------------------------------------
+
+
+def test_apply_edits_pins_a_chosen_cover_after_the_correction(sample_tracklist, tmp_path):
+    """Picking art and fixing a typo in one save must keep the art.
+
+    apply_track_edit() clears coverart_url on a real correction (#30). The
+    pick is applied after it, so the ordering inside apply_edits is what makes
+    both intentions survive -- and the pin is what protects the art from the
+    *next* correction, in a later session.
+    """
+    from setlist_maker.editor import CorrectionsDB
+    from setlist_maker.web_editor import apply_edits
+
+    db = CorrectionsDB(db_path=tmp_path / "corrections.json")
+    sample_tracklist.tracks[0].coverart_url = "https://cdn.shazam.com/wrong-album.jpg"
+
+    apply_edits(
+        sample_tracklist,
+        [
+            {
+                "index": 0,
+                "artist": "Daft Punk",
+                "title": "Around the World (Radio Edit)",
+                "rejected": False,
+                "coverart_url": "https://itunes/discovery.jpg",
+            }
+        ],
+        db,
+    )
+
+    track = sample_tracklist.tracks[0]
+    assert track.title == "Around the World (Radio Edit)"
+    assert track.coverart_url == "https://itunes/discovery.jpg"
+    assert track.artwork_pinned is True
+
+
+def test_apply_edits_without_the_key_leaves_artwork_alone(sample_tracklist):
+    """Rows the user never opened the picker on send no coverart_url at all,
+    so an ordinary save must not re-pin art #30 means to drop."""
+    from setlist_maker.web_editor import apply_edits
+
+    sample_tracklist.tracks[0].coverart_url = "https://cdn.shazam.com/wrong-album.jpg"
+    apply_edits(
+        sample_tracklist,
+        [{"index": 0, "artist": "Justice", "title": "Genesis", "rejected": False}],
+        None,
+    )
+    assert sample_tracklist.tracks[0].coverart_url is None
+    assert sample_tracklist.tracks[0].artwork_pinned is False
+
+
+def test_apply_edits_clearing_the_url_unpins_it(sample_tracklist):
+    """ "Automatic" in the picker sends a null URL: back to the waterfall."""
+    from setlist_maker.web_editor import apply_edits
+
+    track = sample_tracklist.tracks[0]
+    track.coverart_url = "https://itunes/discovery.jpg"
+    track.artwork_pinned = True
+
+    apply_edits(
+        sample_tracklist,
+        [
+            {
+                "index": 0,
+                "artist": track.artist,
+                "title": track.title,
+                "rejected": False,
+                "coverart_url": None,
+            }
+        ],
+        None,
+    )
+    assert track.coverart_url is None
+    assert track.artwork_pinned is False
+
+
+@pytest.mark.parametrize(
+    "url", ["file:///etc/passwd", "data:image/png;base64,AAAA", "ftp://x/a.jpg", "nonsense"]
+)
+def test_apply_edits_refuses_a_non_http_artwork_url(sample_tracklist, url):
+    """This URL is persisted to the sidecar and fetched by this process later,
+    and urlopen's default opener would read file:// off the machine. It is
+    rejected before anything is mutated, so a bad row cannot half-apply a save.
+    """
+    from setlist_maker.web_editor import apply_edits
+
+    original_title = sample_tracklist.tracks[0].title
+    with pytest.raises(ValueError, match="http"):
+        apply_edits(
+            sample_tracklist,
+            [
+                {"index": 0, "artist": "Changed", "title": "Changed", "rejected": False},
+                {"index": 1, "artist": "x", "title": "y", "rejected": False, "coverart_url": url},
+            ],
+            None,
+        )
+    assert sample_tracklist.tracks[0].title == original_title, "nothing may be applied"
+
+
+def test_apply_edits_episode_cover_is_exclusive(sample_tracklist):
+    """One cover per set, enforced server-side so a stale page cannot leave two."""
+    from setlist_maker.web_editor import apply_edits
+
+    sample_tracklist.tracks[0].is_episode_cover = True
+
+    def edit(i, **extra):
+        t = sample_tracklist.tracks[i]
+        return {"index": i, "artist": t.artist, "title": t.title, "rejected": False, **extra}
+
+    apply_edits(sample_tracklist, [edit(0, episode_cover=True), edit(1, episode_cover=True)], None)
+
+    # The last one the payload marks wins; every other track is cleared.
+    assert [t.is_episode_cover for t in sample_tracklist.tracks] == [False, True, False, False]
+
+
+def test_apply_edits_absent_episode_cover_key_changes_nothing(sample_tracklist):
+    """An older client that does not send the key must not clear the choice."""
+    from setlist_maker.web_editor import apply_edits
+
+    sample_tracklist.tracks[1].is_episode_cover = True
+    apply_edits(
+        sample_tracklist,
+        [{"index": 0, "artist": "Daft Punk", "title": "Around the World", "rejected": False}],
+        None,
+    )
+    assert sample_tracklist.tracks[1].is_episode_cover is True
+
+
+def test_tracklist_to_api_exposes_the_episode_cover(sample_tracklist):
+    from setlist_maker.web_editor import tracklist_to_api
+
+    sample_tracklist.tracks[1].is_episode_cover = True
+    api = tracklist_to_api(sample_tracklist)
+    assert api["tracks"][1]["episode_cover"] is True
+    assert api["tracks"][0]["episode_cover"] is False
+
+
+def test_artwork_options_lists_the_alternates(sample_tracklist, tmp_path, monkeypatch):
+    from setlist_maker.artwork import ArtworkCandidate
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    sample_tracklist.tracks[0].coverart_url = "https://cdn.shazam.com/in-use.jpg"
+    monkeypatch.setattr(
+        "setlist_maker.web_editor.artwork_options",
+        lambda artist, title: [
+            # The source also offers the URL already in use: one tile, not two.
+            ArtworkCandidate("iTunes", "https://cdn.shazam.com/in-use.jpg", "Discovery"),
+            ArtworkCandidate("Deezer", "https://dz/alive.jpg", "Alive 2007"),
+        ],
+    )
+
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(base + "/api/artwork/options?index=0") as r:
+            data = json.loads(r.read())
+
+    assert [c["url"] for c in data["candidates"]] == [
+        "https://cdn.shazam.com/in-use.jpg",
+        "https://dz/alive.jpg",
+    ]
+    # The one in use is offered first and flagged, so the grid can show which is which.
+    assert data["candidates"][0]["source"] == "In use"
+    assert data["candidates"][0]["current"] is True
+    assert data["candidates"][1]["current"] is False
+
+
+def test_artwork_options_survives_a_failing_lookup(sample_tracklist, tmp_path, monkeypatch):
+    """A handler that raises sends no response at all and dumps a traceback
+    over the CLI's output; the page has to get an answer either way."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    def boom(artist, title):
+        raise RuntimeError("sources unreachable")
+
+    monkeypatch.setattr("setlist_maker.web_editor.artwork_options", boom)
+
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(base + "/api/artwork/options?index=0") as r:
+            assert r.status == 200
+            data = json.loads(r.read())
+    assert data["candidates"] == []
+    assert "unreachable" in data["error"]
+
+
+@pytest.mark.parametrize("qs", ["index=99", "index=-1", "index=abc", "", "index=2"])
+def test_artwork_options_404s_where_the_composite_does(sample_tracklist, tmp_path, qs):
+    """Both artwork endpoints answer for exactly the same set of tracks --
+    index 2 in the fixture is unidentified, which chapters skips too."""
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"{base}/api/artwork/options?{qs}")
+    assert exc.value.code == 404
+
+
+def test_save_round_trips_curation_into_the_sidecar(sample_tracklist, tmp_path):
+    """The choices have to survive into a later, separate `chapters` process,
+    which reads them back off disk by timestamp."""
+    from setlist_maker.cli import _load_tracklist_with_artwork_urls
+    from setlist_maker.web_editor import EditorContext
+
+    ctx = EditorContext(
+        tracklist=sample_tracklist,
+        output_path=tmp_path / "set_tracklist.md",
+        corrections_db=None,
+        audio_path=None,
+    )
+    payload = json.dumps(
+        {
+            "tracks": [
+                {
+                    "index": i,
+                    "artist": t.artist,
+                    "title": t.title,
+                    "rejected": False,
+                    "episode_cover": i == 1,
+                    **({"coverart_url": "https://itunes/discovery.jpg"} if i == 1 else {}),
+                }
+                for i, t in enumerate(sample_tracklist.tracks)
+            ]
+        }
+    ).encode()
+
+    with running_server(ctx) as base:
+        req = urllib.request.Request(
+            base + "/api/save",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            assert json.loads(r.read())["ok"] is True
+
+    reloaded, _urls = _load_tracklist_with_artwork_urls(tmp_path / "set_tracklist.md")
+    starred = [t for t in reloaded.tracks if t.is_episode_cover]
+    assert [t.title for t in starred] == ["Block Rockin' Beats"]
+    assert starred[0].coverart_url == "https://itunes/discovery.jpg"
+    assert starred[0].artwork_pinned is True
+
+
+def test_page_has_the_artwork_picker():
+    """Substring-level, as every page assertion here is: there is no JS harness."""
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    assert "/api/artwork/options?index=" in html
+    for element_id in ("artwork-panel", "artwork-grid", "art-choose", "art-cover", "art-url"):
+        assert f'id="{element_id}"' in html, f"missing #{element_id}"
+    # Same reason as #artwork-overlay: the script resolves these at top level,
+    # so markup placed after </script> makes getElementById return null and the
+    # TypeError takes down the whole page -- which a substring check misses.
+    assert html.index('id="artwork-panel"') < html.index("<script>")
+    # The panel is full of controls now, so only a click on the backdrop itself
+    # may dismiss it.
+    assert "if (e.target === overlay) closeArtwork()" in html
+    # Candidate tiles are BUTTONs and the keyboard guard exempts only inputs,
+    # so without this the arrows seek the audio while covers are being browsed.
+    assert 'if (overlay.classList.contains("open")) return;' in html
+    # An author display rule beats the UA stylesheet, so the flex containers
+    # would ignore the hidden attribute without this.
+    assert "[hidden] { display:none !important; }" in html
+    # The toast must outrank the overlay or it is raised behind the backdrop.
+    assert "z-index:60" in html

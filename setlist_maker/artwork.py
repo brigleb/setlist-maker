@@ -4,6 +4,7 @@ Artwork fetching and chapter image generation.
 Provides functionality for:
     - Downloading cover art from URLs (Shazam CDN)
     - Searching iTunes, Deezer, and MusicBrainz as fallbacks for cover art
+    - Enumerating every source's offer at once, for the editor's artwork picker
     - Generating MTV-style lower-third overlay images for chapter markers
 """
 
@@ -13,6 +14,7 @@ import logging
 import re
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -24,6 +26,20 @@ class CoverImageError(Exception):
     """A user-supplied cover image could not be read."""
 
 
+@dataclass(frozen=True)
+class ArtworkCandidate:
+    """One cover-art option, tagged with the source that offered it.
+
+    ``label`` carries the album or release name when the API supplies one,
+    which is usually the only thing distinguishing two candidates from the
+    same source (the single, the album, the compilation).
+    """
+
+    source: str
+    url: str
+    label: str = ""
+
+
 # Target size for chapter artwork (square, pixels)
 CHAPTER_IMAGE_SIZE = 600
 
@@ -32,6 +48,24 @@ MAX_IMAGE_BYTES = 200_000
 
 # JPEG quality to start with when compressing
 JPEG_INITIAL_QUALITY = 90
+
+# How many search results each source contributes to the artwork picker.
+# Deliberately small: MusicBrainz costs one extra Cover Art Archive request per
+# candidate, and near-duplicates collapse anyway, so three per source is enough
+# to get the usual single / album / compilation spread without a fetch storm.
+CANDIDATES_PER_SOURCE = 3
+
+# Schemes an artwork URL may use. urlopen's default opener also handles file:,
+# ftp: and data:, and artwork URLs are no longer only ours -- the editor's
+# picker lets a user paste one, and it is persisted to the JSON sidecar and
+# fetched by this process on every later run (#20).
+_ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
+
+
+def is_fetchable_url(url: str) -> bool:
+    """True for a URL this module is willing to download: http(s), with a host."""
+    parsed = urllib.parse.urlparse(url or "")
+    return parsed.scheme in _ALLOWED_URL_SCHEMES and bool(parsed.netloc)
 
 
 def download_image(url: str, timeout: int = 15) -> bytes | None:
@@ -43,8 +77,13 @@ def download_image(url: str, timeout: int = 15) -> bytes | None:
         timeout: Request timeout in seconds.
 
     Returns:
-        Raw image bytes, or None if download failed.
+        Raw image bytes, or None if download failed or the URL is not http(s).
     """
+    if not is_fetchable_url(url):
+        # Refusing here rather than at the UI covers every caller, including a
+        # URL that reached the sidecar by some other route.
+        logger.debug("Refusing to download non-HTTP artwork URL: %s", url)
+        return None
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "setlist-maker/1.0"})
         with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -52,6 +91,17 @@ def download_image(url: str, timeout: int = 15) -> bytes | None:
     except Exception as e:
         logger.debug("Failed to download image from %s: %s", url, e)
         return None
+
+
+def _dedupe(candidates: list[ArtworkCandidate]) -> list[ArtworkCandidate]:
+    """Drop repeats by URL, keeping first-seen order (and so source priority)."""
+    seen: set[str] = set()
+    unique: list[ArtworkCandidate] = []
+    for candidate in candidates:
+        if candidate.url not in seen:
+            seen.add(candidate.url)
+            unique.append(candidate)
+    return unique
 
 
 def search_itunes_artwork(artist: str, title: str, size: int = 600) -> str | None:
@@ -66,12 +116,35 @@ def search_itunes_artwork(artist: str, title: str, size: int = 600) -> str | Non
     Returns:
         Artwork URL at the requested size, or None if not found.
     """
+    found = itunes_artwork_candidates(artist, title, size, limit=1)
+    return found[0].url if found else None
+
+
+def itunes_artwork_candidates(
+    artist: str, title: str, size: int = 600, limit: int = CANDIDATES_PER_SOURCE
+) -> list[ArtworkCandidate]:
+    """
+    Search the iTunes API and return up to ``limit`` distinct cover-art options.
+
+    Still one request whatever ``limit`` is -- the API's own limit parameter
+    does the work -- so offering alternates from iTunes costs nothing beyond
+    the lookup the waterfall already makes.
+
+    Args:
+        artist: Artist name.
+        title: Track title.
+        size: Desired image size in pixels.
+        limit: Maximum number of search results to consider.
+
+    Returns:
+        Candidates in iTunes' own relevance order; empty on any failure.
+    """
     search_term = f"{artist} {title}"
     params = urllib.parse.urlencode(
         {
             "term": search_term,
             "entity": "song",
-            "limit": "1",
+            "limit": str(limit),
         }
     )
     url = f"https://itunes.apple.com/search?{params}"
@@ -80,16 +153,22 @@ def search_itunes_artwork(artist: str, title: str, size: int = 600) -> str | Non
         req = urllib.request.Request(url, headers={"User-Agent": "setlist-maker/1.0"})
         with urllib.request.urlopen(req, timeout=15) as response:
             data = json.loads(response.read())
-
-        if data.get("resultCount", 0) > 0:
-            result = data["results"][0]
-            artwork_url = result.get("artworkUrl100", "")
-            if artwork_url:
-                return artwork_url.replace("100x100bb", f"{size}x{size}bb")
     except Exception as e:
         logger.debug("iTunes artwork search failed for '%s %s': %s", artist, title, e)
+        return []
 
-    return None
+    found = []
+    for result in (data.get("results") or [])[:limit]:
+        artwork_url = result.get("artworkUrl100", "")
+        if artwork_url:
+            found.append(
+                ArtworkCandidate(
+                    source="iTunes",
+                    url=artwork_url.replace("100x100bb", f"{size}x{size}bb"),
+                    label=result.get("collectionName") or "",
+                )
+            )
+    return _dedupe(found)
 
 
 def resize_cover_art_url(url: str, size: int = 600) -> str:
@@ -137,26 +216,76 @@ def search_deezer_artwork(artist: str, title: str, size: int = 600) -> str | Non
     Returns:
         Artwork URL at the requested size, or None if not found.
     """
-    query = f'artist:"{artist}" track:"{title}"'
+    found = deezer_artwork_candidates(artist, title, size, limit=1)
+    return found[0].url if found else None
+
+
+def _deezer_search(query: str) -> list[dict] | None:
+    """Run one Deezer search.
+
+    Returns the result rows, ``[]`` for a successful search that matched
+    nothing, and ``None`` when the request itself failed -- a distinction the
+    caller needs, because retrying a different *query* is only worth doing when
+    Deezer actually answered.
+    """
     params = urllib.parse.urlencode({"q": query})
     url = f"https://api.deezer.com/search?{params}"
-
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "setlist-maker/1.0"})
         with urllib.request.urlopen(req, timeout=15) as response:
             data = json.loads(response.read())
-
-        if data.get("data") and len(data["data"]) > 0:
-            album = data["data"][0].get("album", {})
-            # Prefer cover_xl (1000x1000), fall back to cover_big (500x500)
-            artwork_url = album.get("cover_xl") or album.get("cover_big")
-            if artwork_url:
-                # Deezer URLs use /{dim}x{dim}- pattern for resizing
-                return re.sub(r"/\d+x\d+-", f"/{size}x{size}-", artwork_url)
     except Exception as e:
-        logger.debug("Deezer artwork search failed for '%s %s': %s", artist, title, e)
+        logger.debug("Deezer artwork search failed for %r: %s", query, e)
+        return None
+    return data.get("data") or []
 
-    return None
+
+def deezer_artwork_candidates(
+    artist: str, title: str, size: int = 600, limit: int = CANDIDATES_PER_SOURCE
+) -> list[ArtworkCandidate]:
+    """
+    Search the Deezer API and return up to ``limit`` distinct cover-art options.
+
+    Two queries at most. Deezer's advanced syntax (``artist:"..." track:"..."``)
+    demands an exact field match and comes back empty for a large share of real
+    tracks -- measured returning 0 rows for both "Daft Punk / One More Time" and
+    "Kraftwerk / Autobahn" while the plain term query returns 48 and 164 -- so a
+    plain-term retry runs when the advanced one finds nothing. Without it Deezer
+    contributes nothing to the picker *or* to the waterfall for those tracks.
+
+    Args:
+        artist: Artist name.
+        title: Track title.
+        size: Desired image size in pixels.
+        limit: Maximum number of search results to consider.
+
+    Returns:
+        Candidates in Deezer's own relevance order; empty on any failure.
+    """
+    rows: list[dict] = []
+    for query in (f'artist:"{artist}" track:"{title}"', f"{artist} {title}"):
+        result = _deezer_search(query)
+        if result is None:
+            break  # Deezer is unreachable; a second query costs another timeout for nothing
+        if result:
+            rows = result
+            break
+
+    found = []
+    for row in rows[:limit]:
+        album = row.get("album") or {}
+        # Prefer cover_xl (1000x1000), fall back to cover_big (500x500)
+        artwork_url = album.get("cover_xl") or album.get("cover_big")
+        if artwork_url:
+            found.append(
+                ArtworkCandidate(
+                    source="Deezer",
+                    # Deezer URLs use /{dim}x{dim}- pattern for resizing
+                    url=re.sub(r"/\d+x\d+-", f"/{size}x{size}-", artwork_url),
+                    label=album.get("title") or "",
+                )
+            )
+    return _dedupe(found)
 
 
 def search_musicbrainz_artwork(artist: str, title: str) -> str | None:
@@ -174,9 +303,33 @@ def search_musicbrainz_artwork(artist: str, title: str) -> str | None:
     Returns:
         Cover art image URL, or None if not found.
     """
+    found = musicbrainz_artwork_candidates(artist, title, limit=1)
+    return found[0].url if found else None
+
+
+def musicbrainz_artwork_candidates(
+    artist: str, title: str, limit: int = CANDIDATES_PER_SOURCE
+) -> list[ArtworkCandidate]:
+    """
+    Search MusicBrainz and return up to ``limit`` Cover Art Archive options.
+
+    The most expensive source in the picker, and the only one whose cost grows
+    with ``limit``: one recording search, then one Cover Art Archive request per
+    candidate release, because CAA only reveals whether a release *has* a front
+    cover by being asked for it. Releases without one are skipped rather than
+    offered as tiles that would fail to load.
+
+    Args:
+        artist: Artist name.
+        title: Track title.
+        limit: Maximum number of releases to look up.
+
+    Returns:
+        Candidates in MusicBrainz' own relevance order; empty on any failure.
+    """
     # Step 1: Search MusicBrainz for the recording
     mb_query = f'artist:"{artist}" AND recording:"{title}"'
-    params = urllib.parse.urlencode({"query": mb_query, "fmt": "json", "limit": "1"})
+    params = urllib.parse.urlencode({"query": mb_query, "fmt": "json", "limit": str(limit)})
     mb_url = f"https://musicbrainz.org/ws/2/recording?{params}"
 
     headers = {
@@ -188,32 +341,81 @@ def search_musicbrainz_artwork(artist: str, title: str) -> str | None:
         req = urllib.request.Request(mb_url, headers=headers)
         with urllib.request.urlopen(req, timeout=15) as response:
             data = json.loads(response.read())
-
-        recordings = data.get("recordings", [])
-        if not recordings:
-            return None
-
-        releases = recordings[0].get("releases", [])
-        if not releases:
-            return None
-
-        release_id = releases[0].get("id")
-        if not release_id:
-            return None
     except Exception as e:
         logger.debug("MusicBrainz search failed for '%s %s': %s", artist, title, e)
-        return None
+        return []
 
-    # Step 2: Get front cover from Cover Art Archive
-    caa_url = f"https://coverartarchive.org/release/{release_id}/front-500"
-    try:
-        req = urllib.request.Request(caa_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as response:
-            # Cover Art Archive redirects to the actual image URL
-            return response.url
-    except Exception as e:
-        logger.debug("Cover Art Archive lookup failed for release %s: %s", release_id, e)
-        return None
+    # Distinct releases, best match first; several recordings can share one.
+    releases: list[tuple[str, str]] = []
+    seen_ids: set[str] = set()
+    for recording in data.get("recordings") or []:
+        for release in recording.get("releases") or []:
+            release_id = release.get("id")
+            if release_id and release_id not in seen_ids:
+                seen_ids.add(release_id)
+                releases.append((release_id, release.get("title") or ""))
+            if len(releases) >= limit:
+                break
+        if len(releases) >= limit:
+            break
+
+    # Step 2: Get each release's front cover from Cover Art Archive
+    found = []
+    for release_id, release_title in releases:
+        caa_url = f"https://coverartarchive.org/release/{release_id}/front-500"
+        try:
+            req = urllib.request.Request(caa_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as response:
+                # Cover Art Archive redirects to the actual image URL
+                found.append(
+                    ArtworkCandidate(
+                        source="Cover Art Archive", url=response.url, label=release_title
+                    )
+                )
+        except Exception as e:
+            logger.debug("Cover Art Archive lookup failed for release %s: %s", release_id, e)
+    return _dedupe(found)
+
+
+def artwork_candidates(
+    artist: str,
+    title: str,
+    size: int = CHAPTER_IMAGE_SIZE,
+    per_source: int = CANDIDATES_PER_SOURCE,
+) -> list[ArtworkCandidate]:
+    """
+    Gather every cover-art option the search sources offer for one track.
+
+    ``fetch_artwork`` walks the same sources but stops at the first that yields
+    an image -- right for an unattended run, and the reason there is nothing to
+    compare when it picks wrong. This asks all of them, so the editor can show
+    the alternates and let the user choose (#20). Sources are queried in the
+    waterfall's own order, so the option already in use normally sorts first.
+
+    The track's saved ``coverart_url`` is deliberately absent: it is one
+    particular *answer*, not a source, and the caller knows whether it wants it
+    shown alongside.
+
+    Args:
+        artist: Artist name.
+        title: Track title.
+        size: Desired image size in pixels.
+        per_source: Maximum candidates to take from each source.
+
+    Returns:
+        Deduplicated candidates; empty if every source came back with nothing.
+    """
+    found: list[ArtworkCandidate] = []
+    found += itunes_artwork_candidates(artist, title, size, per_source)
+
+    cleaned_artist = _clean_query(artist)
+    cleaned_title = _clean_query(title)
+    if cleaned_artist != artist or cleaned_title != title:
+        found += itunes_artwork_candidates(cleaned_artist, cleaned_title, size, per_source)
+
+    found += deezer_artwork_candidates(artist, title, size, per_source)
+    found += musicbrainz_artwork_candidates(artist, title, per_source)
+    return _dedupe(found)
 
 
 def fetch_artwork(
