@@ -47,6 +47,15 @@ def _json_response(payload: dict) -> MagicMock:
     return response
 
 
+def _raw_response(body: bytes) -> MagicMock:
+    """A urlopen stub returning an exact response body, junk included."""
+    response = MagicMock()
+    response.read.return_value = body
+    response.__enter__ = lambda s: s
+    response.__exit__ = MagicMock(return_value=False)
+    return response
+
+
 def _redirect_response(url: str) -> MagicMock:
     """A urlopen stub standing in for a Cover Art Archive redirect."""
     response = MagicMock()
@@ -823,3 +832,58 @@ class TestArtworkCandidates:
     @patch("setlist_maker.artwork.itunes_artwork_candidates", return_value=[])
     def test_no_source_answering_is_an_empty_list_not_an_error(self, _it, _dz, _mb):
         assert artwork_candidates("Nobody", "Nothing") == []
+
+
+class TestSourceHelpersTolerateJunkResponses:
+    """A 200 carrying JSON of the wrong shape must yield nothing, not raise.
+
+    These are third-party APIs reached from a request handler and from a
+    multi-hour identify run: an escaping AttributeError means no HTTP response
+    at all in the editor, and a dead run on the CLI. The pre-refactor helpers
+    parsed inside their try/except, and the candidate versions must too.
+    """
+
+    @pytest.mark.parametrize(
+        "body",
+        [b"null", b"[1, 2]", b'"a string"', b"42", b'{"results": [1, 2]}', b'{"results": null}'],
+    )
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_itunes(self, mock_urlopen, body):
+        mock_urlopen.return_value = _raw_response(body)
+        assert itunes_artwork_candidates("A", "T") == []
+        assert search_itunes_artwork("A", "T") is None
+
+    @pytest.mark.parametrize(
+        "body", [b"null", b"[1, 2]", b'{"data": ["x"]}', b'{"data": [{"album": 7}]}']
+    )
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_deezer(self, mock_urlopen, body):
+        mock_urlopen.side_effect = [_raw_response(body), _raw_response(body)]
+        assert deezer_artwork_candidates("A", "T") == []
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            b"null",
+            b'"a string"',
+            b'{"recordings": [{"releases": ["x"]}]}',
+            b'{"recordings": [7]}',
+        ],
+    )
+    @patch("setlist_maker.artwork.urllib.request.urlopen")
+    def test_musicbrainz(self, mock_urlopen, body):
+        mock_urlopen.return_value = _raw_response(body)
+        assert musicbrainz_artwork_candidates("A", "T") == []
+        assert search_musicbrainz_artwork("A", "T") is None
+
+
+class TestIsFetchableUrlEdges:
+    @pytest.mark.parametrize("url", ["http://[::1", "https://[bad", "http://[", "https://]["])
+    def test_unparseable_authority_is_not_fetchable(self, url):
+        """urlparse raises ValueError on a malformed authority. This is reached
+        from a request handler, where an escaping exception means the browser
+        gets no response at all and a traceback lands in the user's terminal."""
+        assert is_fetchable_url(url) is False
+        with patch("setlist_maker.artwork.urllib.request.urlopen") as mock_urlopen:
+            assert download_image(url) is None
+            mock_urlopen.assert_not_called()

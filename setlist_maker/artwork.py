@@ -64,7 +64,13 @@ _ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
 
 def is_fetchable_url(url: str) -> bool:
     """True for a URL this module is willing to download: http(s), with a host."""
-    parsed = urllib.parse.urlparse(url or "")
+    try:
+        parsed = urllib.parse.urlparse(url or "")
+    except ValueError:
+        # urlparse raises on a malformed authority ("http://[::1"), and this is
+        # reached from a request handler, where an escaping exception means no
+        # HTTP response at all. Unparseable is not fetchable.
+        return False
     return parsed.scheme in _ALLOWED_URL_SCHEMES and bool(parsed.netloc)
 
 
@@ -149,25 +155,29 @@ def itunes_artwork_candidates(
     )
     url = f"https://itunes.apple.com/search?{params}"
 
+    # The whole body is guarded, not just the request: a third-party API can
+    # answer 200 with valid JSON of an unexpected shape (null, a list, an error
+    # object), and reading it must degrade to "no candidates" the way the
+    # original single-result helper did -- not raise into the caller.
+    found = []
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "setlist-maker/1.0"})
         with urllib.request.urlopen(req, timeout=15) as response:
             data = json.loads(response.read())
+
+        for result in (data.get("results") or [])[:limit]:
+            artwork_url = result.get("artworkUrl100", "")
+            if artwork_url:
+                found.append(
+                    ArtworkCandidate(
+                        source="iTunes",
+                        url=artwork_url.replace("100x100bb", f"{size}x{size}bb"),
+                        label=result.get("collectionName") or "",
+                    )
+                )
     except Exception as e:
         logger.debug("iTunes artwork search failed for '%s %s': %s", artist, title, e)
         return []
-
-    found = []
-    for result in (data.get("results") or [])[:limit]:
-        artwork_url = result.get("artworkUrl100", "")
-        if artwork_url:
-            found.append(
-                ArtworkCandidate(
-                    source="iTunes",
-                    url=artwork_url.replace("100x100bb", f"{size}x{size}bb"),
-                    label=result.get("collectionName") or "",
-                )
-            )
     return _dedupe(found)
 
 
@@ -234,10 +244,12 @@ def _deezer_search(query: str) -> list[dict] | None:
         req = urllib.request.Request(url, headers={"User-Agent": "setlist-maker/1.0"})
         with urllib.request.urlopen(req, timeout=15) as response:
             data = json.loads(response.read())
+        # Inside the guard: a 200 carrying valid JSON of the wrong shape is a
+        # failed search, not an exception for the caller to handle.
+        return data.get("data") or []
     except Exception as e:
         logger.debug("Deezer artwork search failed for %r: %s", query, e)
         return None
-    return data.get("data") or []
 
 
 def deezer_artwork_candidates(
@@ -272,19 +284,23 @@ def deezer_artwork_candidates(
             break
 
     found = []
-    for row in rows[:limit]:
-        album = row.get("album") or {}
-        # Prefer cover_xl (1000x1000), fall back to cover_big (500x500)
-        artwork_url = album.get("cover_xl") or album.get("cover_big")
-        if artwork_url:
-            found.append(
-                ArtworkCandidate(
-                    source="Deezer",
-                    # Deezer URLs use /{dim}x{dim}- pattern for resizing
-                    url=re.sub(r"/\d+x\d+-", f"/{size}x{size}-", artwork_url),
-                    label=album.get("title") or "",
+    try:
+        for row in rows[:limit]:
+            album = row.get("album") or {}
+            # Prefer cover_xl (1000x1000), fall back to cover_big (500x500)
+            artwork_url = album.get("cover_xl") or album.get("cover_big")
+            if artwork_url:
+                found.append(
+                    ArtworkCandidate(
+                        source="Deezer",
+                        # Deezer URLs use /{dim}x{dim}- pattern for resizing
+                        url=re.sub(r"/\d+x\d+-", f"/{size}x{size}-", artwork_url),
+                        label=album.get("title") or "",
+                    )
                 )
-            )
+    except Exception as e:  # rows of an unexpected shape are no candidates, not a crash
+        logger.debug("Deezer artwork parse failed for '%s %s': %s", artist, title, e)
+        return []
     return _dedupe(found)
 
 
@@ -337,27 +353,28 @@ def musicbrainz_artwork_candidates(
         "Accept": "application/json",
     }
 
+    # Request and response reading share one guard, as the original helper did:
+    # a 200 carrying JSON of an unexpected shape must yield no candidates.
+    releases: list[tuple[str, str]] = []  # distinct, best match first
     try:
         req = urllib.request.Request(mb_url, headers=headers)
         with urllib.request.urlopen(req, timeout=15) as response:
             data = json.loads(response.read())
+
+        seen_ids: set[str] = set()
+        for recording in data.get("recordings") or []:
+            for release in recording.get("releases") or []:
+                release_id = release.get("id")
+                if release_id and release_id not in seen_ids:
+                    seen_ids.add(release_id)
+                    releases.append((release_id, release.get("title") or ""))
+                if len(releases) >= limit:
+                    break
+            if len(releases) >= limit:
+                break
     except Exception as e:
         logger.debug("MusicBrainz search failed for '%s %s': %s", artist, title, e)
         return []
-
-    # Distinct releases, best match first; several recordings can share one.
-    releases: list[tuple[str, str]] = []
-    seen_ids: set[str] = set()
-    for recording in data.get("recordings") or []:
-        for release in recording.get("releases") or []:
-            release_id = release.get("id")
-            if release_id and release_id not in seen_ids:
-                seen_ids.add(release_id)
-                releases.append((release_id, release.get("title") or ""))
-            if len(releases) >= limit:
-                break
-        if len(releases) >= limit:
-            break
 
     # Step 2: Get each release's front cover from Cover Art Archive
     found = []

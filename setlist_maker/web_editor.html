@@ -77,6 +77,7 @@
   .artbtn { font:inherit; font-size:13px; font-weight:600; padding:7px 14px; border-radius:7px; cursor:pointer;
     background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
   .artbtn.on { background:var(--accent); color:#fff; border-color:transparent; }
+  .artbtn:disabled { opacity:.5; cursor:default; }
   #artwork-alts { background:var(--card); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:10px; }
   #artwork-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(92px,1fr)); gap:10px; }
   #artwork-grid .status { grid-column:1/-1; color:var(--muted); font-size:13px; }
@@ -335,16 +336,35 @@
   // the in-use cover at the size the picker uses, so a Shazam URL saved at 400px
   // arrives as the 600px one, and comparing raw strings marks nothing.
   let artCurrentUrl = null;
+  let artProbeSeq = 0;   // orders overlapping paste-a-URL probes; see useTypedUrl
+
+  function setPickNote(url) {
+    artNote.textContent = url
+      ? "Chosen — Save to apply it to the chapter image."
+      : "Back to automatic — Save to look the artwork up again.";
+    artNote.hidden = false;
+  }
 
   function showArtwork(t) {
     artTrack = t;
-    artCurrentUrl = null;
-    overlayImg.hidden = false;
-    overlayImg.src = "/api/artwork?index=" + t.index + "&v=" + artVersion;
-    artNote.hidden = true;
     artAlts.hidden = true;
     artGrid.innerHTML = "";
     artUrlEl.value = "";
+    if (t._art) {
+      // An unsaved pick has to survive closing and reopening the panel. The
+      // server composite is still built from saved state, so showing it here
+      // would contradict the row's own thumb and quietly re-mark the replaced
+      // cover as the one in use.
+      artCurrentUrl = t.coverart_url || null;
+      overlayImg.hidden = !t.coverart_url;
+      if (t.coverart_url) overlayImg.src = t.coverart_url;
+      setPickNote(t.coverart_url);
+    } else {
+      artCurrentUrl = null;
+      overlayImg.hidden = false;
+      overlayImg.src = "/api/artwork?index=" + t.index + "&v=" + artVersion;
+      artNote.hidden = true;
+    }
     syncCoverButton();
     overlay.classList.add("open");
   }
@@ -361,18 +381,25 @@
 
   function syncCoverButton() {
     const on = !!(artTrack && artTrack.episode_cover);
+    const rejected = !!(artTrack && artTrack.rejected);
     artCoverBtn.textContent = (on ? "★" : "☆") + " Episode cover";
     artCoverBtn.classList.toggle("on", on);
-    artCoverBtn.title = on
-      ? "This track's artwork is the episode cover"
-      : "Use this track's artwork as the episode cover";
+    // A rejected track is absent from the output, and from the sidecar the star
+    // is stored in, so it cannot be the cover. The server refuses the star for
+    // one; this stops the page offering a choice that would silently evaporate.
+    artCoverBtn.disabled = rejected;
+    artCoverBtn.title = rejected
+      ? "A rejected track cannot be the episode cover"
+      : on
+        ? "This track's artwork is the episode cover"
+        : "Use this track's artwork as the episode cover";
   }
 
   // Exactly one track can be the episode cover, so starring one clears the
   // rest. The server re-applies the same rule on save, so a stale page cannot
   // leave two starred in the sidecar.
   artCoverBtn.onclick = () => {
-    if (!artTrack) return;
+    if (!artTrack || artTrack.rejected) return;
     const on = !artTrack.episode_cover;
     tracks.forEach(t => { t.episode_cover = false; });
     artTrack.episode_cover = on;
@@ -394,7 +421,13 @@
     artGrid.innerHTML = '<div class="status">Searching iTunes, Deezer and Cover Art Archive…</div>';
     let data;
     try {
-      data = await (await fetch("/api/artwork/options?index=" + t.index)).json();
+      // The live artist/title, not the saved ones: correcting a bad
+      // identification and then fixing its cover is one workflow, and searching
+      // the stale name would offer covers for the song being corrected away.
+      const query = "/api/artwork/options?index=" + t.index
+        + "&artist=" + encodeURIComponent(t.artist || "")
+        + "&title=" + encodeURIComponent(t.title || "");
+      data = await (await fetch(query)).json();
     } catch (e) {
       artGrid.innerHTML = '<div class="status">Could not reach the artwork sources.</div>';
       return;
@@ -411,8 +444,12 @@
       return;
     }
     artGrid.innerHTML = "";
-    const inUse = found.find(c => c.current);
-    artCurrentUrl = inUse ? inUse.url : null;
+    // The server's flag reflects *saved* state; an unsaved pick made on this
+    // page is the better answer and keeps its marker.
+    if (!t._art) {
+      const inUse = found.find(c => c.current);
+      artCurrentUrl = inUse ? inUse.url : null;
+    }
     for (const c of found) {
       const tile = document.createElement("button");
       tile.type = "button";
@@ -460,10 +497,7 @@
     setDirty(true);
     overlayImg.hidden = !url;
     if (url) overlayImg.src = url;
-    artNote.textContent = url
-      ? "Chosen — Save to apply it to the chapter image."
-      : "Back to automatic — Save to look the artwork up again.";
-    artNote.hidden = false;
+    setPickNote(url);
     markCurrentAlt();
     render();
   }
@@ -487,14 +521,18 @@
     }
     artNote.textContent = "Loading that image…";
     artNote.hidden = false;
-    // Captured, like loadAlternates does: the probe resolves asynchronously, and
+    // Captured, like loadAlternates does: the probe resolves asynchronously, so
     // pinning to whatever artTrack happens to be by then would land the URL on a
-    // different track (or on none, if the panel was closed meanwhile).
+    // different track (or on none, if the panel was closed meanwhile). The
+    // sequence number covers the other direction -- two pastes for the *same*
+    // track, where a slower first probe would otherwise land last and win.
     const target = artTrack;
+    const seq = ++artProbeSeq;
+    const live = () => seq === artProbeSeq && target === artTrack;
     const probe = new Image();
-    probe.onload = () => { if (target === artTrack) chooseArtwork(url); };
+    probe.onload = () => { if (live()) chooseArtwork(url); };
     probe.onerror = () => {
-      if (target === artTrack) artNote.textContent = "That URL did not load as an image.";
+      if (live()) artNote.textContent = "That URL did not load as an image.";
     };
     probe.src = url;
   }
@@ -596,7 +634,17 @@
 
     const rej = document.createElement("button");
     rej.className = "iconbtn reject"; rej.textContent = t.rejected ? "↩" : "✕";
-    rej.onclick = (e) => { e.stopPropagation(); t.rejected = !t.rejected; setDirty(true); render(); };
+    rej.onclick = (e) => {
+      e.stopPropagation();
+      t.rejected = !t.rejected;
+      // A rejected track is absent from the output entirely -- including from
+      // the sidecar, which is where the star is stored -- so it cannot be the
+      // episode cover. Clearing it here keeps the ★ from lingering on a row
+      // whose choice would silently vanish on the next reload.
+      if (t.rejected) t.episode_cover = false;
+      setDirty(true);
+      render();
+    };
     row.appendChild(rej);
 
     const add = document.createElement("button");

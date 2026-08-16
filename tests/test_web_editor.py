@@ -930,3 +930,105 @@ def test_page_has_the_artwork_picker():
     assert "[hidden] { display:none !important; }" in html
     # The toast must outrank the overlay or it is raised behind the backdrop.
     assert "z-index:60" in html
+
+
+def test_apply_edits_refuses_the_star_on_a_rejected_track(sample_tracklist):
+    """A rejected track cannot be the episode cover, and must not clear the choice.
+
+    to_json() drops rejected tracks, so a star on one could never be stored --
+    but accepting it would still clear whichever track legitimately held it,
+    leaving the set with no cover at all and nothing to report the loss.
+    """
+    from setlist_maker.web_editor import apply_edits
+
+    sample_tracklist.tracks[0].is_episode_cover = True
+
+    def edit(i, **extra):
+        t = sample_tracklist.tracks[i]
+        return {"index": i, "artist": t.artist, "title": t.title, **extra}
+
+    apply_edits(
+        sample_tracklist,
+        [edit(0, rejected=False, episode_cover=True), edit(1, rejected=True, episode_cover=True)],
+        None,
+    )
+
+    assert [t.is_episode_cover for t in sample_tracklist.tracks] == [True, False, False, False]
+    # ...and it survives the round trip, which is where the loss would have shown up
+    assert [t["episode_cover"] for t in sample_tracklist.to_json()].count(True) == 1
+
+
+def test_apply_edits_unstars_a_track_that_becomes_rejected(sample_tracklist):
+    """Rejecting the starred track clears its star rather than orphaning it."""
+    from setlist_maker.web_editor import apply_edits
+
+    track = sample_tracklist.tracks[1]
+    track.is_episode_cover = True
+    apply_edits(
+        sample_tracklist,
+        [
+            {
+                "index": 1,
+                "artist": track.artist,
+                "title": track.title,
+                "rejected": True,
+                "episode_cover": True,
+            }
+        ],
+        None,
+    )
+    assert track.is_episode_cover is False
+
+
+def test_artwork_options_searches_the_live_artist_and_title(
+    sample_tracklist, tmp_path, monkeypatch
+):
+    """The picker searches what the page shows, not what is saved.
+
+    Correcting a misidentification and then fixing its cover is one workflow:
+    searching the stale name would offer covers for the song being corrected
+    away, and the user would pin one of them.
+    """
+    from setlist_maker.artwork import ArtworkCandidate
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    asked = []
+
+    def fake_options(artist, title):
+        asked.append((artist, title))
+        return [ArtworkCandidate("iTunes", "https://x/a.jpg", "")]
+
+    monkeypatch.setattr("setlist_maker.web_editor.artwork_options", fake_options)
+
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(
+            base + "/api/artwork/options?index=0&artist=Justice&title=Genesis"
+        ) as r:
+            assert r.status == 200
+            r.read()
+        # ...and it falls back to the saved values when the page sends none
+        with urllib.request.urlopen(base + "/api/artwork/options?index=0") as r:
+            r.read()
+
+    assert asked == [("Justice", "Genesis"), ("Daft Punk", "Around the World")]
+
+
+def test_page_panel_survives_an_unsaved_pick_and_sends_it():
+    """Substring-level guards for the two places live page state must win.
+
+    The row thumb already previews an unsaved pick; the panel that opens from
+    that same thumb has to agree, or reopening shows the pre-pick composite and
+    outlines the cover the user just replaced as the one in use.
+    """
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    # showArtwork branches on the unsaved-pick flag rather than always
+    # requesting the server composite, which is built from saved state.
+    assert "if (t._art) {" in html
+    # ...and the server's `current` flag is only adopted when there is no pick.
+    assert "if (!t._art) {" in html
+    # The save payload carries a pick only for rows that have one: sending it
+    # for every row would re-pin art apply_track_edit() means to drop (#30).
+    assert "if (t._art) edit.coverart_url = t.coverart_url;" in html
+    assert "episode_cover: !!t.episode_cover" in html
+    # The picker searches the live text, not the saved identification.
+    assert "&artist=" in html and "&title=" in html

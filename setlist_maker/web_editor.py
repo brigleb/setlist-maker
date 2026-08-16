@@ -122,8 +122,9 @@ def apply_edits(
     user did not make in the picker. ``coverart_url`` pins a chosen cover: it is
     applied *after* ``apply_track_edit``, which clears that field on a
     correction, so picking art and fixing a typo in one save keeps the art.
-    ``episode_cover`` marks whose art becomes the episode-level cover, and is
-    exclusive -- the last track a payload marks wins and every other is cleared.
+    ``episode_cover`` marks whose art becomes the episode-level cover. It is
+    exclusive -- the last track a payload marks wins and every other is cleared
+    -- and is refused on a rejected track, which the sidecar does not carry.
     """
     # Validate before mutating anything: a bad URL must not leave half the
     # payload applied and the rest dropped.
@@ -163,8 +164,13 @@ def apply_edits(
             track.coverart_url = _picked_artwork_url(edit)
             track.artwork_pinned = track.coverart_url is not None
         if "episode_cover" in edit:
-            track.is_episode_cover = bool(edit["episode_cover"])
-            if track.is_episode_cover:
+            # Never on a rejected track: to_json() drops those, so the star
+            # could not be stored -- and accepting it would still clear the
+            # previous, valid choice, leaving the set with no cover at all and
+            # nothing to say so.
+            starred = bool(edit["episode_cover"]) and not track.rejected
+            track.is_episode_cover = starred
+            if starred:
                 chosen_cover = track
 
     if chosen_cover is not None:
@@ -336,10 +342,22 @@ class _Handler(BaseHTTPRequestHandler):
         The track's own URL is offered first and labelled, so the grid shows
         what is in use beside the alternatives rather than making the user
         remember it.
+
+        Searches on the artist/title the page passes -- what the user is
+        *currently* looking at -- rather than on saved state, which is the one
+        place in this server where those differ deliberately. Someone who has
+        just corrected a misidentification and not yet saved is exactly who
+        reaches for this: searching the stale name would offer covers for the
+        wrong song and then pin one. The composite endpoint does the opposite,
+        and must, because it has to show what would be embedded.
         """
         track = self._track_for_query()
         if track is None:
             return
+
+        params = parse_qs(urlparse(self.path).query)
+        artist = (params.get("artist", [""])[0] or track.artist).strip()
+        title = (params.get("title", [""])[0] or track.title).strip()
 
         candidates: list[dict] = []
         # Offered at the chapter image's size, which is the URL fetch_artwork
@@ -357,7 +375,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             candidates += [
                 {"source": c.source, "url": c.url, "label": c.label}
-                for c in artwork_options(track.artist, track.title)
+                for c in artwork_options(artist, title)
             ]
         except Exception as exc:  # a handler that raises sends no response at all
             error = str(exc)

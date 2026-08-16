@@ -247,7 +247,9 @@ CLI application with the following modules:
   Consequences of it becoming interactive: only a click whose `e.target` *is* the backdrop
   dismisses it; the global keydown handler returns early while it is open (its tiles are
   `BUTTON`s, and the focus guard exempts only inputs, so the arrows would seek the audio while
-  the user browses covers); `#toast` needs `z-index:60` or a toast raised over it renders behind
+  the user browses covers); the ★ toggle is disabled for a rejected track, which the sidecar does
+  not carry (the server refuses the star for one too, so a stale client cannot clear a valid choice
+  and store nothing in its place); `#toast` needs `z-index:60` or a toast raised over it renders behind
   the backdrop; and `[hidden] { display:none !important; }` is required because the panel's
   author `display:flex` otherwise beats the UA stylesheet's `[hidden]` rule.
   It lives in the static markup **outside `#list`**, since `render()` rebuilds every row, and it
@@ -259,6 +261,12 @@ CLI application with the following modules:
   server's own `current` flag (`artCurrentUrl`), *not* from comparing `artTrack.coverart_url`:
   the endpoint offers the in-use cover through `resize_cover_art_url()` at the chapter size, so
   a Shazam URL saved at 400px arrives as the 600px one and a raw string compare marks nothing.
+  Live page state outranks saved state in three places, all for the same reason -- the panel is
+  the surface where the two most often differ: `showArtwork()` restores an unsaved pick instead of
+  requesting the (pre-pick) server composite; `loadAlternates()` adopts the server's `current`
+  flag only when the track has no pick; and the *search* is run on the artist/title the page
+  passes, since correcting a misidentification and fixing its cover is one workflow and the stale
+  name would offer covers for the song being corrected away.
   A pick sets `coverart_url` (the artwork cache's key, so it regenerates on its own) plus a
   client-only `_art` flag, which is both why the save payload includes the URL at all — sending
   it for every row would re-pin art `apply_track_edit()` means to drop — and why the row
