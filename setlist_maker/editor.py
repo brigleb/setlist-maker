@@ -43,15 +43,43 @@ _SUMMARY_MARKER_LOOKALIKE = re.compile(
     rf"^\\*(?:{re.escape(SUMMARY_OPEN_MARKER)}|{re.escape(SUMMARY_CLOSE_MARKER)})$"
 )
 
-# "1. **Artist** - Title (MM:SS)" or "1. *Unidentified* (MM:SS)"
+# Stand-ins for a field the listing has no value for. Italic, and that is what
+# makes them unmistakable rather than merely unlikely: a real artist is always
+# written **bold**, so no value can serialize to either of these, however it is
+# spelled -- an artist genuinely named "*Unknown artist*" comes out as
+# ***Unknown artist*** and reads back as itself. Leaving the empty side out
+# entirely would have been prettier and ambiguous ("1. Titled Only (3:00)" is
+# indistinguishable from prose), which is the trade #16 already settled.
+UNIDENTIFIED_MARKER = "*Unidentified*"
+UNKNOWN_ARTIST_MARKER = "*Unknown artist*"
+
+# One listing line. Four shapes, because a track may know its artist, its title,
+# both, or neither (#44) -- and the file is the authority on which tracks exist,
+# so a shape missing here is a row silently deleted on reopen, not a row that
+# merely looks wrong. Ordered marker-branches first; they cannot collide with
+# the bold ones, which start with two asterisks.
 TRACK_LINE_PATTERN = re.compile(
     r"^\d+\.\s+"
     r"(?:"
-    r"\*\*(.+?)\*\*\s*-\s*(.+?)"  # **Artist** - Title
+    rf"{re.escape(UNKNOWN_ARTIST_MARKER)}\s*-\s*(?P<titled>.+?)"  # *Unknown artist* - Title
     r"|"
-    r"\*Unidentified\*"  # *Unidentified*
+    rf"{re.escape(UNIDENTIFIED_MARKER)}"  # *Unidentified*
+    r"|"
+    # The artist span accepts nothing between the markers so that files already
+    # written as "**** - Title" by the old writer give their track back instead
+    # of staying short. The *title* span must stay `.+?`: the pattern is
+    # unanchored, so a title allowed to match nothing lets the time group bind
+    # to a parenthesized time inside the title -- "**A** - (1:23) Reprise
+    # (10:00)" would read as title "" at 0:01:23, losing the title and moving
+    # the row, which then misses its sidecar entry (joined by timestamp) and
+    # its chapter mark. The legacy "**Artist** -  " shape needs no help here
+    # anyway: `\s*-\s*` is greedy, the span takes the space it leaves, and the
+    # caller strips it.
+    r"\*\*(?P<artist>.*?)\*\*\s*-\s*(?P<title>.+?)"  # **Artist** - Title
+    r"|"
+    r"\*\*(?P<artist_only>.+?)\*\*"  # **Artist**
     r")\s*"
-    r"\((\d+:\d+(?::\d+)?)\)"  # (MM:SS) or (H:MM:SS)
+    r"\((?P<time>\d+:\d+(?::\d+)?)\)"  # (MM:SS) or (H:MM:SS)
 )
 
 
@@ -113,8 +141,13 @@ class Track:
 
     @property
     def is_unidentified(self) -> bool:
-        """Check if this track was not identified by Shazam."""
-        return not self.artist and not self.title
+        """Check if this track was not identified by Shazam.
+
+        Whitespace-tolerant: a field holding only spaces names nothing, and
+        reads back as empty anyway, so calling it identified only meant the
+        difference surfaced later -- as a chapter titled "   -   " (#44).
+        """
+        return not self.artist.strip() and not self.title.strip()
 
     @property
     def was_corrected(self) -> bool:
@@ -171,10 +204,20 @@ class Tracklist:
             if track.rejected:
                 continue
             time_str = track.time_str
+            # Written from the stripped values so a field of only spaces is
+            # stored as the empty field it already is, rather than as one that
+            # becomes empty on the next read -- which is how the whitespace
+            # case used to survive one round trip and die on the following one.
+            artist = track.artist.strip()
+            title = track.title.strip()
             if track.is_unidentified:
-                lines.append(f"{track_num}. *Unidentified* ({time_str})")
+                lines.append(f"{track_num}. {UNIDENTIFIED_MARKER} ({time_str})")
+            elif not artist:
+                lines.append(f"{track_num}. {UNKNOWN_ARTIST_MARKER} - {title} ({time_str})")
+            elif not title:
+                lines.append(f"{track_num}. **{artist}** ({time_str})")
             else:
-                lines.append(f"{track_num}. **{track.artist}** - {track.title} ({time_str})")
+                lines.append(f"{track_num}. **{artist}** - {title} ({time_str})")
             track_num += 1
 
         lines.append("")
@@ -302,9 +345,12 @@ def parse_markdown_tracklist(content: str) -> Tracklist:
     for line in body:
         match = TRACK_LINE_PATTERN.match(line.strip())
         if match:
-            artist = match.group(1) or ""
-            title = match.group(2) or ""
-            time_str = match.group(3)
+            # Each shape fills a different pair of groups and leaves the rest
+            # None; an empty string from the shape that *did* match is the same
+            # answer as the fallback, so the chain never picks up a wrong one.
+            artist = match.group("artist") or match.group("artist_only") or ""
+            title = match.group("title") or match.group("titled") or ""
+            time_str = match.group("time")
 
             # Parse timestamp
             parts = time_str.split(":")
@@ -409,8 +455,15 @@ def apply_track_edit(
     identification, it is the user's answer about this track, and clearing it
     on a later typo fix would silently throw that answer away (#20).
 
+    Both fields are stripped first, so surrounding space is never what a
+    "change" consists of: the web editor already strips at its own door, and
+    matching it here keeps stored fields uniformly bare, which is what lets the
+    markdown decide a row's shape from the value alone (#44).
+
     Returns True if the track changed.
     """
+    artist = artist.strip()
+    title = title.strip()
     if artist == track.artist and title == track.title:
         return False
 

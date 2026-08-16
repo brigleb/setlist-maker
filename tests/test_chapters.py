@@ -210,6 +210,30 @@ class TestEmbedChapters:
         )
         assert "Unknown Track" in str(chaps[1].sub_frames.getall("TIT2")[0].text)
 
+    def test_half_identified_tracks_get_no_dangling_separator(self, temp_mp3):
+        """A track that knows only one of its fields is titled with that field (#44).
+
+        Reachable now that such a row survives a save, and a podcast player shows
+        this string verbatim -- " - Titled Only" is not a chapter name.
+        """
+        tracks = [
+            Track(timestamp=0, artist="", title="Titled Only"),
+            Track(timestamp=60, artist="Artist Only", title=""),
+            Track(timestamp=120, artist="   ", title="   "),
+        ]
+
+        embed_chapters(temp_mp3, tracks)
+
+        audio = MP3(str(temp_mp3))
+        tags = audio.tags
+        chaps = sorted(
+            [tags[k] for k in tags if k.startswith("CHAP:")],
+            key=lambda c: c.start_time,
+        )
+        titles = [str(c.sub_frames.getall("TIT2")[0].text[0]) for c in chaps]
+
+        assert titles == ["Titled Only", "Artist Only", "Unknown Track"]
+
     def test_raises_on_missing_file(self, temp_dir):
         """Test that FileNotFoundError is raised for missing audio."""
         tracks = [Track(timestamp=0, artist="A", title="T")]

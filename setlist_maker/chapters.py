@@ -94,11 +94,15 @@ def embed_chapters(
         else:
             end_ms = audio_duration_ms
 
-        # Build chapter title
-        if track.is_unidentified:
+        # Build chapter title. Joined from whichever halves the track has, so a
+        # row that knows only its title -- which the markdown can now carry
+        # across a save (#44), making this reachable in practice -- gets a
+        # chapter called "Titled Only" rather than " - Titled Only".
+        chapter_title = " - ".join(
+            part for part in (track.artist.strip(), track.title.strip()) if part
+        )
+        if not chapter_title:
             chapter_title = "Unknown Track"
-        else:
-            chapter_title = f"{track.artist} - {track.title}"
 
         # Build sub-frames
         sub_frames = [

@@ -374,6 +374,60 @@ Peaked on 1. **Artist One** - Track One (0:00), a line shaped like a track.
         assert [t.timestamp for t in tracklist.tracks] == [0, 180]
         assert urls == {0: "https://example.com/art1.jpg"}
 
+    def test_reopening_keeps_a_row_that_knows_only_its_title(self, temp_dir):
+        """A half-identified row survives the reopen path, artwork still aligned (#44).
+
+        The markdown is authoritative for which tracks exist -- the sidecar is
+        only joined onto it -- so dropping the row here dropped it from both
+        editors and from the embedded chapters, and slid every later track's
+        cover up by one on the way.
+        """
+        markdown = """# Tracklist: test.mp3
+
+*Generated on 2026-01-31 20:00*
+
+1. **Artist One** - Track One (0:00)
+2. *Unknown artist* - Titled Only (3:00)
+3. **Artist Two** (6:00)
+"""
+        tracks_json = [
+            {
+                "timestamp": 0,
+                "time": "0:00",
+                "artist": "Artist One",
+                "title": "Track One",
+                "coverart_url": "https://example.com/art1.jpg",
+            },
+            {
+                "timestamp": 180,
+                "time": "3:00",
+                "artist": "",
+                "title": "Titled Only",
+                "coverart_url": "https://example.com/art2.jpg",
+            },
+            {
+                "timestamp": 360,
+                "time": "6:00",
+                "artist": "Artist Two",
+                "title": "",
+                "coverart_url": "https://example.com/art3.jpg",
+            },
+        ]
+
+        md_path = self._write_tracklist_files(temp_dir, tracks_json, markdown)
+        tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+
+        assert [(t.artist, t.title) for t in tracklist.tracks] == [
+            ("Artist One", "Track One"),
+            ("", "Titled Only"),
+            ("Artist Two", ""),
+        ]
+        assert urls == {
+            0: "https://example.com/art1.jpg",
+            1: "https://example.com/art2.jpg",
+            2: "https://example.com/art3.jpg",
+        }
+
     def test_matches_by_timestamp_not_index(self, temp_dir):
         """Test that timestamp matching works when rejected tracks cause index mismatch."""
         # Markdown includes a rejected track that got re-added during editing
