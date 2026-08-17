@@ -5,6 +5,7 @@ import pytest
 from setlist_maker.editor import (
     SUMMARY_CLOSE_MARKER,
     SUMMARY_OPEN_MARKER,
+    UNIDENTIFIED_MARKER,
     CorrectionsDB,
     Track,
     Tracklist,
@@ -58,6 +59,21 @@ class TestApplyTrackEdit:
         assert track.original_artist == "Wrong Artist"
         assert track.original_title == "Wrong Title"
         assert track.coverart_url is None
+
+    def test_fields_are_stored_stripped(self):
+        """Surrounding space is not part of a name, and a field of only space is empty (#44)."""
+        track = self._track()
+        assert apply_track_edit(track, "  Justice  ", "  Genesis  ") is True
+        assert (track.artist, track.title) == ("Justice", "Genesis")
+
+        assert apply_track_edit(track, "   ", "Genesis") is True
+        assert track.artist == ""
+
+    def test_stripping_does_not_invent_a_change(self):
+        """A row re-sent with stray space is still unchanged, so its artwork stays (#30)."""
+        track = self._track()
+        assert apply_track_edit(track, " Wrong Artist ", "Wrong Title ") is False
+        assert track.coverart_url == "https://cdn.shazam.com/wrong-album.jpg"
 
 
 class TestTrack:
@@ -559,6 +575,205 @@ A driving techno set with dub-inflected low end.
         assert [t.timestamp for t in tracklist.tracks] == [0, 240]
         # An old file is expected, not damaged: reading one is not worth a warning.
         assert capsys.readouterr().out == ""
+
+
+class TestPartialIdentificationRoundTrip:
+    """A track with only one of artist/title must survive being written and reread (#44).
+
+    Half-identified rows are a state the app deliberately supports -- the TUI
+    renders the missing side as "Unknown", and you reach one in a single move by
+    adding a row and typing only what you know -- but the markdown had no shape
+    for it, so it was written as ``**** - Title`` and silently dropped on the
+    next read. These pin the shapes that carry it.
+    """
+
+    def _tracklist(self, *tracks: Track, summary: str | None = None) -> Tracklist:
+        return Tracklist(
+            source_file="mix.mp3",
+            generated_on="2026-01-31 20:00",
+            tracks=list(tracks),
+            summary=summary,
+        )
+
+    @pytest.mark.parametrize(
+        "artist,title",
+        [
+            ("Daft Punk", "One More Time"),  # both known
+            ("", "Titled Only"),  # the reported shape
+            ("Artist Only", ""),  # its mirror
+            ("", ""),  # neither: *Unidentified*
+        ],
+        ids=["both", "title-only", "artist-only", "neither"],
+    )
+    def test_every_emptiness_shape_round_trips(self, artist, title):
+        """Each of the four combinations comes back exactly as it went in."""
+        tracklist = self._tracklist(Track(timestamp=180, artist=artist, title=title))
+
+        back = parse_markdown_tracklist(tracklist.to_markdown())
+
+        assert [(t.timestamp, t.artist, t.title) for t in back.tracks] == [(180, artist, title)]
+
+    @pytest.mark.parametrize(
+        "artist,title",
+        [
+            ("Kraftwerk", "(1:23) Reprise"),
+            ("", "(1:23) Reprise"),
+            ("Aphex Twin", "(4:33)"),
+            ("Kraftwerk", "(1:02:03) Reprise"),
+        ],
+        ids=["both", "title-only", "time-is-the-title", "hours"],
+    )
+    def test_a_title_starting_with_a_time_keeps_its_own_timestamp(self, artist, title):
+        """A leading "(m:ss)" in a title must not be read as the row's time.
+
+        The listing line is matched unanchored, so a title span allowed to match
+        *nothing* lets the time group bind to the parenthesized time inside the
+        title instead of the real one at the end: the title vanishes and the row
+        moves. That is worse than the bug this class is about -- the sidecar is
+        joined by timestamp, so the row also loses its pinned cover and its
+        episode-cover star, and the chapter mark lands minutes early -- and the
+        next save writes the damage back as a well-formed line.
+        """
+        tracklist = self._tracklist(Track(timestamp=600, artist=artist, title=title))
+
+        back = parse_markdown_tracklist(tracklist.to_markdown())
+
+        assert [(t.timestamp, t.artist, t.title) for t in back.tracks] == [(600, artist, title)]
+
+    @pytest.mark.parametrize("position", [0, 1, 2], ids=["first", "middle", "last"])
+    @pytest.mark.parametrize("summary", [None, "A late-night set."], ids=["no-desc", "desc"])
+    def test_a_titled_row_with_no_artist_is_never_dropped(self, position, summary):
+        """The issue's repro: neither position nor a description may delete the row.
+
+        Both mattered before the fix -- with no description a leading partial row
+        was swallowed by the legacy prose scan instead, so it failed two
+        different ways depending on where it sat.
+        """
+        tracks = [
+            Track(timestamp=0, artist="Daft Punk", title="One More Time"),
+            Track(timestamp=360, artist="Kraftwerk", title="Autobahn"),
+        ]
+        tracks.insert(position, Track(timestamp=180, artist="", title="Titled Only"))
+        tracklist = self._tracklist(*tracks, summary=summary)
+
+        back = parse_markdown_tracklist(tracklist.to_markdown())
+
+        # Timestamps included: they are what the JSON sidecar is joined on, so a
+        # row that comes back at the wrong second is not much better than gone.
+        assert [(t.timestamp, t.artist, t.title) for t in back.tracks] == [
+            (t.timestamp, t.artist, t.title) for t in tracks
+        ]
+        assert back.summary == summary
+
+    def test_partial_rows_read_as_show_notes(self):
+        """The published .md must stay legible: no ``****``, no dangling dash."""
+        tracklist = self._tracklist(
+            Track(timestamp=0, artist="", title="Titled Only"),
+            Track(timestamp=180, artist="Artist Only", title=""),
+            Track(timestamp=360, artist="", title=""),
+        )
+
+        listing = [ln for ln in tracklist.to_markdown().split("\n") if ln[:1].isdigit()]
+
+        assert listing == [
+            "1. *Unknown artist* - Titled Only (0:00)",
+            "2. **Artist Only** (3:00)",
+            "3. *Unidentified* (6:00)",
+        ]
+
+    def test_resaving_a_partial_row_is_byte_identical(self):
+        """Reopening and saving must not churn the file, or drift a shape per save."""
+        first = self._tracklist(
+            Track(timestamp=0, artist="", title="Titled Only"),
+            Track(timestamp=180, artist="Artist Only", title=""),
+        ).to_markdown()
+
+        assert parse_markdown_tracklist(first).to_markdown() == first
+
+    @pytest.mark.parametrize(
+        "artist,title,expected",
+        [
+            ("   ", "Song", "1. *Unknown artist* - Song (0:00)"),
+            ("Artist", "   ", "1. **Artist** (0:00)"),
+            ("   ", "   ", f"1. {UNIDENTIFIED_MARKER} (0:00)"),
+            ("  Artist  ", "  Song  ", "1. **Artist** - Song (0:00)"),
+        ],
+        ids=["blank-artist", "blank-title", "both-blank", "padded"],
+    )
+    def test_a_whitespace_only_field_is_written_as_the_empty_field_it_is(
+        self, artist, title, expected
+    ):
+        """``"   "`` names nothing, so the *first* save must already say so.
+
+        Asserted on the emitted line rather than on what comes back, because the
+        reader strips too: judged by values alone this passed while the file
+        still said ``**   ** - Song``, which survived one round trip and was
+        deleted by the next -- the loss simply arrived a save late.
+        """
+        tracklist = self._tracklist(Track(timestamp=0, artist=artist, title=title))
+        markdown = tracklist.to_markdown()
+
+        assert expected in markdown
+        # And it is already at rest: reopening and saving changes nothing.
+        assert parse_markdown_tracklist(markdown).to_markdown() == markdown
+
+    def test_a_whitespace_only_track_is_unidentified(self):
+        """The predicate the whole pipeline gates on agrees, so nothing downstream differs."""
+        assert Track(timestamp=0, artist="   ", title="\t").is_unidentified
+        assert not Track(timestamp=0, artist="   ", title="Song").is_unidentified
+
+    @pytest.mark.parametrize(
+        "artist",
+        ["Unknown artist", "*Unknown artist*", "Unidentified", "*Unidentified*"],
+        ids=["bare", "italic", "bare-unid", "italic-unid"],
+    )
+    def test_an_artist_named_like_a_marker_is_still_a_real_artist(self, artist):
+        """The markers cannot collide with data: a real artist is always bold-wrapped.
+
+        That is the whole reason the empty side gets a marker rather than simply
+        being left out -- ``1. Titled Only (0:00)`` would be indistinguishable
+        from prose, and this file already learned that lesson in #16.
+        """
+        tracklist = self._tracklist(Track(timestamp=0, artist=artist, title="Song"))
+
+        back = parse_markdown_tracklist(tracklist.to_markdown())
+
+        assert [(t.artist, t.title) for t in back.tracks] == [(artist, "Song")]
+
+    def test_a_file_damaged_by_the_old_writer_recovers_its_track(self):
+        """Files already written as ``**** - Title`` must give the row back, not stay short."""
+        md = """# Tracklist: mix.mp3
+
+*Generated on 2026-01-31 20:00*
+
+1. **Daft Punk** - One More Time (0:00)
+2. **** - Titled Only (3:00)
+3. **Kraftwerk** - Autobahn (6:00)
+"""
+        tracklist = parse_markdown_tracklist(md)
+
+        assert [(t.timestamp, t.artist, t.title) for t in tracklist.tracks] == [
+            (0, "Daft Punk", "One More Time"),
+            (180, "", "Titled Only"),
+            (360, "Kraftwerk", "Autobahn"),
+        ]
+
+    def test_the_old_dangling_dash_shape_still_parses(self):
+        """The empty-title shape the old writer emitted kept its data; keep reading it.
+
+        It survives on the separator being greedy, which leaves the title span a
+        space to take and the caller to strip -- so this guards the reading, not
+        any particular spelling of the span.
+        """
+        md = """# Tracklist: mix.mp3
+
+*Generated on 2026-01-31 20:00*
+
+1. **Artist Only** -  (0:00)
+"""
+        tracklist = parse_markdown_tracklist(md)
+
+        assert [(t.artist, t.title) for t in tracklist.tracks] == [("Artist Only", "")]
 
 
 class TestCorrectionsDB:

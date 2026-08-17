@@ -748,8 +748,11 @@
     playingIndex = i;
     const t = tracks[i];
     playingTrack = t;
+    // Only a track missing *both* halves is unidentified; one that knows just
+    // its title says so, in the same words the saved markdown uses (#44).
     document.getElementById("plabel").textContent =
-      (t.artist || "Unidentified") + (t.title ? " — " + t.title : "");
+      (t.artist || t.title ? (t.artist || "Unknown artist") : "Unidentified") +
+      (t.title ? " — " + t.title : "");
     document.getElementById("pcount").textContent = "track " + (i + 1) + " of " + tracks.length;
     const pt = document.getElementById("pthumb");
     // backgroundImage, never the `background` shorthand -- see the CSS comment.

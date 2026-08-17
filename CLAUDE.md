@@ -184,6 +184,9 @@ CLI application with the following modules:
   The one exception is `Track.artwork_pinned`, set when the user picked a cover in the web
   editor's picker: that URL is not Shazam's guess about a stale identification but the user's
   answer about *this* track, so clearing it on a later typo fix would silently discard it (#20).
+  Both fields are **stripped** first (the web editor already did so at its own door), which is
+  what lets the markdown decide a row's shape from the value alone; stripping before the no-op
+  comparison also keeps a row re-sent with stray space from counting as a correction (#44).
 - **parse_markdown_tracklist():** Parses existing markdown files for editing. The set
   description is read from the `<!-- summary -->` … `<!-- /summary -->` fence `to_markdown()`
   writes, and the lines it occupies are then **excluded from every other scan** — header, date
@@ -208,6 +211,32 @@ CLI application with the following modules:
   close the fence from inside), and it leaves a blank line inside each marker so renderers
   that escape raw HTML instead of honoring it don't fold the markers into the description's
   paragraph.
+- **The listing's four shapes (`TRACK_LINE_PATTERN` / `to_markdown()`):** a track may know its
+  artist, its title, both, or neither, and the markdown carries all four — `**Artist** - Title`,
+  `*Unknown artist* - Title`, `**Artist**`, `*Unidentified*`. Totality is the point, not tidiness:
+  the `.md` is **authoritative for which tracks exist** (the sidecar is only joined onto it by
+  timestamp), so a shape the writer can emit but the pattern can't match is a row *deleted* on the
+  next read, which is what `**** - Title` did to every artist-less track — reachable in one move,
+  since the web editor's "＋ Add below" inserts a blank row and nothing between there and the file
+  objects to a title with no artist (#44). The empty side gets a **marker rather than being left
+  out** because `1. Titled Only (3:00)` is indistinguishable from prose, and this parser already
+  learned that lesson in #16; the markers are italic and real values are always **bold**-wrapped,
+  so no user-typed value can serialize to one — an artist literally named `*Unknown artist*` is
+  written `***Unknown artist***` and reads back as itself. The artist span is `(.*?)`, not `(.+?)`,
+  so files already damaged by the old writer give their track back rather than staying short — but
+  the **title** span must stay `(.+?)`: the line is matched unanchored, so a title span that can
+  match nothing lets the time group bind to a `(m:ss)` *inside* the title, and `**A** - (1:23)
+  Reprise (10:00)` reads back as an empty title at 1:23 — losing the title, missing the sidecar
+  entry (joined by timestamp) and moving the chapter mark, then cementing all of it on the next
+  save. The legacy `**Artist** -  ` shape needs no help from a nullable span anyway, since `\s*-\s*`
+  is greedy and the caller strips what it leaves. Anchoring the pattern with `\s*$` would fix the
+  related #45 (a `(m:ss)` mid-title) but is **not** a free win: it stops matching a hand-annotated
+  line like `1. **A** - T (0:00) [live]`, which turns an annotation into a deleted row — this
+  format's one unforgivable failure. Because the pattern also decides where a *legacy* description
+  ends, every branch is anchored on a marker or `**`, never on bare text. Both `to_markdown()` and `is_unidentified` work on
+  **stripped** values, so a whitespace-only field is stored as the empty field it already is —
+  untreated it survived one round trip (the reader strips) and was deleted by the next, putting
+  the loss a save away from the edit that caused it.
 - **Audio preview:** `p` previews the selected track's 30s window via `PlaybackController`
   (see `playback.py`). `_resolve_audio_path()` locates the source audio (threaded in from the
   CLI when known, else discovered beside the markdown). Playback stops on navigation/reject/edit

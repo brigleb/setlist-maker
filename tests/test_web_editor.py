@@ -504,6 +504,53 @@ def test_post_save_survives_a_track_shaped_description(sample_tracklist, tmp_pat
     assert len(reopened.tracks) == len(sample_tracklist.tracks)
 
 
+def test_post_save_keeps_an_inserted_row_that_has_only_a_title(sample_tracklist, tmp_path):
+    """The one-move repro, end to end through the page's save (#44).
+
+    "＋ Add below" inserts a blank row; typing only the title -- because that is
+    all you know -- used to write a row the reader could not see, so it was gone
+    the next time the set was opened, with nothing said.
+    """
+    from setlist_maker.web_editor import EditorContext
+
+    ctx = EditorContext(
+        tracklist=sample_tracklist,
+        output_path=tmp_path / "set_tracklist.md",
+        corrections_db=None,
+        audio_path=None,
+    )
+    before = len(sample_tracklist.tracks)  # apply_edits inserts into this list in place
+    payload = json.dumps(
+        {
+            "tracks": [
+                {"index": i, "artist": t.artist, "title": t.title, "rejected": False}
+                for i, t in enumerate(sample_tracklist.tracks)
+            ]
+            + [{"artist": "  ", "title": "Titled Only", "timestamp": 90, "rejected": False}],
+        }
+    ).encode()
+
+    with running_server(ctx) as base:
+        req = urllib.request.Request(
+            base + "/api/save",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as r:
+            assert json.loads(r.read())["ok"] is True
+
+    from setlist_maker.editor import parse_markdown_tracklist
+
+    md = (tmp_path / "set_tracklist.md").read_text()
+    reopened = parse_markdown_tracklist(md)
+
+    assert "1. **Daft Punk** - Around the World (0:00)" in md
+    assert "2. *Unknown artist* - Titled Only (1:30)" in md
+    assert (90, "", "Titled Only") in [(t.timestamp, t.artist, t.title) for t in reopened.tracks]
+    assert len(reopened.tracks) == before + 1
+
+
 def test_get_audio_full_and_range(sample_tracklist, tmp_path):
     audio = tmp_path / "set.mp3"
     audio.write_bytes(bytes(range(256)))  # 256 deterministic bytes

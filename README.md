@@ -68,12 +68,17 @@ analog pads, building from hypnotic minimalism into brighter, vocal-driven peaks
 1. **Artist One** - Track Title (0:00)
 2. **Artist Two** - Another Track (2:30)
 3. *Unidentified* (5:00)
-4. **Artist Three** - Great Song (7:30)
+4. *Unknown artist* - Great Song (7:30)
 ```
 
 The comment markers around the description render as nothing, and they are what
 lets you write anything you like in there — including a line shaped like a track
 — without the editor mistaking it for one when the file is reopened.
+
+Track 4 shows the other half of that: you often know a track's title but not its
+artist (or the reverse), so the listing has a shape for each — `*Unknown artist*
+- Title`, or just `**Artist**` when the title is the missing half. Fill in only
+what you know and the rest of the row keeps its place.
 
 When you save from the editor, a JSON file is also generated alongside:
 
