@@ -284,7 +284,7 @@
     <text class="note" x="500" y="1052">The set description is fenced in the .md</text>
     <text class="note" x="500" y="1068">(&lt;!-- summary --&gt;), so a reopen can't mistake</text>
     <text class="note" x="500" y="1084">prose for a track, or the reverse (#16, fixed).</text>
-    <text class="note" x="500" y="1108"><tspan class="iref">#44 · #45</tspan> Round-trip gaps left: a blank artist; a (M:SS) in a title.</text>
+    <text class="note" x="500" y="1108"><tspan class="iref">#45</tspan> Round-trip gap left: a (M:SS) inside a title.</text>
     <text class="note" x="500" y="1128"><tspan class="iref">#10</tspan> TUI preview can't scrub within a track.</text>
 
     <!-- ══ Learning loop ══ -->
@@ -328,20 +328,25 @@
     regression — wants data from real runs before anyone picks a new number.</span>
   </li>
   <li>
-    <span class="num">#44</span>
-    <span class="where">round trip · the track line</span>
-    <span class="what">A track with a blank artist but a real title is written as
-    <code>1. **** - Title (3:00)</code>, which the parser can't match — so the row is silently
-    dropped the next time the file is read, taking its chapter with it. One move away in the
-    browser editor: ＋ Add below, type a title, leave the artist empty.</span>
-  </li>
-  <li>
     <span class="num">#45</span>
     <span class="where">round trip · the track line</span>
     <span class="what">A title carrying its own <code>(1:23)</code>-shaped parenthetical ends the
     title there and is read as the timestamp: <code>Intro (1:23) Live</code> at 0:00 comes back as
     <code>Intro</code> at 1:23 — wrong place in the set, wrong chapter start.
-    <code>(Remix)</code>-style parentheticals are fine.</span>
+    <code>(Remix)</code>-style parentheticals are fine. Anchoring the track pattern to end-of-line
+    would fix it, but it would also stop matching a hand-annotated line — turning an annotation
+    into a dropped row — so the fix wants more thought than one character.</span>
+  </li>
+  <li class="shipped">
+    <span class="num">#44</span>
+    <span class="where">round trip · closed aug 2026</span>
+    <span class="what">A track with a blank artist but a real title was written as
+    <code>1. **** - Title (3:00)</code>, which the parser couldn't match — so the row was silently
+    dropped the next time the file was read, taking its chapter with it. One move away in the
+    browser editor: ＋ Add below, type a title, leave the artist empty. The listing now has a shape
+    for each of the four cases — <code>*Unknown artist* - Title</code> when the artist is the
+    missing half, a bare <code>**Artist**</code> when the title is — so a row survives knowing only
+    what you know. Shipped in PR #46 (<code>d5d52fa</code>).</span>
   </li>
   <li class="shipped">
     <span class="num">#16</span>
@@ -396,7 +401,7 @@ setlist-maker set.md -w            <span class="c"># reopen an existing tracklis
 setlist-maker set.mp3 --chapters   <span class="c"># full run, then embed ID3 chapters</span>
 setlist-maker chapters set.md --audio set.mp3</pre>
 
-<footer>Drawn from the code on <code>main</code> (<code>0d8f0ed</code>) and the GitHub issues as of
-August 16, 2026. Module map lives in CLAUDE.md; this page adds the flow between the modules.
+<footer>Drawn from the code on <code>main</code> (<code>8f24e25</code>) and the GitHub issues as of
+August 17, 2026. Module map lives in CLAUDE.md; this page adds the flow between the modules.
 The web-editor issues (#19–#22) still aren't mapped here.</footer>
 </main>
