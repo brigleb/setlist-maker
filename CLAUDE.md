@@ -182,7 +182,51 @@ CLI application with the following modules:
   evidence on both sides into under `phantom_min` **and** its own sample confidence is below
   `singleton_confidence_keep` (the sample's, not its cluster's — the #7 lesson). A lone claim
   with an open flank might genuinely span it, so the rule refuses to drop it until refinement
-  squeezes it.
+  squeezes it. A gap between two runs of **one** identity is judged at `precision_none` (30s)
+  rather than `phantom_min`, because that is where `_target` stops refining a None-adjacent
+  interval: a dropout retiring in (20, 30] could never be narrowed by any later probe, and the
+  real set reported one track (The J.B.'s) as three rows around a permanent 22.5s hole. This
+  restores the parity with `_smooth_sequence`'s unconditional `A None A` that the spec claimed
+  and the first implementation did not have.
+- **Contradiction collapse (`_collapsed`).** Probing hardest at a transition means the fold now
+  *sees* Shazam changing its mind there, and reported every flip as a track: measured on a real
+  4-hour set, Boz Scaggs → Grant Green folded into four segments over 36s alternating with Us3
+  (who sample Blue Note, which Grant Green *is*), and a 16s Notorious B.I.G. sat in the cut onto
+  Herb Alpert's *Rise*, which it samples. Three gates, none of them removable:
+  - **Pinned and measured.** Both neighbours identified — `None` is the absence of an answer,
+    not a competing claim, which is what spares the real set's two 12.7s runs beside
+    unidentified stretches — and both boundaries pinned within
+    `min(target, fingerprint_segment / 2)`. The floor is *not* the plain target: `--precision`
+    buys fewer probes, and borrowing its value would let relaxing it silently buy deletions.
+  - **Too small to be a track:** under `phantom_min`, or under `stride` inside an alternation
+    zone. `_alternation_zones` implements the spec's own never-built rule (*"A, then B, then A
+    again"*): a **return** is one identity's consecutive pair separated by an excursion under
+    the stride — the span the coverage guarantee says cannot hide a track — and a **zone** needs
+    two *overlapping* returns of different identities, i.e. A-B-A-B. One return is A-B-A, which
+    stays with `singleton_confidence_keep`. Returns are collected in run order and merged by
+    index overlap, and the winner is `max(probes, extent, -first run)`, so the fold stays the
+    deterministic replay `test_replay_equality` requires.
+  - **Convicted by its own offsets (`_misattributed`).** This is the gate the rule cannot ship
+    without. Geometry alone convicts all three real phantoms *and* deletes genuine short tracks:
+    measured against the oracle, 100% of real 12–18s tracks and ~60% of real 20s ones, every one
+    of which the code before this shipped correctly. Two readings, both measured: **incoherent**
+    (the run's own probes disagree about the start by more than the run is long — the second Us3
+    run spreads 49.0s across 5.6s of audio; the bound is the run's own extent because 10 of the
+    file's 51 multi-probe runs legitimately spread past 4s, one by 455s) and **collide** (the
+    run's implied start sits within `offset_tolerance` of a *better-supported* neighbouring
+    run's — *Hypnotize* and *Rise* both imply 3973.3, to 0.1s). Support is what makes collide
+    one-directional: the phantom collides with the real track exactly as much as the reverse.
+    A run with no offsets is never collapsed; the rule needs evidence, and absence of it is not.
+    Measured on the oracle's rewind geometry (a DJ pulling a record back, a genuine A-B-A-B):
+    the veto acquits 40 of 40, where geometry alone deletes a real 162s record.
+  The zone's own best-supported identity is exempt whatever its extent — on the real file the
+  *correct* track clears `phantom_min` by 2.8s, less than the engine's own p90 boundary error,
+  so it needs protecting by name rather than by arithmetic. Drops are appended to `segments()`'s
+  second return value as `contradiction_collapsed` beside `phantom_dropped`, so `adaptive.py`
+  writes them to `<base>_events.jsonl` with no wiring. The rule is deliberately **not** monotone
+  in track *presence*: it is refinement that licenses it, so a phantom can appear at one prefix
+  and be collapsed at a later one. Measured across all 317 real prefixes, exactly two titles do
+  that and both are the phantoms; nothing flickers.
 - Identity clustering is `identify.py`'s `_assign_cluster` / `_normalized_key` reused as-is, so
   the same track under two labels never manufactures a boundary. Note the corollary for
   fixtures: names like `Artist 1` / `Artist 11` score 0.94 and legitimately merge — see

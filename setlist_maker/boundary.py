@@ -538,6 +538,223 @@ class BoundaryEngine:
                 total += max(1, math.ceil(math.log2(ratio)))
         return total
 
+    # ---- contradiction collapse ------------------------------------------
+    #
+    # The scheduler probes hardest exactly where two tracks meet, so the fold
+    # now *sees* Shazam changing its mind inside a transition and, left alone,
+    # reports every flip as its own track. Measured on a real 4-hour set: the
+    # cut from Boz Scaggs' "Lowdown" into Grant Green's "Sookie Sookie (Live)"
+    # folded into four segments spanning 36s, alternating Sookie with Us3's
+    # "Tukka Yoot's Riddim" -- Us3 sample Blue Note records and Grant Green is
+    # Blue Note, so the confusion is semantic, not noise. Same cause 2.5 hours
+    # earlier: a 16s Notorious B.I.G. "Hypnotize" wedged into the cut onto Herb
+    # Alpert's "Rise", which "Hypnotize" samples.
+    #
+    # Extent alone cannot adjudicate this, and that is the whole difficulty.
+    # Dropping every pinned run under `phantom_min` convicts all three real
+    # phantoms -- and also deletes a genuinely short track: measured against
+    # the synthetic oracle, 100% of real 12-18s tracks and ~60% of real 20s
+    # ones, every one of which the code before this shipped correctly. So the
+    # geometry only ever opens the question; an *offset* veto answers it.
+
+    def _run_estimates(self, run: list[Evidence]) -> list[float]:
+        """Each probe in this run's own implied track start (see
+        `_probe_start_estimate`), which is a property of the probe, not of the
+        cluster -- `_trusted_start` would average a phantom together with the
+        real sightings of the same title elsewhere in the recording."""
+        out = (self._probe_start_estimate(ev.probe) for ev in run if ev.probe is not None)
+        return [x for x in out if x is not None]
+
+    def _misattributed(
+        self, runs: list[list[Evidence]], extents: list[float], i: int
+    ) -> str | None:
+        """Positive evidence that run `i`'s matches are *another track's* audio.
+
+        Two independent readings, both measured on the real set:
+
+        - **incoherent**: the run's own probes disagree about where the track
+          started by more than the run is long. Two probes 2.8s apart implying
+          starts 49s apart is not a track heard twice, it is two guesses --
+          which is exactly what the second "Tukka" run (5.6s extent, 49.0s
+          spread) looks like. The bound is the run's own extent because a
+          *long* run legitimately spreads: 10 of the real file's 51 multi-probe
+          runs spread past 4s, up to 455s over a 462s track, so any fixed
+          tolerance either misses the phantom or convicts half the set.
+        - **collide**: the run's implied start sits within `offset_tolerance`
+          of a neighbouring run's, and that neighbour is better evidenced. Two
+          identities cannot both begin at the same instant; one of them is
+          hearing the other. Measured: "Hypnotize" implies 3973.3 and "Rise"
+          implies 3973.3 -- the same number to 0.1s -- and the first "Tukka"
+          run lands 1.4s off Sookie's. Comparing *support* is what keeps the
+          test one-directional: the phantom collides with the real track just
+          as much as the real track collides with the phantom, and only the
+          probe count and extent break the symmetry.
+
+        A run whose probes carry no offsets is never convicted. The rule
+        requires evidence; absence of evidence is not it.
+        """
+        own = self._run_estimates(runs[i])
+        if not own:
+            return None
+        if len(own) > 1 and max(own) - min(own) > extents[i] + self.cfg.offset_tolerance:
+            return "incoherent"
+        mine = median(own)
+        for j in (i - 1, i + 1):
+            if not (0 <= j < len(runs)) or runs[j][0].identity is None:
+                continue
+            theirs = self._run_estimates(runs[j])
+            if not theirs or abs(mine - median(theirs)) > self.cfg.offset_tolerance:
+                continue
+            if (len(runs[j]), extents[j]) > (len(runs[i]), extents[i]):
+                return "collide"
+        return None
+
+    def _alternation_zones(
+        self, runs: list[list[Evidence]], starts: list[float], ends: list[float]
+    ) -> list[tuple[int, int, object]]:
+        """`(lo, hi, winner)` for every span where two identities take turns.
+
+        This is the spec's own unimplemented rule ("A, then B, then A again
+        ... likely a transition zone"), read off the folded runs. A **return**
+        is one identity's consecutive pair of runs separated by an excursion no
+        longer than `stride` -- the span the coverage guarantee says cannot
+        hide a track, so an identity that comes back that fast was never really
+        interrupted. One return is A-B-A, the shape the sequential path smoothed
+        and `singleton_confidence_keep` still owns; a **zone** needs two
+        *overlapping* returns of different identities, which is A-B-A-B: both
+        sides come back, and that mutual contradiction is the evidence.
+
+        A `None` run clears every open return: an unidentified stretch between
+        two sightings of one track is a dropout, not an alternation.
+
+        Deterministic and total by construction -- returns are collected in run
+        order, merged into components by index overlap, and the winner is the
+        maximum of `(probes, extent, -first run)`, which no two identities can
+        tie on. `segments()` is a pure fold and resume is replay, so anything
+        order-dependent here would break `test_replay_equality`.
+        """
+        returns: list[tuple[int, int, object]] = []
+        last: dict[object, int] = {}
+        for i, run in enumerate(runs):
+            ident = run[0].identity
+            if ident is None:
+                last.clear()
+                continue
+            prev = last.get(ident)
+            if prev is not None and i - prev >= 2 and starts[i] - ends[prev] <= self.cfg.stride:
+                returns.append((prev, i, ident))
+            last[ident] = i
+
+        comps: list[list] = []
+        for lo, hi, ident in returns:
+            if comps and lo <= comps[-1][1]:
+                comps[-1][1] = max(comps[-1][1], hi)
+                comps[-1][2].append(ident)
+            else:
+                comps.append([lo, hi, [ident]])
+
+        zones = []
+        for lo, hi, idents in comps:
+            if len(idents) < 2 or len(set(idents)) < 2:
+                continue
+            tally: dict[object, tuple[int, float, int]] = {}
+            for k in range(lo, hi + 1):
+                ident = runs[k][0].identity
+                if ident is None:
+                    continue
+                probes, extent, first = tally.get(ident, (0, 0.0, k))
+                tally[ident] = (probes + len(runs[k]), extent + ends[k] - starts[k], first)
+            winner = max(tally, key=lambda k: (tally[k][0], tally[k][1], -tally[k][2]))
+            zones.append((lo, hi, winner))
+        return zones
+
+    def _collapsed(
+        self,
+        runs: list[list[Evidence]],
+        starts: list[float],
+        ends: list[float],
+        measured: list[bool],
+    ) -> dict[int, dict]:
+        """Run index -> audit event, for each run the evidence contradicts.
+
+        Three gates, and every one of them earns its place against a measured
+        counterexample:
+
+        - **pinned and measured.** Both neighbours identified (a `None` is the
+          absence of an answer, not a competing claim -- this is what spares
+          the real set's "Our Voyage" and "Deomid", each 12.7s beside an
+          unidentified stretch), and both bounding boundaries pinned at least
+          as tightly as a probe can pin one. The extent has to be a
+          *measurement* before it can contradict anything; a run whose flank is
+          still open may genuinely span it, which is the same reason the
+          singleton rule refuses to drop one. The tolerance is
+          `min(target, fingerprint_segment / 2)` rather than the target alone,
+          so raising `--precision` -- a knob for spending fewer probes --
+          cannot silently buy more deletions.
+        - **too small to be a track.** Under `phantom_min` outright, or under
+          `stride` inside an alternation zone: two identities taking turns is
+          the licence to distrust a longer run than the bare floor allows.
+        - **convicted by its own offsets** (`_misattributed`). Without this the
+          rule is a track-length guillotine; with it, the real phantoms are
+          convicted and a genuine short track is not. Measured: on the real
+          317-probe file it convicts exactly the three phantoms and nothing
+          else; against the oracle it acquits 40 of 40 runs in a rewind (the DJ
+          pulls a record back, producing a genuine A-B-A-B), where the geometry
+          alone would have deleted a real 162s record.
+
+        The zone's own best-supported identity is never collapsed, whatever its
+        extent -- on the real file the correct track, Sookie, clears
+        `phantom_min` by only 2.8s, which is less than the engine's own p90
+        boundary error, so the winner needs protecting by name rather than by
+        arithmetic.
+        """
+        cfg = self.cfg
+        extents = [e - s for s, e in zip(starts, ends)]
+        winner_at: dict[int, object] = {}
+        span_at: dict[int, tuple[int, int]] = {}
+        for lo, hi, winner in self._alternation_zones(runs, starts, ends):
+            for k in range(lo, hi + 1):
+                winner_at[k] = winner
+                span_at[k] = (lo, hi)
+
+        out: dict[int, dict] = {}
+        for i, run in enumerate(runs):
+            ident = run[0].identity
+            if ident is None or not (0 < i < len(runs) - 1):
+                continue
+            if runs[i - 1][0].identity is None or runs[i + 1][0].identity is None:
+                continue
+            if not (measured[i - 1] and measured[i]):
+                continue
+            if ident == winner_at.get(i):
+                continue
+            if i in winner_at and extents[i] < cfg.stride:
+                kind = "thrash"
+            elif extents[i] < cfg.phantom_min:
+                kind = "sliver"
+            else:
+                continue
+            reason = self._misattributed(runs, extents, i)
+            if reason is None:
+                continue
+            meta = self._cluster_meta.get(ident) or {}
+            event = {
+                "type": "contradiction_collapsed",
+                "kind": kind,
+                "reason": reason,
+                "artist": meta.get("artist"),
+                "title": meta.get("title"),
+                "start": round(starts[i], 1),
+                "extent": round(extents[i], 1),
+            }
+            if i in winner_at:
+                wmeta = self._cluster_meta.get(winner_at[i]) or {}
+                event["winner_artist"] = wmeta.get("artist")
+                event["winner_title"] = wmeta.get("title")
+                event["zone"] = [round(starts[span_at[i][0]], 1), round(ends[span_at[i][1]], 1)]
+            out[i] = event
+        return out
+
     # ---- finalization ----------------------------------------------------
     def _runs(self) -> list[list[Evidence]]:
         runs: list[list[Evidence]] = []
@@ -557,20 +774,29 @@ class BoundaryEngine:
         if not runs:
             return ([Segment(0.0, None, "coarse")] if self.duration > 0 else [], [])
 
-        # Boundary between run i and i+1, with its confidence.
+        # Boundary between run i and i+1, with its confidence. `measured` is a
+        # stricter, precision-independent read of the same question -- see
+        # `_collapsed`, which may only act on a boundary a probe could actually
+        # have pinned.
         bounds: list[tuple[float, str]] = []
+        measured: list[bool] = []
         for a, b in zip(runs, runs[1:]):
             left, right = a[-1], b[0]
             p_start = self._resolved_by_prediction(left, right)
+            gap = right.mid - left.mid
             if p_start is not None:
                 bounds.append((p_start, "resolved"))
             else:
-                gap = right.mid - left.mid
                 conf = "resolved" if gap <= self._target(left, right) else "coarse"
                 bounds.append(((left.mid + right.mid) / 2.0, conf))
+            measured.append(
+                p_start is not None
+                or gap <= min(self._target(left, right), cfg.fingerprint_segment / 2.0)
+            )
 
         starts = [0.0] + [b for b, _ in bounds]
         ends = [b for b, _ in bounds] + [self.duration]
+        collapsed = self._collapsed(runs, starts, ends, measured)
 
         # Phantom filtering. Confidence read from the run's own probe, not its
         # cluster -- same reasoning as _smooth_sequence's gate (#7).
@@ -579,16 +805,36 @@ class BoundaryEngine:
         for i, run in enumerate(runs):
             ident = run[0].identity
             span = ends[i] - starts[i]
-            if ident is None and span < cfg.phantom_min:
-                drops.append(
-                    {
-                        "type": "phantom_dropped",
-                        "kind": "gap",
-                        "start": round(starts[i], 1),
-                        "extent": round(span, 1),
-                    }
-                )
+            if i in collapsed:
+                drops.append(collapsed[i])
                 continue
+            if ident is None:
+                # A gap between two runs of ONE identity is a dropout inside
+                # that track, not a boundary onto silence -- the shape
+                # `identify._smooth_sequence` absorbed unconditionally. It is
+                # judged at `precision_none` because that is where `_target`
+                # stops refining a None-adjacent interval: below it, a dropout
+                # that retired in (phantom_min, precision_none] could never be
+                # narrowed by any later probe, and the real set reported one
+                # track as three rows around a permanent 22.5s hole.
+                # `_needs_coverage` still splits everything wider than the
+                # stride, so nothing >= 2 minutes can hide in the wider floor.
+                inside_one_track = (
+                    0 < i < len(runs) - 1
+                    and runs[i - 1][0].identity is not None
+                    and runs[i - 1][0].identity == runs[i + 1][0].identity
+                )
+                floor = cfg.precision_none if inside_one_track else cfg.phantom_min
+                if span < floor:
+                    drops.append(
+                        {
+                            "type": "phantom_dropped",
+                            "kind": "dropout" if inside_one_track else "gap",
+                            "start": round(starts[i], 1),
+                            "extent": round(span, 1),
+                        }
+                    )
+                    continue
             if ident is not None and len(run) == 1 and span < cfg.phantom_min:
                 conf = (run[0].probe.result or {}).get("confidence") or 0
                 if conf < cfg.singleton_confidence_keep:
