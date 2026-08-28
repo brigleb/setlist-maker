@@ -39,6 +39,37 @@ CLI application with the following modules:
 - **Thin layer:** Owns argparse setup and the `cmd_identify` / `cmd_chapters` handlers,
   delegating real work to the modules below.
 
+### `setlist_maker/help_format.py` - Colorized `--help`
+
+- **ColorHelpParser:** an `ArgumentParser` whose `print_help()` paints argparse's *rendered*
+  output rather than re-authoring the help in markup. The top-level epilog is the manual —
+  workflow, commands, every flag, examples — and duplicating it in markup would mean
+  maintaining it twice, so this stays a post-pass and the epilog keeps sourcing every default
+  from its canonical constant. Overriding `print_help` catches both routes into it (the
+  no-argument branch in `main()` and argparse's own `-h` action), and children built by
+  `add_subparsers()` are `type(self)`, so `identify -h` / `chapters -h` inherit it with no
+  wiring — which is why the constructor signature must stay untouched.
+- **colorize_help():** pure `str -> rich.Text`, so the rules unit-test by reading spans back
+  off the result with no console, no pty and no `isatty`, exactly as `progress.render_panel()`
+  does. Styling is **purely additive** — strip the escapes and the characters are argparse's,
+  byte for byte — which is what a test asserts, because a regex that ate a flag off the screen
+  would be a silently worse help page.
+- Each rule is anchored on something argparse's formatter guarantees, never on prose: headings
+  are short punctuation-free lines at the left margin, metavars are uppercase tokens
+  *immediately following a flag* (a bare-uppercase rule paints "DJ", "MP3" and "JSON" out of
+  the description), and the flag rule's `(?<![\w-])` lookbehind is what keeps `0-1`,
+  `single-sample` and the `A B A -> A` arrow from turning green. Subcommand names are
+  highlighted only at a listing row's start or straight after the program name — every other
+  `identify` in the epilog is prose. Command names come from the live `add_subparsers()`
+  `choices` dict, so a new subcommand needs no list updated here.
+- Palette is `progress.py`'s (`green` accent, `grey62` muted, bold structure) so the help
+  screen and the run panel read as one program.
+- Whether to colorize is left to rich's `Console`, not a hand-rolled `isatty()` check, which
+  is what gets `NO_COLOR`, `TERM=dumb` and redirection handled the same way as everywhere else
+  rich is used. `soft_wrap=True` is load-bearing: the epilog's columns are hand-aligned past
+  rich's 80-column non-tty default, and without it a piped `--help` would be re-wrapped into
+  something different from what argparse wrote.
+
 ### `setlist_maker/audio.py` - Audio discovery, loading, slicing
 - **get_audio_file():** Validates a single path is an existing, supported audio file
 - **load_audio() / slice_audio():** Uses `pydub` to load and slice into 30-second chunks
