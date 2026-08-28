@@ -59,6 +59,7 @@ from setlist_maker.editor import (
     parse_markdown_tracklist,
     run_editor,
 )
+from setlist_maker.help_format import ColorHelpParser
 from setlist_maker.identify import (
     ARTIST_SIMILARITY_THRESHOLD,
     DEFAULT_DELAY_SECONDS,
@@ -487,7 +488,7 @@ def main():
     d_artist = ARTIST_SIMILARITY_THRESHOLD
     d_single = SINGLETON_CONFIDENCE_KEEP
 
-    parser = argparse.ArgumentParser(
+    parser = ColorHelpParser(
         prog="setlist-maker",
         description="Generate tracklists from DJ sets or long audio recordings using Shazam.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
