@@ -124,3 +124,46 @@ def test_gap_heavy_set_converges_with_unidentified_segments():
     segs, _ = engine.segments()
     assert any(s.info is None for s in segs)
     assert n < 200
+
+
+def test_misidentified_phantoms_collapse_without_taking_a_real_track():
+    """MEASUREMENT GATE for `_collapsed`. The plain oracle can only ever name a
+    track that IS in the excerpt, so every gate above is green on contradiction
+    collapse *vacuously*; `misid_rate` supplies the one failure it cannot -- a
+    record answering over the audio it samples, which is what produced both real
+    phantoms (spec Errata, contradiction collapse). The rule may erase impostors;
+    it may not erase a real track to do it.
+
+    "Real tracks found" is deliberately measured from the *probe results*, not
+    from the oracle: at a 12% contamination rate a track thin enough to get one
+    probe sometimes has that one probe stolen, and the fold cannot report what
+    it was never told. Counting those as erasures would make the gate fail for
+    the contaminant's doing rather than the rule's -- measured, that is exactly
+    the two losses this fixture produces at 14 tracks over 12 seeds.
+    """
+    erased = phantoms_left = phantoms_seen = 0
+    for seed in range(12):
+        oracle = _random_set(seed=700 + seed, duration=7200.0, n_tracks=14)
+        oracle.edge_blur = True
+        oracle.misid_rate = 0.12
+        engine = BoundaryEngine(oracle.duration)
+        run_engine(engine, oracle)
+        segs, _ = engine.segments()
+        titles = {s.info["title"] for s in segs if s.info}
+        named = {p.result["title"] for p in engine.probes if p.result}
+        real = {tr.title for tr in oracle.tracks}
+        erased += len((real & named) - titles)
+        phantoms_seen += len(named - real)
+        phantoms_left += len((named - real) & titles)
+    assert phantoms_seen > 0, "fixture produced no misidentifications to collapse"
+    assert erased == 0, f"{erased} real tracks the probes found were erased by the collapse"
+    # Measured 43 of 89. The survivors are not failures: this contaminant fires
+    # independently per probe, so most impostors land alone in the middle of a
+    # long track, where the flanks stay coarse and the A-B-A shape belongs to
+    # `singleton_confidence_keep` by design. A real sampling confusion is
+    # localised to a transition instead, which is why the committed fixtures --
+    # not this gate -- are what pin efficacy. This one exists to keep the rule
+    # from becoming inert, and to fail loudly if it starts eating real tracks.
+    assert phantoms_left <= 0.7 * phantoms_seen, (
+        f"{phantoms_left} of {phantoms_seen} misidentifications survived the collapse"
+    )

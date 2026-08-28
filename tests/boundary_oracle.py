@@ -52,11 +52,37 @@ class SyntheticSet:
     offset_jitter: float = 0.0  # +- uniform noise on offsets, seconds
     offset_dropout: float = 0.0  # probability a result carries no offsets
     edge_blur: bool = True  # windows straddling a boundary pick a side by share
+    # Probability a probe names a track that is NOT playing. Models the one
+    # failure the rest of this oracle cannot: Shazam matching audio to a record
+    # that *samples* it -- Us3 answering over Grant Green, "Hypnotize" over
+    # "Rise" (see the spec's contradiction-collapse Errata). Without it the
+    # oracle only ever names a track actually present in the excerpt, so every
+    # property gate is green on `_collapsed` vacuously. The impostor is stable
+    # per track (a record has one sampler, not a new one each probe) and its
+    # offset describes the REAL track's position, because that is the audio
+    # being fingerprinted -- which is exactly what makes the two implied starts
+    # collide, and what the veto reads.
+    misid_rate: float = 0.0
     rng: random.Random = field(init=False)
+    _impostors: list = field(init=False, default_factory=list)
 
     def __post_init__(self):
         self.rng = random.Random(self.seed)
         self.tracks = sorted(self.tracks, key=lambda tr: tr.start)
+
+    def _impostor(self, track: SyntheticTrack) -> SyntheticTrack:
+        """This track's stable stand-in: one record has one sampler, not a new
+        one per probe. Built on first use because `misid_rate`, like the other
+        imperfection knobs, is set on an already-constructed oracle."""
+        if not self._impostors:
+            assert 2 * len(self.tracks) <= len(_NAMES), (
+                "misid_rate needs a second distinct name per track; see synthetic_identity()"
+            )
+            self._impostors = [
+                SyntheticTrack(*synthetic_identity(len(self.tracks) + i), tr.start, tr.cut_in)
+                for i, tr in enumerate(self.tracks)
+            ]
+        return self._impostors[self.tracks.index(track)]
 
     def boundaries(self) -> list[float]:
         return [tr.start for tr in self.tracks[1:]]
@@ -118,10 +144,14 @@ class SyntheticSet:
         if track is None:
             return None, None
 
+        named = track
+        if self.misid_rate and self.rng.random() < self.misid_rate:
+            named = self._impostor(track)
+
         result = {
-            "artist": track.artist,
-            "title": track.title,
-            "confidence": track.confidence,
+            "artist": named.artist,
+            "title": named.title,
+            "confidence": named.confidence,
             "coverart_url": None,
             "shazam_url": None,
             "album": None,

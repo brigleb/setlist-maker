@@ -227,6 +227,18 @@ CLI application with the following modules:
   in track *presence*: it is refinement that licenses it, so a phantom can appear at one prefix
   and be collapsed at a later one. Measured across all 317 real prefixes, exactly two titles do
   that and both are the phantoms; nothing flickers.
+- **The oracle grew a `misid_rate` for this.** Every answer `tests/boundary_oracle.py` gave
+  named a track actually present in the excerpt, so no seed could produce a misidentification
+  and the property gates were green on `_collapsed` vacuously (measured: 80 extra seeds fire
+  zero collapses). `misid_rate` gives each track a stable impostor whose offset describes the
+  **real** track's position — that being the audio actually fingerprinted — which is what makes
+  the two implied starts collide and so what the veto reads.
+  `test_misidentified_phantoms_collapse_without_taking_a_real_track` counts "real tracks found"
+  from the *probe results*, not from the oracle: at a 12% rate a track thin enough to get one
+  probe sometimes has that one probe stolen, and the fold cannot report what it was never told.
+  Its efficacy bound is deliberately loose (43 of 89 impostors survive, correctly — a
+  per-probe contaminant mostly lands alone inside a long track, where the flanks stay coarse and
+  A-B-A belongs to `singleton_confidence_keep`); efficacy is pinned by `tests/fixtures/*.json`.
 - Identity clustering is `identify.py`'s `_assign_cluster` / `_normalized_key` reused as-is, so
   the same track under two labels never manufactures a boundary. Note the corollary for
   fixtures: names like `Artist 1` / `Artist 11` score 0.94 and legitimately merge — see

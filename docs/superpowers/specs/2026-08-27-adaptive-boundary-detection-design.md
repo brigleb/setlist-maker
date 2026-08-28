@@ -552,9 +552,20 @@ all 317 prefixes exactly two titles appear and later vanish — both phantoms �
 flickers: the collapse is not monotone in track presence, because refinement is what licenses
 it, but it is stable.
 
-**Coverage note:** `tests/boundary_oracle.py` cannot generate this failure mode — its answers
-always name a track actually present in the excerpt, so no oracle seed produces a
-misidentification, and the property suite in `test_boundary_properties.py` is green on this
-feature *vacuously*. The regression net is `tests/fixtures/*.json`, two verbatim slices of the
-real run. Extending the oracle with a `misid_rate` that answers with a track absent from the
-excerpt is the missing capability.
+**M. The oracle could not generate this failure mode, so it grew one.** Every answer
+`tests/boundary_oracle.py` gave named a track actually present in the excerpt, so no seed
+produced a misidentification and every property gate was green on `_collapsed` *vacuously* —
+measured: 80 extra seeds at 4-hour and 2-hour scale fire zero collapses. `misid_rate` now gives
+each track a stable impostor (one record has one sampler) whose offset describes the **real**
+track's position, because that is the audio being fingerprinted — which is what makes the two
+implied starts collide, and so what the veto reads.
+`test_misidentified_phantoms_collapse_without_taking_a_real_track` is the gate. Two details are
+load-bearing: "real tracks found" is counted from the *probe results*, not the oracle, because
+at a 12% rate a track thin enough to get one probe sometimes has that one probe stolen and the
+fold cannot report what it was never told (measured: exactly the two apparent losses this
+fixture produces, both the set's first track, both with zero probes naming them); and the
+efficacy bound is loose because this contaminant fires independently per probe, so most
+impostors land alone inside a long track where the flanks stay coarse and the A-B-A shape
+belongs to `singleton_confidence_keep` by design. 43 of 89 survive, correctly. Efficacy is
+pinned by `tests/fixtures/*.json` — two verbatim slices of the real run — not by this gate,
+which exists to stop the rule going inert or turning on real tracks.
