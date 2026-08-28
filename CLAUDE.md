@@ -369,6 +369,40 @@ CLI application with the following modules:
   input/textarea — except `#seek`, a range input that's deliberately exempted
   so the arrows still seek when the scrubber has focus.
 
+### `setlist_maker/progress.py` - Live progress panel for the identify run
+
+- **render_panel():** The dashboard pinned under the scrolling per-sample log — a boxed
+  four-line readout whose **title and border colour *are* the phase**, so the state
+  registers before a word is read. A fixed right-hand rail carries position, confidence,
+  elapsed and ETA in the same cells every frame. Pure function of `RunState` plus a clock,
+  so it unit-tests at a fixed width with no `Live`, no pty and no timing — exactly as
+  `identify.format_progress_line()` does, and for the same reason.
+- **Everything that moves is derived from the clock, not a counter the pipeline ticks.**
+  `Live` re-renders on its own thread, so a renderable recomputing from `time.monotonic()`
+  animates the cooldown countdown *during* `await asyncio.sleep(delay_seconds)` — which is
+  why that sleep in `process_single_file` needed no restructuring (measured: 11 renders in
+  an untouched 1.0s sleep). `RunState.started_at` therefore reads from the **injected**
+  `clock`, not from `time.monotonic` directly, or a fake clock mixes with a real start.
+- **The panel's height must never change.** `Live` erases a fixed number of lines, so a
+  seventh row corrupts the redraw. Two things defend that: `_one_line()` collapses
+  whitespace in every user-supplied field (one newline in a Shazam title is enough), and
+  every glyph is deliberately one cell wide — no ⏳/⌛, since a glyph rich measures as 2 and
+  the terminal draws as 1 bends the right border on every redraw.
+- **live_display():** Wraps both paths — panel, or plain stdout — behind one object, which
+  is what lets the identify loop stay a single code path with no `if live:` inside it.
+  `redirect_stdout` stays on (it is what puts `shazam_client`'s surviving `print()`s
+  *above* the panel); `redirect_stderr` is explicitly **off**, because rich redirects
+  stderr whenever *stdout* is a terminal and `identify set.mp3 2> errors.log` would
+  otherwise capture nothing and dump every warning onto the terminal.
+- The rail widens past `RAIL` when the recording needs it (a 10-hour file wants
+  `5:00:00 / 10:00:00`): the rail exists to hold the position steady, so widen rather than
+  ellipsize the one number it is there to show.
+- Gated by `identify --no-panel`, and skipped automatically when stdout is not a terminal.
+  Note the two questions are **separate**: a terminal gets the colorized log either way, so
+  `--no-panel` drops only the dashboard, never the log's own rendering.
+- Known gap: `Live` restores the cursor on normal exit and on **Ctrl-C** (verified), but a
+  SIGTERM/SIGHUP kill unwinds nothing and leaves the cursor hidden until `reset`.
+
 ### `setlist_maker/playback.py` - Editor audio preview
 - **PlaybackController:** Drives a non-blocking `ffplay` subprocess (`play()` / `stop()` /
   `is_playing()` / `elapsed()`), reaping the child on stop. Deliberately out-of-process: an

@@ -2,6 +2,7 @@
 
 import asyncio
 import random
+from collections.abc import Callable
 from pathlib import Path
 
 from pydub import AudioSegment
@@ -36,11 +37,20 @@ def estimate_confidence(result: dict) -> float:
 
 
 async def identify_sample_with_retry(
-    shazam: Shazam, segment: AudioSegment, temp_dir: str, max_retries: int = MAX_RETRIES
+    shazam: Shazam,
+    segment: AudioSegment,
+    temp_dir: str,
+    max_retries: int = MAX_RETRIES,
+    on_backoff: Callable[[float, int], None] | None = None,
 ) -> dict | None:
     """
     Identify a single audio segment using Shazam with exponential backoff retry.
     Returns track info dict or None if not identified.
+
+    `on_backoff(wait_seconds, attempt)` is called just before each rate-limit
+    sleep. It exists so the live progress panel can count the backoff down
+    rather than leaving 30 seconds of silence; when it is given, the caller owns
+    announcing the wait and the warning is not printed here as well.
     """
     temp_path = str(Path(temp_dir) / "temp_sample.mp3")
     segment.export(temp_path, format="mp3")
@@ -72,10 +82,13 @@ async def identify_sample_with_retry(
                     # Add jitter to avoid thundering herd
                     jitter = random.uniform(0, backoff * 0.1)
                     wait_time = backoff + jitter
-                    print(
-                        f"\n  Warning: Rate limited. Backing off for {wait_time:.0f} seconds "
-                        f"(attempt {attempt + 1}/{max_retries})..."
-                    )
+                    if on_backoff is not None:
+                        on_backoff(wait_time, attempt + 1)
+                    else:
+                        print(
+                            f"\n  Warning: Rate limited. Backing off for {wait_time:.0f} seconds "
+                            f"(attempt {attempt + 1}/{max_retries})..."
+                        )
                     await asyncio.sleep(wait_time)
                     backoff *= 2  # Exponential backoff
                 else:

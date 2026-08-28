@@ -33,6 +33,7 @@ def _identify_args(**overrides):
         allow_partial=False,
         no_learn=True,  # disabled so these unit tests never touch the real corrections DB
         no_summary=False,
+        no_panel=False,
         reidentify=False,
         title_threshold=SIMILARITY_THRESHOLD,
         artist_threshold=ARTIST_SIMILARITY_THRESHOLD,
