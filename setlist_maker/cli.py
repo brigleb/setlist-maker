@@ -47,11 +47,11 @@ import sys
 from pathlib import Path
 
 from setlist_maker import __version__
-from setlist_maker.adaptive import process_single_file_adaptive
+from setlist_maker.adaptive import load_probes, process_single_file_adaptive
 from setlist_maker.artwork import CoverImageError, create_chapter_image, load_cover_image
 from setlist_maker.artwork_cache import chapter_image, source_artwork
 from setlist_maker.audio import get_audio_file
-from setlist_maker.boundary import EngineConfig
+from setlist_maker.boundary import BoundaryEngine, EngineConfig
 from setlist_maker.call_log import LOG_FILENAME, call_log_path
 from setlist_maker.chapters import embed_chapters
 from setlist_maker.editor import (
@@ -170,6 +170,65 @@ def _resolve_call_log(
     return call_log_path(audio_path, output_dir)
 
 
+def _resume_hint(audio_path: Path, output_dir: Path | None, args: argparse.Namespace) -> str | None:
+    """Describe unfinished adaptive work saved beside a reusable tracklist.
+
+    A stopped adaptive run *always* leaves a tracklist behind -- that is the
+    anytime property working as designed -- so the reuse short-circuit fires on
+    the normal way of continuing one, and the flag that continues it is called
+    `--reidentify`. Read cold, that name says the opposite of what it does
+    here: it bypasses the *tracklist* reuse while still resuming from the saved
+    probes (`--no-resume` is what discards them). Saying so is the difference
+    between a 13-minute continuation and an hour of re-scanning nobody asked
+    for.
+
+    Best-effort in the spirit of `summary.py`: any unreadable or unexpected
+    progress file yields no hint rather than derailing a path whose whole job
+    is to hand back an existing tracklist.
+    """
+    if getattr(args, "no_resume", False) or getattr(args, "sequential", False):
+        return None
+    output_path = tracklist_output_path(audio_path, output_dir)
+    progress_path = output_path.with_name(f"{audio_path.stem}_progress.json")
+    if not progress_path.exists():
+        return None
+    try:
+        probes, duration = load_probes(progress_path)
+        if not probes:
+            return None
+        if duration is None:
+            # A legacy sequential file. It converts and resumes, but carries no
+            # duration, so there is nothing to size the remaining work against.
+            return (
+                f"  {len(probes)} saved sample(s) from an earlier run would be reused.\n"
+                f"  --reidentify continues from them (--no-resume starts over)."
+            )
+        engine = BoundaryEngine(
+            duration,
+            EngineConfig(
+                stride=args.stride,
+                precision=args.precision,
+                refine_window=args.refine_window,
+                singleton_confidence_keep=args.singleton_confidence,
+                title_threshold=args.title_threshold,
+                artist_threshold=args.artist_threshold,
+            ),
+        )
+        for probe in probes:
+            engine.add_probe(probe)
+        remaining = engine.estimated_probes_remaining()
+    except Exception:
+        return None
+    if not remaining:
+        return None  # converged: the tracklist beside it is the finished answer
+    plural = "" if len(probes) == 1 else "s"
+    return (
+        f"  An unfinished adaptive run is also saved: {len(probes)} probe{plural}, "
+        f"~{remaining} remaining.\n"
+        f"  --reidentify continues it (--no-resume discards it and starts over)."
+    )
+
+
 def cmd_identify(args: argparse.Namespace) -> None:
     """Handle the 'identify' subcommand (default behavior)."""
     input_path = Path(args.path)
@@ -260,6 +319,9 @@ def cmd_identify(args: argparse.Namespace) -> None:
                 f"Found existing tracklist: {output_path.name} "
                 f"(use --reidentify to regenerate from audio)"
             )
+            hint = _resume_hint(audio_path, output_dir, args)
+            if hint:
+                print(hint)
             tracklist = existing
 
     if tracklist is None:
