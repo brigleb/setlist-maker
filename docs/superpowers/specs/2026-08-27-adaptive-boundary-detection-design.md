@@ -350,9 +350,21 @@ consequently generous rather than tight, which is the right side to err on.
 **4. 12s refine windows are supported.** Every position that matched at 30s also matched at
 12s (8/8). The one failure — 8:20, just past a hard cut — failed at *both* window sizes, so
 there is no evidence the shorter window identifies worse. `refine_window = 12` ships as
-specced. (That probe raised `IndexError("list index out of range")` out of shazamio rather
-than returning no match: another shape a non-match takes, and one more reason `call_log.py`
-classifies by exception type rather than message.)
+specced.
+
+**Correction (2026-08-28):** that 8:20 failure was *not* a non-match, and not shazamio's. It
+was `shazam_client.py`'s own album lookup: `track.get("metadata", [{}])[0]` takes the key's
+own value whenever the key exists, so Shazam's routine `"metadata": []` indexes an empty list
+and raises `IndexError`. That escaped into `identify_sample_with_retry`'s blanket
+`except Exception`, which **discards a successful identification** and reports the sample as
+unidentified. Measured on the first real adaptive run: 10 of 273 calls, nine of them
+consecutive across 7:46-11:00, which erased *The Brains - Money Changes Everything* from the
+set entirely **and** made the engine spend those nine probes bisecting a region it had been
+told was unidentifiable. A tenth erased *Wings - Love Is Strange*. Both identify correctly
+once the lookup indexes defensively (`_album_name`), both reporting `album=None` -- which
+confirms the empty-metadata shape as the trigger. The bug predates adaptive sampling and
+affected `--sequential` identically. It is also the sharpest argument for `call_log.py`
+recording exception *type*: the log is what made a silent 3.7% loss visible at all.
 
 **5. Consequence the spec got wrong: a 30s coverage window buys no extra reliability.**
 Because only a centered 10s excerpt is ever fingerprinted, Shazam sees exactly 10 seconds

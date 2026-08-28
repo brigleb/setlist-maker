@@ -36,6 +36,26 @@ def estimate_confidence(result: dict) -> float:
     return round(0.5 * alignment + 0.5 * corroboration, 3)
 
 
+def _album_name(track: dict) -> str | None:
+    """The matched track's album, if Shazam supplied one.
+
+    Every level of this path is optional *and* turns up present-but-empty in
+    the wild, which `dict.get(key, default)` does not defend against: a
+    `"metadata": []` takes the key's own empty list, not the default, and
+    `[][0]` raises. That mattered far out of proportion to the field --
+    the IndexError escaped into the caller's blanket `except Exception`,
+    which discards a *successful* identification and reports the sample as
+    unidentified. Observed live on a real set.
+    """
+    sections = track.get("sections") or []
+    if not sections:
+        return None
+    metadata = (sections[0] or {}).get("metadata") or []
+    if not metadata:
+        return None
+    return (metadata[0] or {}).get("text")
+
+
 async def identify_sample_with_retry(
     shazam: Shazam,
     segment: AudioSegment,
@@ -75,9 +95,7 @@ async def identify_sample_with_retry(
                     "title": track.get("title", "Unknown Title"),
                     "artist": track.get("subtitle", "Unknown Artist"),
                     "shazam_url": track.get("url"),
-                    "album": track.get("sections", [{}])[0].get("metadata", [{}])[0].get("text")
-                    if track.get("sections")
-                    else None,
+                    "album": _album_name(track),
                     "coverart_url": images.get("coverarthq") or images.get("coverart"),
                     "confidence": estimate_confidence(result),
                 }

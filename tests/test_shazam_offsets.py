@@ -45,3 +45,37 @@ def test_matches_without_offset_are_skipped(tmp_path):
         )
     )
     assert info["offsets"] == []
+
+
+def _track(**over):
+    t = {"title": "One More Time", "subtitle": "Daft Punk", "url": "u", "images": {}}
+    t.update(over)
+    return t
+
+
+def test_empty_album_metadata_does_not_discard_the_match(tmp_path):
+    """Shazam returns `metadata: []` in the wild. `.get(key, default)` takes the
+    key's own empty list, not the default, so indexing it raised IndexError --
+    which the blanket handler turned into "not identified", throwing away a
+    track Shazam had actually named."""
+    raw = {"matches": RAW["matches"], "track": _track(sections=[{"metadata": []}])}
+    info = asyncio.run(identify_sample_with_retry(_fake_shazam(raw), _segment(), str(tmp_path)))
+    assert info is not None, "a successful match must survive an empty album section"
+    assert info["title"] == "One More Time"
+    assert info["album"] is None
+
+
+def test_album_is_read_when_present(tmp_path):
+    raw = {
+        "matches": RAW["matches"],
+        "track": _track(sections=[{"metadata": [{"text": "Discovery"}]}]),
+    }
+    info = asyncio.run(identify_sample_with_retry(_fake_shazam(raw), _segment(), str(tmp_path)))
+    assert info["album"] == "Discovery"
+
+
+def test_missing_or_empty_sections_are_tolerated(tmp_path):
+    for sections in ([], [{}], [None], None):
+        raw = {"matches": RAW["matches"], "track": _track(sections=sections)}
+        info = asyncio.run(identify_sample_with_retry(_fake_shazam(raw), _segment(), str(tmp_path)))
+        assert info is not None and info["album"] is None
