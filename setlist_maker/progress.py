@@ -412,11 +412,12 @@ class ProgressPanel:
     clock), the countdown animates during an untouched `await asyncio.sleep()`.
     """
 
-    def __init__(self, state: RunState):
+    def __init__(self, state, render=render_panel):
         self.state = state
+        self._render = render
 
     def __rich_console__(self, console, options):
-        yield render_panel(self.state, console.width)
+        yield self._render(self.state, console.width)
 
 
 REFRESH_PER_SECOND = 8
@@ -445,7 +446,7 @@ class _LiveDisplay:
 
 
 @contextmanager
-def live_display(state: RunState, enabled: bool):
+def live_display(state, enabled: bool, render=render_panel):
     """Yield a display that logs above a pinned panel, or plain stdout if disabled.
 
     Keeping both paths behind one object is what lets the identify loop stay a
@@ -457,7 +458,7 @@ def live_display(state: RunState, enabled: bool):
 
     console = Console()
     with Live(
-        ProgressPanel(state),
+        ProgressPanel(state, render),
         console=console,
         refresh_per_second=REFRESH_PER_SECOND,
         transient=False,
@@ -469,3 +470,258 @@ def live_display(state: RunState, enabled: bool):
         redirect_stderr=False,
     ) as live:
         yield _LiveDisplay(live)
+
+
+# --------------------------------------------------------------------------
+# The adaptive run's panel. `AdaptiveRunState` is a deliberate small twin of
+# `RunState` rather than a shared base: `RunState` has non-default fields, so a
+# default-bearing mixin cannot slot under it without making the whole
+# sequential path keyword-only. The clock discipline is identical -- `clock` is
+# injected and `started_at` reads from it -- and so is the fixed-height rule.
+# --------------------------------------------------------------------------
+@dataclass
+class AdaptiveRunState:
+    """Everything the adaptive panel draws.
+
+    The counters the sequential panel derives from a fixed sample list are
+    replaced by ones the engine reports (`update_from_engine`): there is no
+    total to count towards, only remaining uncertainty to shrink.
+    """
+
+    source_name: str
+    audio_seconds: int
+    delay_seconds: int
+    resumed_from: int = 0
+    probes_done: int = 0
+    hits: int = 0
+    tracks_found: int = 0
+    boundaries_found: int = 0
+    boundaries_at_target: int = 0
+    widest_gap: float = 0.0  # widest active boundary interval, seconds
+    est_probes_remaining: int = 0
+    current_t: float = 0.0  # position of the probe in flight
+    current_purpose: str = "coverage"
+    current_result: dict | None = None
+    phase: str = "identifying"  # identifying | cooldown | backoff | done
+    phase_deadline: float | None = None
+    retry: int = 0
+    max_retries: int = MAX_RETRIES
+    clock: Callable[[], float] = time.monotonic
+    started_at: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.started_at is None:
+            self.started_at = self.clock()
+
+    # ---- transitions, called from the driver -----------------------------
+    def begin_probe(self, plan) -> None:
+        self.current_t = plan.t
+        self.current_purpose = plan.purpose
+        self.phase = "identifying"
+        self.phase_deadline = None
+        self.retry = 0
+
+    def record(self, track_info: dict | None) -> None:
+        self.probes_done += 1
+        if track_info:
+            self.hits += 1
+            self.current_result = track_info
+
+    def update_from_engine(self, engine) -> None:
+        segments, _drops = engine.segments()
+        self.tracks_found = sum(1 for s in segments if s.info)
+        self.boundaries_found, self.boundaries_at_target = engine.boundary_stats()
+        self.widest_gap = engine.max_boundary_width
+        self.est_probes_remaining = engine.estimated_probes_remaining()
+
+    def begin_cooldown(self, seconds: float) -> None:
+        self.phase = "cooldown"
+        self.phase_deadline = self.clock() + seconds
+
+    def begin_backoff(self, seconds: float, attempt: int) -> None:
+        self.phase = "backoff"
+        self.phase_deadline = self.clock() + seconds
+        self.retry = attempt
+
+    def finish(self) -> None:
+        self.phase = "done"
+        self.phase_deadline = None
+
+    # ---- derived ---------------------------------------------------------
+    @property
+    def fraction(self) -> float:
+        """Share of the *expected* work done. The denominator moves as the
+        engine learns, which is honest: there is no fixed total."""
+        if self.phase == "done":
+            return 1.0
+        total = self.probes_done + self.est_probes_remaining
+        return self.probes_done / total if total else 0.0
+
+    @property
+    def hit_rate(self) -> float:
+        return self.hits / self.probes_done if self.probes_done else 0.0
+
+    @property
+    def elapsed(self) -> float:
+        return max(0.0, self.clock() - self.started_at)
+
+    @property
+    def phase_remaining(self) -> float:
+        if self.phase_deadline is None:
+            return 0.0
+        return max(0.0, self.phase_deadline - self.clock())
+
+    @property
+    def tick(self) -> int:
+        return int(self.elapsed * _SPIN_HZ)
+
+    @property
+    def probes_this_run(self) -> int:
+        return max(0, self.probes_done - self.resumed_from)
+
+    @property
+    def seconds_per_probe(self) -> float:
+        if self.probes_this_run >= 2 and self.elapsed > 0:
+            return self.elapsed / self.probes_this_run
+        return self.delay_seconds + 3.0
+
+    @property
+    def eta_seconds(self) -> float:
+        return self.est_probes_remaining * self.seconds_per_probe
+
+
+def _adaptive_position(state: AdaptiveRunState) -> Text:
+    at = state.audio_seconds if state.phase == "done" else int(state.current_t)
+    return Text(f"{format_timestamp(at)} / {format_timestamp(state.audio_seconds)}", style=_MUTED)
+
+
+def _adaptive_track_row(state: AdaptiveRunState) -> tuple[Text, Text]:
+    track = state.current_result
+    if not track:
+        return Text("♪ no match yet", style=_TRACK), Text("—", style=_TRACK)
+    left = Text("♪ ", style=_MUTED)
+    left.append(_one_line(track.get("artist") or "unknown artist"))
+    left.append(" — ", style=_TRACK)
+    left.append(_one_line(track.get("title") or "unknown title"), style=_MUTED)
+
+    confidence = track.get("confidence")
+    if confidence is None:
+        return left, Text("--%", style=_TRACK)
+    right = Text(f"{round(confidence * 100):>3d}% ", style=_MUTED)
+    right.append_text(_meter(confidence))
+    return left, right
+
+
+def _adaptive_phase_row(state: AdaptiveRunState) -> Text:
+    remaining = int(state.phase_remaining + 0.5)
+    if state.phase == "cooldown":
+        return Text(f"⧗ pausing between calls · next probe in {remaining}s", style=_MUTED)
+    if state.phase == "backoff":
+        if remaining > 0:
+            return Text(
+                f"⚠ rate limited · retry {state.retry}/{state.max_retries} in {remaining}s",
+                style="yellow",
+            )
+        spinner = _SPIN[state.tick % len(_SPIN)]
+        return Text(f"{spinner} retrying after rate limit…", style="yellow")
+    if state.phase == "done":
+        return Text(f"✓ finished after {state.probes_done} probes", style=_ACCENT)
+    spinner = _SPIN[state.tick % len(_SPIN)]
+    where = format_timestamp(int(state.current_t))
+    return Text(f"{spinner} probing {where} ({state.current_purpose})…", style=_ACCENT)
+
+
+def _adaptive_stats_row(state: AdaptiveRunState) -> tuple[Text, Text]:
+    """What you have, how sharp it is, how long it still owes you."""
+    if state.probes_done:
+        tracks = state.tracks_found
+        left = Text(f"{tracks} track{'' if tracks == 1 else 's'}", style=_MUTED)
+        left.append(" · ", style=_TRACK)
+        left.append(
+            f"{state.boundaries_at_target}/{state.boundaries_found} boundaries sharp",
+            style=_MUTED,
+        )
+        if state.widest_gap > 0:
+            left.append(" · ", style=_TRACK)
+            left.append(f"widest ±{state.widest_gap / 2:.0f}s", style=_MUTED)
+    else:
+        left = Text("no probes finished yet", style=_TRACK)
+
+    if state.phase == "done":
+        right = Text("", style=_TRACK)
+        right.append(f"{state.seconds_per_probe:.1f}s/probe", style=_MUTED)
+    else:
+        rough = "" if state.probes_this_run >= SETTLED_SAMPLES else "~"
+        right = Text("ETA ", style=_TRACK)
+        right.append(f"{rough}{format_duration(state.eta_seconds)}", style=_MUTED)
+    return left, right
+
+
+def _adaptive_title(state: AdaptiveRunState, box_width: int) -> Text:
+    word, _, title_style = _FRAME.get(state.phase, _FRAME["identifying"])
+    title = Text(word, style=title_style)
+    name = Text(_one_line(state.source_name), style=_MUTED)
+    name.truncate(max(8, min(64, box_width - 10 - len(word) - 3)), overflow="ellipsis")
+    title.append(" · ", style=_TRACK)
+    title.append_text(name)
+    return title
+
+
+def render_adaptive_panel(state: AdaptiveRunState, width: int) -> Group:
+    """Render the adaptive panel at `width` columns. Pure, like `render_panel`."""
+    box_width = max(MIN_BOX, min(width, MAX_BOX))
+    inner = box_width - 4
+
+    position = _adaptive_position(state)
+    rail = max(RAIL, min(position.cell_len, inner // 2))
+    left_width = max(8, inner - rail - GAP)
+
+    percent = f"{state.fraction * 100:.0f}%"
+    remaining = "" if state.phase == "done" else f"+{state.est_probes_remaining}"
+    counter = Text(f"  {state.probes_done}{remaining}  {percent:>4}", style=_MUTED)
+    head = _adaptive_bar(state, max(6, left_width - counter.cell_len))
+    head.append_text(counter)
+
+    track_left, track_right = _adaptive_track_row(state)
+    stats_left, stats_right = _adaptive_stats_row(state)
+    elapsed = Text("elapsed ", style=_TRACK)
+    elapsed.append(format_duration(state.elapsed), style=_MUTED)
+
+    body = Group(
+        _row(head, position, inner, rail),
+        _row(track_left, track_right, inner, rail),
+        _row(_adaptive_phase_row(state), elapsed, inner, rail),
+        _row(stats_left, stats_right, inner, rail),
+    )
+    return Group(
+        Text(""),
+        Panel(
+            body,
+            title=_adaptive_title(state, box_width),
+            title_align="left",
+            border_style=_FRAME.get(state.phase, _FRAME["identifying"])[1],
+            box=ROUNDED,
+            width=box_width,
+            padding=(0, 1),
+        ),
+    )
+
+
+def _adaptive_bar(state: AdaptiveRunState, width: int) -> Text:
+    """Same eighths bar as the sequential panel, over a moving denominator."""
+    eighths = min(int(round(state.fraction * width * 8)), width * 8)
+    full, remainder = divmod(eighths, 8)
+    carried = 0
+    if state.probes_done:
+        carried = min(int(state.resumed_from / state.probes_done * full), full)
+
+    bar = Text(no_wrap=True)
+    if carried:
+        bar.append("▓" * carried, style=_ACCENT)
+    bar.append("█" * (full - carried), style=_ACCENT)
+    used = full
+    if remainder and full < width:
+        bar.append(_PARTIAL[remainder], style=_ACCENT)
+        used += 1
+    bar.append("░" * (width - used), style=_TRACK)
+    return bar

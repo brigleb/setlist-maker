@@ -29,8 +29,8 @@ from setlist_maker.identify import (
     results_to_tracklist,
     tracklist_output_path,
 )
-from setlist_maker.progress import live_display
-from setlist_maker.shazam_client import identify_sample_with_retry
+from setlist_maker.progress import AdaptiveRunState, live_display, render_adaptive_panel
+from setlist_maker.shazam_client import MAX_RETRIES, identify_sample_with_retry
 
 PROGRESS_VERSION = 2
 
@@ -216,17 +216,43 @@ async def process_single_file_adaptive(
             print(f"  Resuming with {len(probes)} previous probes")
 
     shazam = Shazam()
+    # Two separate questions, exactly as in the sequential path: a terminal
+    # gets the colorized log either way; --no-panel drops only the dashboard.
     color = sys.stdout.isatty()
+    live = color and panel
     term_width = shutil.get_terminal_size(fallback=(80, 24)).columns
     started = time.monotonic()
     stop_reason = None
+
+    state = AdaptiveRunState(
+        source_name=audio_path.name,
+        audio_seconds=int(duration),
+        delay_seconds=delay_seconds,
+        probes_done=len(probes),
+        hits=sum(1 for p in probes if p.result),
+        resumed_from=len(probes),
+    )
+    state.update_from_engine(engine)
 
     with (
         tempfile.TemporaryDirectory() as temp_dir,
         EventLog(events_path) as events,
         _sigint_flag() as flag,
-        live_display(None, False) as display,
+        live_display(state, live, render=render_adaptive_panel) as display,
     ):
+
+        def announce_backoff(wait_time: float, attempt: int) -> None:
+            """Show the rate-limit wait as a phase the panel can count down.
+
+            Also left in the scrollback, since a slow run should still explain
+            itself in a piped log or once the panel is gone.
+            """
+            state.begin_backoff(wait_time, attempt)
+            display.log(
+                f"  Warning: Rate limited. Backing off for {wait_time:.0f} seconds "
+                f"(attempt {attempt}/{MAX_RETRIES})..."
+            )
+
         while True:
             if flag.stop:
                 stop_reason = "interrupted"
@@ -239,8 +265,15 @@ async def process_single_file_adaptive(
             if plan is None:
                 break
 
+            state.begin_probe(plan)
             segment = extract_window(audio, plan.t, plan.window)
-            info = await identify_sample_with_retry(shazam, segment, temp_dir, include_offsets=True)
+            info = await identify_sample_with_retry(
+                shazam,
+                segment,
+                temp_dir,
+                include_offsets=True,
+                on_backoff=announce_backoff,
+            )
             offsets = info.pop("offsets", None) if info else None
             probe = Probe(
                 t=plan.t,
@@ -252,14 +285,25 @@ async def process_single_file_adaptive(
             for event in engine.add_probe(probe):
                 events.write(event)
             probes.append(probe)
+            state.record(info)
+            state.update_from_engine(engine)
+
+            # Enter the cooldown phase *before* logging and the progress write,
+            # so the panel never claims to still be asking about a probe it has
+            # already recorded.
+            more = engine.next_probe() is not None and not flag.stop
+            if more:
+                state.begin_cooldown(delay_seconds)
+
             save_progress_v2(duration, probes, progress_path)
             display.log(
                 format_probe_line(plan.t, plan.purpose, info, width=term_width, color=color)
             )
 
-            if engine.next_probe() is not None and not flag.stop:
+            if more:
                 await asyncio.sleep(delay_seconds)
 
+        state.finish()
         segs, drops = engine.segments()
         for d in drops:
             events.write(d)
