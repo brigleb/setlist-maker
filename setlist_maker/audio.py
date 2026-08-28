@@ -150,3 +150,17 @@ def slice_audio(audio: AudioSegment, sample_duration_ms: int) -> list[tuple[int,
 
     print(f"  Created {len(slices)} samples of {sample_duration_ms // 1000} seconds each")
     return slices
+
+
+def extract_window(
+    audio: AudioSegment, start_seconds: float, window_seconds: float
+) -> AudioSegment:
+    """Slice one probe window from anywhere in the recording.
+
+    The adaptive engine plans probes at arbitrary (float-second) positions;
+    this is its counterpart to `slice_audio`'s fixed grid. Clamped to the
+    audio's bounds, so a window planned near the end simply comes back short.
+    """
+    start_ms = max(0, int(round(start_seconds * 1000)))
+    end_ms = min(len(audio), start_ms + int(round(window_seconds * 1000)))
+    return audio[start_ms:end_ms]
