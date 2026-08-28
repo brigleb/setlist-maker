@@ -82,10 +82,18 @@ def off(o, skew=0.0):
     return {"offset": o, "timeskew": skew}
 
 
-def test_probe_start_estimate_is_t_minus_offset():
+def test_probe_start_estimate_corrects_for_the_centered_fingerprint_excerpt():
+    """Not plain T - O: shazamio_core fingerprints a centered 10s excerpt, so a
+    30s probe's offset describes audio 10s into its window and a 12s probe's
+    1s into its own. Both must therefore imply the *same* start -- measured on
+    a real recording, they agree to 0.1s (spec Errata). Left uncorrected the
+    two disagree by 9s, which exceeds offset_tolerance and silently disables
+    prediction for every track probed at both window sizes."""
     eng = BoundaryEngine(1000.0)
-    p = probe(200.0, title="B", offsets=[off(50.0)])
-    assert eng._probe_start_estimate(p) == 150.0
+    coverage = probe(200.0, title="B", window=30.0, offsets=[off(60.0)])
+    refine = probe(200.0, title="B", window=12.0, offsets=[off(51.0)])
+    assert eng._probe_start_estimate(coverage) == 150.0
+    assert eng._probe_start_estimate(refine) == 150.0
 
 
 def test_probe_start_estimate_ignores_timeskewed_matches():
@@ -96,11 +104,11 @@ def test_probe_start_estimate_ignores_timeskewed_matches():
 
 def test_trusted_start_needs_corroboration_and_agreement():
     eng = BoundaryEngine(1000.0)
-    eng.add_probe(probe(200.0, title="B", offsets=[off(50.0)]))
+    eng.add_probe(probe(200.0, title="B", offsets=[off(60.0)]))
     key = eng._identity_by_index[0]
     assert eng._trusted_start(key) is None  # min_corroboration = 2
-    eng.add_probe(probe(290.0, title="B", offsets=[off(141.0)]))
-    assert eng._trusted_start(key) == 149.5  # median of 150.0, 149.0
+    eng.add_probe(probe(290.0, title="B", offsets=[off(149.0)]))
+    assert eng._trusted_start(key) == 150.5  # median of 150.0, 151.0
     eng.add_probe(probe(380.0, title="B", offsets=[off(100.0)]))  # wildly off
     assert eng._trusted_start(key) is None  # spread > offset_tolerance
 
@@ -108,15 +116,15 @@ def test_trusted_start_needs_corroboration_and_agreement():
 def test_resolved_by_prediction_requires_confirming_probe_after_p():
     eng = BoundaryEngine(1000.0)
     eng.add_probe(probe(60.0, title="A"))
-    eng.add_probe(probe(200.0, title="B", offsets=[off(50.0)]))
-    eng.add_probe(probe(290.0, title="B", offsets=[off(140.0)]))
+    eng.add_probe(probe(200.0, title="B", offsets=[off(60.0)]))
+    eng.add_probe(probe(290.0, title="B", offsets=[off(150.0)]))
     pts = eng._points()
     boundary = next(
         (left, right) for left, right in zip(pts, pts[1:]) if eng._is_boundary(left, right)
     )
     # P = 150, inside (75, 215); but no B probe *starts* within [149.5, 155].
     assert eng._resolved_by_prediction(*boundary) is None
-    eng.add_probe(probe(152.0, title="B", window=12.0, purpose="refine", offsets=[off(2.0)]))
+    eng.add_probe(probe(152.0, title="B", window=12.0, purpose="refine", offsets=[off(3.0)]))
     pts = eng._points()
     boundary = next(
         (left, right) for left, right in zip(pts, pts[1:]) if eng._is_boundary(left, right)
@@ -190,8 +198,8 @@ def test_boundary_refined_to_precision_without_offsets():
 def test_trusted_prediction_plans_verification_after_p():
     eng = BoundaryEngine(1000.0)
     eng.add_probe(probe(60.0, title="A"))
-    eng.add_probe(probe(300.0, title="B", offsets=[off(150.0)]))
-    eng.add_probe(probe(390.0, title="B", offsets=[off(240.0)]))
+    eng.add_probe(probe(300.0, title="B", offsets=[off(160.0)]))
+    eng.add_probe(probe(390.0, title="B", offsets=[off(250.0)]))
     # P = 150 inside (75, 315): expect verify at P + verify_lead with refine window.
     plan = eng.next_probe()
     assert plan.purpose == "refine"

@@ -57,6 +57,11 @@ class EngineConfig:
     precision_none: float = 30.0  # target width when one side is unidentified
     coverage_window: float = 30.0
     refine_window: float = 12.0
+    # shazamio_core fingerprints a *centered* excerpt of this length out of
+    # whatever window it is handed (its SearchParams default), so a probe's
+    # reported offset describes audio starting (window - this)/2 after the
+    # window does. See `_probe_start_estimate`.
+    fingerprint_segment: float = 10.0
     offset_tolerance: float = 4.0  # max spread among a track's T-O estimates
     timeskew_max: float = 0.02  # beyond this the playback was tempo-shifted
     min_corroboration: int = 2  # probes needed before offsets are trusted
@@ -164,14 +169,28 @@ class BoundaryEngine:
 
     # ---- offset prediction ----------------------------------------------
     def _probe_start_estimate(self, probe: Probe) -> float | None:
-        """This probe's implied track start (T - O). A *lower bound*: a track
-        the DJ cut into mid-song implies a start earlier than the real
-        boundary, which is why prediction is verified after P, never before
-        (see spec: Verification protocol)."""
+        """This probe's implied track start. A *lower bound*: a track the DJ cut
+        into mid-song implies a start earlier than the real boundary, which is
+        why prediction is verified after P, never before (see spec:
+        Verification protocol).
+
+        Not plain `T - O`. `Shazam.recognize` runs through shazamio_core, which
+        fingerprints a **centered** `fingerprint_segment` (10s) excerpt of the
+        window it is handed -- so the matched audio begins `lead` seconds after
+        the probe does, and the offset describes *that* point. Measured on a
+        real set (spec Errata): a 30s coverage probe and a 12s refine probe of
+        the same track disagree by exactly 9.0s = (30-10)/2 - (12-10)/2 raw,
+        and agree to within 0.1s once `lead` is subtracted out. Skipping this
+        would not merely shift boundaries: the 9s disagreement exceeds
+        `offset_tolerance`, so `_trusted_start` would reject every track probed
+        at both window sizes and the prediction path would silently never fire.
+        """
         if not probe.offsets:
             return None
+        # Below the segment length the whole window is fingerprinted, so no lead.
+        lead = max(0.0, (probe.window - self.cfg.fingerprint_segment) / 2.0)
         cands = [
-            probe.t - m["offset"]
+            probe.t + lead - m["offset"]
             for m in probe.offsets
             if isinstance(m.get("offset"), (int, float))
             and abs(m.get("timeskew") or 0.0) <= self.cfg.timeskew_max

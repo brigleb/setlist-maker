@@ -306,4 +306,72 @@ engine's pure core.
 
 ## Errata
 
-(Reserved for spike findings and measured-ε adjustments.)
+### Offset spike findings (2026-08-27)
+
+Run: `scripts/offset_spike.py` against `2026-08-26-Keys-Lounge.mp3` (4:01:08, 60 tracks, with
+its sequential tracklist as ground truth). Positions chosen to answer the spec's four
+questions: 60/180/300s inside track 1 (*Lou Reed — Sweet Jane*, which starts at 0:00 exactly,
+so it pins the absolute bias), 450/500s bracketing its 8:00 cut, and 5850/6000/6150s inside
+track 27 (*Dr. Lonnie Smith — I Can't Stand It (Live)*). Every position probed at both 30s and
+12s. Raw log in the commit message for `feat(spike)`.
+
+**1. Offsets are populated and trustworthy.** All 12 matching probes carried a single
+`matches[].offset`, with `timeskew` between −0.0008 and −0.0028 — three orders of magnitude
+inside `timeskew_max = 0.02`, so the skew gate never fires on ordinary material and is doing
+its job only against genuinely pitched-up playback.
+
+**2. `T − O` is wrong, and wrong in a way that would have silently killed prediction.**
+`Shazam.recognize` does not use shazamio's Python `Converter`; it delegates to `shazamio_core`
+(Rust), whose `SearchParams.segment_duration_seconds` (default **10**) documents: *"If the
+audio file is longer than this duration, a centered segment of the specified duration is
+selected."* So the fingerprinted audio begins `lead = max(0, (window − 10) / 2)` **after** the
+probe's window does, and the reported offset describes that point, not the window start:
+
+| window | lead | measured bias vs. plain `T − O` |
+|---|---|---|
+| 30s (coverage) | 10.0s | +9.6s |
+| 12s (refine)   | 1.0s  | +0.6s |
+
+The engine therefore computes `t + lead(window) − offset`, not `t − offset`
+(`_probe_start_estimate`). This is not a cosmetic shift. Uncorrected, a coverage probe and a
+refine probe of the *same track* disagree by exactly 9.0s = (30−10)/2 − (12−10)/2, which
+exceeds `offset_tolerance = 4.0` — so `_trusted_start` would have returned `None` for every
+track probed at both window sizes, i.e. for every track the verification protocol actually
+reaches. Prediction would have been dead code that never announced itself, and the engine
+would have quietly bisected everything.
+
+**3. Corrected, the estimates are excellent.** 30s and 12s probes of the same track agree to
+**0.0–0.1s**. Within a track the spread is ≤0.6s over 450s of separation, and that residual is
+itself explained by the reported `timeskew ≈ −0.002` (0.002 × 450 ≈ 0.9s). Absolute accuracy:
+Sweet Jane, whose true start is 0:00, estimates at 0.0–0.6s; Lonnie Smith estimates at
+5787.4–5787.8s against a ground-truth window of (5760, 5790]. `offset_tolerance = 4.0` is
+consequently generous rather than tight, which is the right side to err on.
+
+**4. 12s refine windows are supported.** Every position that matched at 30s also matched at
+12s (8/8). The one failure — 8:20, just past a hard cut — failed at *both* window sizes, so
+there is no evidence the shorter window identifies worse. `refine_window = 12` ships as
+specced. (That probe raised `IndexError("list index out of range")` out of shazamio rather
+than returning no match: another shape a non-match takes, and one more reason `call_log.py`
+classifies by exception type rather than message.)
+
+**5. Consequence the spec got wrong: a 30s coverage window buys no extra reliability.**
+Because only a centered 10s excerpt is ever fingerprinted, Shazam sees exactly 10 seconds
+whether it is handed 12s or 30s — the window only chooses *which* 10 seconds. The spec's
+rationale for keeping 30s coverage probes ("maximum identification reliability on unknown
+material") does not hold. `coverage_window` stays 30 in phase 1 regardless, because it is the
+sequential path's window and changing it would move evidence points for no measured gain; the
+saving on offer is decode/export time, not match quality. Flagged as future work.
+
+**6. Midpoint attribution is confirmed correct.** The centered excerpt's own midpoint is
+`t + (w − 10)/2 + 5 = t + w/2` for any `w ≥ 10` (and trivially for `w < 10`), so `Probe.mid`
+is exactly the fingerprint centroid — the interval model's geometric reading is right. But the
+evidence *extent* is 10s for every window size, so a probe cannot localise a boundary better
+than ±5s no matter how it is sized. That is what bounds achievable precision, and it is why
+`precision = 5.0` sits exactly at the edge of what a single probe can resolve.
+
+**7. `min_corroboration` stays 2** (partial trust), despite the measurements supporting full
+trust on precision grounds. The residual risk prediction guards against is not offset
+*precision* — measured at ±0.4s — but offset *provenance*: one probe that matched the wrong
+track yields a confident-looking P from a single number. A second agreeing probe is what
+rejects that, and coverage at a 90s stride supplies one for free on any track long enough to
+matter. Promoting to 1 would only help tracks too short for the stride guarantee anyway.
