@@ -42,13 +42,16 @@ Usage:
 import argparse
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
 from setlist_maker import __version__
+from setlist_maker.adaptive import process_single_file_adaptive
 from setlist_maker.artwork import CoverImageError, create_chapter_image, load_cover_image
 from setlist_maker.artwork_cache import chapter_image, source_artwork
 from setlist_maker.audio import get_audio_file
+from setlist_maker.boundary import EngineConfig
 from setlist_maker.call_log import LOG_FILENAME, call_log_path
 from setlist_maker.chapters import embed_chapters
 from setlist_maker.editor import (
@@ -70,6 +73,24 @@ from setlist_maker.identify import (
     tracklist_output_path,
 )
 from setlist_maker.web_editor import run_web_editor
+
+# Sourced from EngineConfig so the flags, their help text and the epilog can
+# never drift from what the engine actually defaults to.
+_ENGINE_DEFAULTS = EngineConfig()
+_D_PRECISION = _ENGINE_DEFAULTS.precision
+_D_STRIDE = _ENGINE_DEFAULTS.stride
+_D_REFINE = _ENGINE_DEFAULTS.refine_window
+
+_BUDGET_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([hms]?)\s*$", re.IGNORECASE)
+
+
+def parse_budget(text: str) -> float:
+    """'2h' / '45m' / '90s' / bare minutes -> seconds. Raises ValueError."""
+    match = _BUDGET_RE.match(text or "")
+    if not match:
+        raise ValueError(f"invalid duration: {text!r} (try 45m, 2h or 90s)")
+    value, unit = float(match.group(1)), match.group(2).lower()
+    return value * {"h": 3600.0, "m": 60.0, "s": 1.0}.get(unit or "m")
 
 
 def _chain_chapters_after_identify(
@@ -196,6 +217,30 @@ def cmd_identify(args: argparse.Namespace) -> None:
             print(f"Error: {name} must be between 0.0 and 1.0 (got {value}).")
             sys.exit(1)
 
+    # Adaptive sampling flags, validated up front for the same reason.
+    for name, value in (
+        ("--precision", args.precision),
+        ("--stride", args.stride),
+        ("--refine-window", args.refine_window),
+    ):
+        if value <= 0:
+            print(f"Error: {name} must be greater than 0 (got {value}).")
+            sys.exit(1)
+    if args.stride <= args.refine_window:
+        print(
+            f"Error: --stride ({args.stride}) must exceed --refine-window "
+            f"({args.refine_window}); coverage has to be coarser than refinement."
+        )
+        sys.exit(1)
+
+    budget_seconds = None
+    if args.budget:
+        try:
+            budget_seconds = parse_budget(args.budget)
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
     # Identify a single audio file
     audio_path = get_audio_file(args.path)
     if not audio_path:
@@ -229,20 +274,50 @@ def cmd_identify(args: argparse.Namespace) -> None:
             smoothing=not args.no_smoothing,
         )
 
-        result = asyncio.run(
-            process_single_file(
-                audio_path=audio_path,
-                output_dir=output_dir,
-                delay_seconds=args.delay,
-                resume=not args.no_resume,
-                corrections_db=corrections_db,
-                dedup_config=dedup_config,
-                summary=not args.no_summary,
-                allow_partial=args.allow_partial,
-                panel=not args.no_panel,
-                call_log=_resolve_call_log(args, audio_path, output_dir),
+        if args.sequential:
+            result = asyncio.run(
+                process_single_file(
+                    audio_path=audio_path,
+                    output_dir=output_dir,
+                    delay_seconds=args.delay,
+                    resume=not args.no_resume,
+                    corrections_db=corrections_db,
+                    dedup_config=dedup_config,
+                    summary=not args.no_summary,
+                    allow_partial=args.allow_partial,
+                    panel=not args.no_panel,
+                    call_log=_resolve_call_log(args, audio_path, output_dir),
+                )
             )
-        )
+        else:
+            if args.no_smoothing:
+                print(
+                    "  Note: --no-smoothing applies to --sequential only; "
+                    "adaptive mode adjudicates outliers by re-probing."
+                )
+            engine_config = EngineConfig(
+                stride=args.stride,
+                precision=args.precision,
+                refine_window=args.refine_window,
+                singleton_confidence_keep=args.singleton_confidence,
+                title_threshold=args.title_threshold,
+                artist_threshold=args.artist_threshold,
+            )
+            result = asyncio.run(
+                process_single_file_adaptive(
+                    audio_path=audio_path,
+                    output_dir=output_dir,
+                    delay_seconds=args.delay,
+                    engine_config=engine_config,
+                    resume=not args.no_resume,
+                    corrections_db=corrections_db,
+                    summary=not args.no_summary,
+                    allow_partial=args.allow_partial,
+                    panel=not args.no_panel,
+                    budget_seconds=budget_seconds,
+                    call_log=_resolve_call_log(args, audio_path, output_dir),
+                )
+            )
 
         if not result:
             print(f"\nError: Failed to process {audio_path.name}")
@@ -487,14 +562,23 @@ def main():
     d_title = SIMILARITY_THRESHOLD
     d_artist = ARTIST_SIMILARITY_THRESHOLD
     d_single = SINGLETON_CONFIDENCE_KEEP
+    d_precision = _D_PRECISION
+    d_stride = _D_STRIDE
+    d_refine = _D_REFINE
 
     parser = ColorHelpParser(
         prog="setlist-maker",
         description="Generate tracklists from DJ sets or long audio recordings using Shazam.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""\
-Setlist Maker samples a long recording every 30 seconds, identifies each slice
-with Shazam, and writes a timestamped markdown tracklist (plus a JSON sidecar).
+Setlist Maker hunts track boundaries adaptively: it samples a long recording
+sparsely, notices where two samples disagree, and spends the rest of its probes
+narrowing exactly those disagreements. Boundaries land within ~{d_precision:.0f}s for
+roughly half the Shazam calls the old fixed 30-second scan needed (still there,
+as --sequential). Output is a timestamped markdown tracklist plus a JSON sidecar.
+
+Stop it whenever you like -- Ctrl-C, or --budget 45m. The tracklist is always
+complete; more probes only make the boundaries sharper.
 
 Typical workflow
   1. Identify + review   %(prog)s my_set.mp3 --edit   (or --web-edit in a browser)
@@ -528,11 +612,19 @@ identify options
       --no-panel              Don't pin the live progress panel under the log
       --call-log PATH         Where to append per-call telemetry (default: beside output)
       --no-call-log           Don't record per-call telemetry
+  adaptive sampling
+      --sequential            Use the old fixed 30s scan (more calls, +-30s boundaries)
+      --budget DURATION       Stop after about this long and write what was found
+      --precision SECONDS     How tightly to pin each boundary (default: {d_precision:g})
+      --stride SECONDS        Longest unprobed stretch (default: {d_stride:g}); guarantees
+                              no track longer than this is missed
+      --refine-window SECONDS Sample length when narrowing a boundary (default: {d_refine:g})
   detection tuning
       --title-threshold N       Title similarity 0-1 to merge matches (default: {d_title})
       --artist-threshold N      Artist similarity 0-1 to merge matches (default: {d_artist})
       --singleton-confidence N  Min confidence 0-1 to keep a 1-sample track (default: {d_single})
       --no-smoothing            Don't smooth unconfident single-sample outliers (A B A -> A)
+                                (--sequential only; adaptive re-probes outliers instead)
 
 chapters options
       --audio FILE            MP3 path (auto-detected from the tracklist name if omitted)
@@ -548,6 +640,8 @@ Examples
   %(prog)s recording.mp3 --web-edit            Identify (or reuse), then edit in a browser
   %(prog)s recording.mp3 --reidentify --edit   Force a fresh re-identify, then edit
   %(prog)s recording.mp3 --edit --chapters     Identify, edit, then add chapters
+  %(prog)s recording.mp3 --budget 45m          Spend at most ~45 minutes on it
+  %(prog)s recording.mp3 --sequential          Use the old fixed 30-second scan
   %(prog)s tracklist.md                        Edit an existing tracklist
   %(prog)s chapters recording_tracklist.md     Add chapters to the matching MP3
 """,
@@ -682,6 +776,48 @@ Examples:
         action="store_true",
         help="Don't pin the live progress panel under the log "
         "(it is already skipped when output is piped or redirected)",
+    )
+
+    # Adaptive sampling (see EngineConfig in boundary.py)
+    adaptive_group = identify_parser.add_argument_group("adaptive sampling")
+    adaptive_group.add_argument(
+        "--sequential",
+        action="store_true",
+        help="Use the original fixed 30-second scan instead of adaptive boundary "
+        "hunting (more Shazam calls, boundaries only accurate to +-30s)",
+    )
+    adaptive_group.add_argument(
+        "--precision",
+        type=float,
+        default=_D_PRECISION,
+        metavar="SECONDS",
+        help=f"How tightly to pin each track boundary (default: {_D_PRECISION}); "
+        "lower spends more probes per boundary",
+    )
+    adaptive_group.add_argument(
+        "--budget",
+        metavar="DURATION",
+        help="Stop after roughly this long and write what has been found "
+        "(e.g. 45m, 2h, 90s; a bare number means minutes). The result is always "
+        "a complete tracklist -- just a coarser one (default: run to completion)",
+    )
+    adaptive_group.add_argument(
+        "--stride",
+        type=float,
+        default=_D_STRIDE,
+        metavar="SECONDS",
+        help=f"Longest stretch left unprobed between samples (default: {_D_STRIDE}); "
+        "this is what guarantees no track longer than it is missed, so raising it "
+        "saves calls at the risk of skipping a short track",
+    )
+    adaptive_group.add_argument(
+        "--refine-window",
+        type=float,
+        default=_D_REFINE,
+        dest="refine_window",
+        metavar="SECONDS",
+        help=f"Sample length used when narrowing a boundary (default: {_D_REFINE}); "
+        "Shazam fingerprints a centered 10s excerpt of whatever it is given",
     )
 
     # Deduplication tuning (see DedupConfig in identify.py)

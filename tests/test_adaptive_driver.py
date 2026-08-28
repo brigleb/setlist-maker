@@ -30,7 +30,9 @@ def _wire(monkeypatch, oracle):
 
     calls = {"n": 0}
 
-    async def fake_identify(shazam, segment, temp_dir, include_offsets=False, on_backoff=None):
+    async def fake_identify(
+        shazam, segment, temp_dir, include_offsets=False, on_backoff=None, on_error=None
+    ):
         calls["n"] += 1
         result, offsets = oracle.answer(*segment)
         if result and include_offsets:

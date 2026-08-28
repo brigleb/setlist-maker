@@ -22,6 +22,7 @@ from shazamio import Shazam
 
 from setlist_maker.audio import extract_window, format_timestamp, load_audio
 from setlist_maker.boundary import BoundaryEngine, EngineConfig, Probe
+from setlist_maker.call_log import CallLog, CallRecorder, describe_error
 from setlist_maker.editor import CorrectionsDB, Tracklist
 from setlist_maker.identify import (
     finalize_outputs,
@@ -183,6 +184,7 @@ async def process_single_file_adaptive(
     allow_partial: bool = False,
     panel: bool = True,
     budget_seconds: float | None = None,
+    call_log: Path | None = None,
 ) -> tuple[Tracklist, Path] | None:
     """Adaptive sibling of identify.process_single_file: same inputs and
     outputs, different sampling strategy. Anytime: every stopping rule
@@ -234,6 +236,23 @@ async def process_single_file_adaptive(
     )
     state.update_from_engine(engine)
 
+    # Per-call telemetry, exactly as the sequential loop records it. Adaptive is
+    # the default mode, so leaving this behind would make the log -- which is on
+    # by default precisely so a throttling question has data waiting -- empty for
+    # every ordinary run. `total` is the engine's live estimate rather than a
+    # fixed count: there isn't one, and the estimate is the honest analogue.
+    log = CallLog(call_log) if call_log is not None else None
+    recorder = CallRecorder()
+    if log is not None:
+        if not recorder.attach(shazam):
+            print("  Warning: call log has no HTTP detail (shazamio trace seam moved)")
+        log.write_run(
+            source=audio_path.name,
+            total=len(probes) + engine.estimated_probes_remaining(),
+            delay_seconds=delay_seconds,
+            resumed_from=len(probes),
+        )
+
     with (
         tempfile.TemporaryDirectory() as temp_dir,
         EventLog(events_path) as events,
@@ -267,13 +286,19 @@ async def process_single_file_adaptive(
 
             state.begin_probe(plan)
             segment = extract_window(audio, plan.t, plan.window)
+
+            errors: list[Exception] = []
+            recorder.drain()  # discard anything not attributable to this probe
+            call_started = time.monotonic()
             info = await identify_sample_with_retry(
                 shazam,
                 segment,
                 temp_dir,
                 include_offsets=True,
                 on_backoff=announce_backoff,
+                on_error=errors.append,
             )
+            call_duration = time.monotonic() - call_started
             offsets = info.pop("offsets", None) if info else None
             probe = Probe(
                 t=plan.t,
@@ -287,6 +312,18 @@ async def process_single_file_adaptive(
             probes.append(probe)
             state.record(info)
             state.update_from_engine(engine)
+
+            if log is not None:
+                log.write_call(
+                    index=len(probes),
+                    total=len(probes) + engine.estimated_probes_remaining(),
+                    position_seconds=int(plan.t),
+                    delay_seconds=delay_seconds,
+                    duration_s=call_duration,
+                    track_info=info,
+                    attempts=recorder.drain(),
+                    error=describe_error(errors[0]) if errors else None,
+                )
 
             # Enter the cooldown phase *before* logging and the progress write,
             # so the panel never claims to still be asking about a probe it has

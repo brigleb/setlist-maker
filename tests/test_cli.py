@@ -44,6 +44,15 @@ def _identify_args(**overrides):
         cover=None,
         call_log=None,
         no_call_log=False,
+        # Every test in this file predates adaptive sampling and asserts on the
+        # *sequential* pipeline's arguments, so they opt into it explicitly.
+        # Adaptive is the product default; its routing and flag forwarding are
+        # covered in tests/test_cli_adaptive.py.
+        sequential=True,
+        precision=5.0,
+        budget=None,
+        stride=90.0,
+        refine_window=12.0,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
