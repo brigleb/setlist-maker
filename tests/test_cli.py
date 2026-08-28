@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from setlist_maker.call_log import LOG_FILENAME
 from setlist_maker.cli import (
     _chain_chapters_after_identify,
     _load_tracklist_with_artwork_urls,
@@ -41,6 +42,8 @@ def _identify_args(**overrides):
         no_smoothing=False,
         web_edit=False,
         cover=None,
+        call_log=None,
+        no_call_log=False,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -1088,3 +1091,38 @@ def test_sidecar_with_a_non_string_coverart_url_does_not_crash(tmp_path):
     tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
     assert tracklist.tracks[0].coverart_url is None
     assert urls == {}
+
+
+class TestCallLogFlags:
+    """Where `identify` writes its per-call telemetry (see call_log.py)."""
+
+    def _call_log_arg(self, args, audio=Path("/music/set.mp3")):
+        with (
+            patch("setlist_maker.cli.get_audio_file", return_value=audio),
+            patch(
+                "setlist_maker.cli.process_single_file",
+                new=AsyncMock(return_value=_dummy_result()),
+            ) as mock_process,
+        ):
+            cmd_identify(args)
+        return mock_process.call_args.kwargs["call_log"]
+
+    def test_logging_is_on_by_default_beside_the_audio(self):
+        """Telemetry you have to remember to switch on is telemetry you won't
+        have when you want to review it."""
+        assert self._call_log_arg(_identify_args()) == Path("/music") / LOG_FILENAME
+
+    def test_output_dir_takes_the_log_with_it(self):
+        args = _identify_args(output_dir="/elsewhere")
+        assert self._call_log_arg(args) == Path("/elsewhere") / LOG_FILENAME
+
+    def test_an_explicit_path_wins(self):
+        args = _identify_args(call_log="/tmp/mine.jsonl")
+        assert self._call_log_arg(args) == Path("/tmp/mine.jsonl")
+
+    def test_no_call_log_disables_it(self):
+        assert self._call_log_arg(_identify_args(no_call_log=True)) is None
+
+    def test_no_call_log_beats_an_explicit_path(self):
+        args = _identify_args(no_call_log=True, call_log="/tmp/mine.jsonl")
+        assert self._call_log_arg(args) is None

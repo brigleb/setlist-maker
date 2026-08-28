@@ -42,6 +42,7 @@ async def identify_sample_with_retry(
     temp_dir: str,
     max_retries: int = MAX_RETRIES,
     on_backoff: Callable[[float, int], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
 ) -> dict | None:
     """
     Identify a single audio segment using Shazam with exponential backoff retry.
@@ -51,6 +52,13 @@ async def identify_sample_with_retry(
     sleep. It exists so the live progress panel can count the backoff down
     rather than leaving 30 seconds of silence; when it is given, the caller owns
     announcing the wait and the warning is not printed here as well.
+
+    `on_error(exc)` is called with any exception that ends the attempt. Every
+    failure here collapses to a `None` return, which the pipeline cannot tell
+    apart from audio Shazam genuinely does not know -- notably a rate limit,
+    which arrives as `FailedDecodeJson("Failed to decode json")` and carries its
+    429 only on the chained cause. The hook exists so the call log can record
+    the exception *type* before that distinction is thrown away.
     """
     temp_path = str(Path(temp_dir) / "temp_sample.mp3")
     segment.export(temp_path, format="mp3")
@@ -92,10 +100,14 @@ async def identify_sample_with_retry(
                     await asyncio.sleep(wait_time)
                     backoff *= 2  # Exponential backoff
                 else:
+                    if on_error is not None:
+                        on_error(e)
                     print(f"\n  Error: Rate limit persisted after {max_retries} attempts")
                     return None
             else:
                 # Other error - log and return None
+                if on_error is not None:
+                    on_error(e)
                 print(f"\n  Error during recognition: {e}")
                 return None
 

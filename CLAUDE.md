@@ -51,7 +51,14 @@ CLI application with the following modules:
 - `SAMPLE_DURATION_MS = 30000`; `AUDIO_EXTENSIONS` lives in `__init__.py`
 
 ### `setlist_maker/shazam_client.py` - Shazam recognition
-- **identify_sample_with_retry():** Wraps `shazamio` with exponential-backoff retry for rate limits
+- **identify_sample_with_retry():** Wraps `shazamio` with exponential-backoff retry for rate limits.
+  **The rate-limit branch is dead code** — it tests `"429"/"too many"/"rate"` against `str(e)`, but a
+  real Shazam 429 either raises nothing at all or raises `FailedDecodeJson("Failed to decode json")`,
+  which matches none of them. Left in place deliberately while `call_log.py` measures a baseline;
+  see that section before changing it.
+- **on_error hook:** every failure here collapses to a `None` return that the pipeline cannot tell
+  from audio Shazam does not know. `on_error(exc)` hands the exception out before that distinction
+  is lost, so the call log can record its *type*. Mirrors the existing `on_backoff` callback.
 - **estimate_confidence():** Heuristic match-confidence proxy (match alignment + corroboration),
   attached to each result as `confidence` and used by the dedup pipeline
 - Constants: `MAX_RETRIES`, `INITIAL_BACKOFF`
@@ -71,7 +78,11 @@ CLI application with the following modules:
   flags: `--title-threshold`, `--artist-threshold`, `--singleton-confidence`, `--no-smoothing`
 - **results_to_tracklist():** Applies corrections and builds a `Tracklist`
 - **Progress persistence:** `save_progress()` / `load_progress()` JSON files enable resuming
-- `DEFAULT_DELAY_SECONDS = 15` (between API calls)
+- `DEFAULT_DELAY_SECONDS = 15` (between API calls). Field evidence says this is already at the
+  conservative end — comparable clients ship 10s — so there is little headroom to go faster.
+- **Call log:** each sample is timed, its HTTP attempts drained from a `CallRecorder`, and one
+  JSONL line written. Off unless `call_log=` is passed; the CLI resolves it (`_resolve_call_log`),
+  so calling `process_single_file()` directly logs nothing. See `call_log.py`.
 
 ### `setlist_maker/summary.py` - Playlist summary generation
 - **generate_summary():** Shells out to the Claude CLI (`claude -p --strict-mcp-config`) from a
@@ -402,6 +413,61 @@ CLI application with the following modules:
   `--no-panel` drops only the dashboard, never the log's own rendering.
 - Known gap: `Live` restores the cursor on normal exit and on **Ctrl-C** (verified), but a
   SIGTERM/SIGHUP kill unwinds nothing and leaves the cursor hidden until `reset`.
+
+### `setlist_maker/call_log.py` - Per-call telemetry for an identify run
+
+- **The problem it exists for:** the pipeline **cannot tell a rate-limited sample from a
+  genuinely unidentified one**, and never could. shazamio's own constructor sets
+  `ExponentialRetry(attempts=20, max_timeout=60, statuses={500,502,503,504,429})`, so a 429
+  is retried *inside* one `await recognize()` — >700s of backoff before anything reaches the
+  caller — and then arrives in one of three shapes, none of them detectable: a JSON error body
+  returned as a plain dict (no `"track"` key → `None`), an empty body returned as `None`, or
+  `FailedDecodeJson("Failed to decode json")`, a frozen literal carrying no status. That last
+  one is the shape Shazam actually serves (a ~142-byte `text/html` block page), and it means
+  `shazam_client.py`'s `"429" in error_str or "too many" ... or "rate" ...` test **never fires**
+  — the backoff/`on_backoff`/yellow-panel path is dead code. A throttled run therefore produces
+  a confident-looking tracklist with silent holes, and `progress.json` cements them, since a
+  resume treats a throttle-`None` as a finished sample.
+- **`CallRecorder`:** subscribes to shazamio's `http_client.trace_config.on_request_end`.
+  shazamio builds that `TraceConfig` and passes it to every request but only ever subscribes
+  `on_request_start`; `on_request_end` is free and is handed the live `ClientResponse`. So this
+  sees **every** HTTP attempt's status, headers and attempt number — including the 429s
+  shazamio retried away, which is the one fact nothing else in the stack can observe — while
+  changing no behaviour and replacing no client. Verified against a loopback server:
+  two absorbed 429s, a 200, and the caller still gets its normal match. `attach()` is guarded
+  and returns False rather than raising: `trace_config` is shazamio's internal detail, and
+  losing the log is acceptable where failing the run is not. `test_shazamio_still_exposes_the_trace_seam`
+  is the canary — it fails loudly on an upgrade that moves the seam instead of logging nothing
+  quietly. Prefer this over the `Shazam(http_client=...)` injection seam **for observation**:
+  that one is supported and sees everything too, but it means owning a mirrored `request()`
+  and a retry policy, i.e. changing behaviour while trying to measure it.
+- **`describe_error()`:** classifies by exception **type**, never by substring. Two independent
+  reasons: the rate-limit message contains no status at all, and a production tracker that
+  grepped raw output for `429` misclassified real matches whose track ids contained those
+  digits (9 in 100). The status and `Retry-After` survive only on `exc.__cause__` — aiohttp's
+  `ContentTypeError`, preserved because `utils.py` re-raises `from e` — and only on the
+  non-JSON branch. Shazam sends no `Retry-After` in practice; the field is recorded because
+  its *absence* is itself worth confirming from real runs.
+- **`CallLog`:** append-only JSONL, one `run` header plus one `call` line per sample. Opens and
+  closes per line rather than holding a handle for the hour a run takes, so an interrupted run
+  leaves a complete readable file. Every write is best-effort in the spirit of `summary.py`: a
+  fault warns **once** and disables the log for the rest of the run — telemetry that can fail a
+  run is worse than no telemetry.
+- **`throttled`** is the field a review scans for, so it is true if a 429 appears in the attempt
+  list **or** in the error's status. Attempts alone is not enough: if the trace seam ever moves,
+  `attempts` comes back empty and the chained cause is the only surviving evidence.
+- One shared `setlist-maker-calls.jsonl` beside the audio (or in `--output-dir`), **not** a
+  per-file name: the point is to review several ordinary runs together. On by default
+  (`--no-call-log` to disable, `--call-log PATH` to relocate; the off switch outranks an
+  explicit path) — a log that must be enabled per run is empty exactly when a throttling
+  question comes up.
+- **Deliberately changes no behaviour.** No pacing, no retry policy, no adaptive delay. Field
+  evidence puts the safe rate at 4-6 requests/min and the burst threshold at ~15-20 quick ones,
+  so `DEFAULT_DELAY_SECONDS = 15` is already at the conservative end of what comparable clients
+  ship (SongRec defaults to 10s) — there is little headroom, and the limit is burst-sensitive
+  rather than average-sensitive, which makes AIMD and token buckets the wrong shape. Fixing the
+  dead backoff path or taking over shazamio's 20 hidden retries would also mean the logs
+  describe a system that was never run. Measure first.
 
 ### `setlist_maker/playback.py` - Editor audio preview
 - **PlaybackController:** Drives a non-blocking `ffplay` subprocess (`play()` / `stop()` /
