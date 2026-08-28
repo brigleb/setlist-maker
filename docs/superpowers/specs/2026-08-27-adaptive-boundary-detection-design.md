@@ -375,3 +375,75 @@ trust on precision grounds. The residual risk prediction guards against is not o
 track yields a confident-looking P from a single number. A second agreeing probe is what
 rejects that, and coverage at a 90s stride supplies one for free on any track long enough to
 matter. Promoting to 1 would only help tracks too short for the stride guarantee anyway.
+
+
+### Implementation deviations (2026-08-28)
+
+Recorded here because each one departs from what this spec or the implementation
+plan says, and every one is load-bearing.
+
+**A. Edge intervals are targeted before `None` intervals.** `_target` tests "does this
+interval touch a virtual endpoint" *ahead of* "is either side unidentified", so a recording
+that opens or closes on unidentifiable audio is covered at the `stride` rather than bisected
+to `precision_none` against a sentinel that was never evidence of anything. This matches the
+spec's own table ("same-track / edge → stride"); the plan's inline code had the two branches
+the other way round and contradicted its own test.
+
+**B. Coverage precedes boundary retirement (`_needs_coverage`).** The spec defends the
+"never miss a track ≥ 2 minutes" guarantee by splitting *same-track* intervals to the stride
+unconditionally, and explicitly notes that retiring wide intervals on offset trust would make
+the guarantee conditional. The same hazard applies to **boundary** intervals, which the spec
+did not consider: their target is `precision`, so a confirmed prediction retired an `A…B`
+interval that was still hundreds of seconds wide, leaving that span unprobed. Measured on the
+synthetic 4-hour set, **five whole tracks vanished** into such intervals. Every interval of
+every kind is now split to the stride before any boundary consideration applies. Prediction
+buys precision, never permission to skip coverage.
+
+**C. Verification is aligned to the fingerprinted excerpt, and `verify_lead` is now 0.0.**
+The spec places the verification probe's *window* at `P + 2s`. Given finding 2 above, that
+means Shazam actually listens to `[P+3, P+13]` and answers "B" for any cut-in under 8s —
+i.e. a mistaken prediction lands 3s outside the 5s boundary target. The probe is now offset so
+the *excerpt* starts at `P + verify_lead`, and acceptance tests the excerpt's start rather than
+the window's (a coverage probe's differ by 10s, so a window test would let one vouch for a
+boundary it never listened to). With `verify_lead = 0.0` the excerpt is `[P, P+10]`, so a
+cut-in is missed only when it is under `fingerprint_segment / 2` = 5s — exactly `precision`.
+This is why `precision = 5.0` survives as the default rather than being relaxed: it is the
+matched pair to a 10s fingerprint, not an arbitrary target. The knob remains, trading
+cut-in sensitivity against tolerance for noise in P.
+
+**D. `_near_existing` compares excerpts, not window starts.** A 30s coverage probe and a 12s
+refine probe sharing a start time hear audio 9s apart, so a window-start test is wrong in both
+directions: it blocks a refine probe that would hear entirely new audio, and permits two probes
+that would hear the same ten seconds. Measured, the first of these stalled bisection at an 18s
+interval and left a 7.4s boundary error.
+
+**E. Per-coverage-gap refine cap replaces the per-boundary probe cap.** The spec caps
+refinement at 6 probes "per boundary", but every probe becomes an evidence point that splits
+its interval, so "probes inside this interval" is always zero. The cap is enforced over the
+span between the two nearest coverage probes instead (`max_refines_per_gap = 12`), which is
+the region a thrashing transition zone actually occupies.
+
+**F. Coverage probes snap to a stride grid.** `_grid_mid` picks the nearest stride multiple
+strictly inside an interval, so full coverage tiles a file in `duration / stride` probes.
+Blind midpoint halving costs up to 2× that (14400/2ᵏ first dips under 90 at 56.25s spacing).
+
+**Measured after A–F**, against the synthetic oracle (which models the centered-excerpt
+behaviour above), 40 seeds per condition:
+
+| condition | median | p90 | max | over 5s | tracks missed |
+|---|---|---|---|---|---|
+| clean | 0.06s | 1.33s | 4.44s | 0 of 576 | 0 |
+| jitter + 30% offset dropout + blurred edges | 0.74s | 3.88s | 7.01s | 3.6% | 0 |
+
+At the 4-hour, 40-track scale, 20 of 20 seeds hold every boundary within `precision` inside the
+plan's probe budget, at roughly 240 calls against the sequential scan's 480 — i.e. **half the
+Shazam calls for boundaries about an order of magnitude tighter**, matching this spec's
+predicted 220–280.
+
+### Scope note: the call log
+
+`--call-log` is wired into the adaptive driver as well as the sequential one. The
+implementation plan routed it only through `process_single_file`; since adaptive is the
+default, that would have left the log — which is on by default so that a throttling question
+has data waiting — empty for every ordinary run. `total` is the engine's live estimate of
+probes, there being no fixed count.
