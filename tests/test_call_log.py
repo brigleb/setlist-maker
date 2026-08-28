@@ -9,6 +9,7 @@ from shazamio import Shazam
 from shazamio.client import HTTPClient
 from shazamio.exceptions import FailedDecodeJson
 
+from setlist_maker import call_log as call_log_module
 from setlist_maker.call_log import (
     LOG_FILENAME,
     CallLog,
@@ -302,3 +303,49 @@ def test_an_ordinary_failure_is_not_reported_as_throttled(tmp_path):
     )
     (call,) = _lines(path)
     assert call["throttled"] is False
+
+
+def test_an_unserializable_field_is_stringified_rather_than_lost(tmp_path):
+    """`describe_error` reads `status` off an arbitrary exception, so nothing
+    guarantees it is a number. Losing the whole log over one odd field -- or
+    worse, raising out of the sample loop -- is exactly what this module's
+    best-effort contract rules out."""
+    path = tmp_path / "calls.jsonl"
+    log = CallLog(path)
+    log.write_call(
+        index=1,
+        total=1,
+        position_seconds=0,
+        delay_seconds=15,
+        duration_s=1.0,
+        track_info=None,
+        attempts=[],
+        error={"type": "Weird", "message": "?", "status": object(), "retry_after": None},
+    )
+    (call,) = _lines(path)
+    assert call["error"]["type"] == "Weird"
+    assert isinstance(call["error"]["status"], str)  # coerced, not dropped
+
+
+def test_any_serialization_fault_warns_once_and_never_raises(tmp_path, capsys, monkeypatch):
+    """Backstop: the guard catches more than OSError, since a write that raises
+    out of the loop would cost the tracklist the log exists to protect."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("json exploded")
+
+    monkeypatch.setattr(call_log_module.json, "dumps", boom)
+    log = CallLog(tmp_path / "calls.jsonl")
+    for i in range(3):
+        log.write_call(
+            index=i,
+            total=3,
+            position_seconds=0,
+            delay_seconds=15,
+            duration_s=1.0,
+            track_info=None,
+            attempts=[],
+            error=None,
+        )
+
+    assert capsys.readouterr().out.lower().count("call log") == 1

@@ -436,7 +436,7 @@ CLI application with the following modules:
   changing no behaviour and replacing no client. Verified against a loopback server:
   two absorbed 429s, a 200, and the caller still gets its normal match. `attach()` is guarded
   and returns False rather than raising: `trace_config` is shazamio's internal detail, and
-  losing the log is acceptable where failing the run is not. `TestShazamioStillExposesTheTraceSeam`
+  losing the log is acceptable where failing the run is not. `test_shazamio_still_exposes_the_trace_seam`
   is the canary — it fails loudly on an upgrade that moves the seam instead of logging nothing
   quietly. Prefer this over the `Shazam(http_client=...)` injection seam **for observation**:
   that one is supported and sees everything too, but it means owning a mirrored `request()`

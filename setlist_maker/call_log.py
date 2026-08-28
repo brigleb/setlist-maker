@@ -108,9 +108,14 @@ class CallLog:
             return
         record = {"type": record.pop("type"), "run": self.run_id, "ts": _now(), **record}
         try:
+            # `default=str` rather than letting an odd value raise: `describe_error`
+            # reads `status` off an arbitrary exception, so nothing guarantees it is
+            # a number, and coercing keeps the line instead of losing it. The broad
+            # except is the backstop under that -- a write must never raise out of
+            # the sample loop and cost the tracklist this log exists to protect.
             with open(self.path, "a") as handle:
-                handle.write(json.dumps(record) + "\n")
-        except OSError as exc:
+                handle.write(json.dumps(record, default=str) + "\n")
+        except Exception as exc:
             self._disabled = True
             print(f"  Warning: call log disabled ({self.path}): {exc}")
 
