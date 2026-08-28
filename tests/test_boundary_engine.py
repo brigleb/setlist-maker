@@ -197,13 +197,18 @@ def test_boundary_refined_to_precision_without_offsets():
 
 def test_trusted_prediction_plans_verification_after_p():
     eng = BoundaryEngine(1000.0)
-    eng.add_probe(probe(60.0, title="A"))
-    eng.add_probe(probe(300.0, title="B", offsets=[off(160.0)]))
-    eng.add_probe(probe(390.0, title="B", offsets=[off(250.0)]))
-    # P = 150 inside (75, 315): expect verify at P + verify_lead with refine window.
+    eng.add_probe(probe(100.0, title="A"))  # mid 115
+    eng.add_probe(probe(160.0, title="B", offsets=[off(20.0)]))  # mid 175, implies 150
+    eng.add_probe(probe(400.0, title="B", offsets=[off(260.0)]))  # corroborates 150
+    # P = 150 inside (115, 175). That interval is 60s wide -- under the stride,
+    # so it is the boundary's turn rather than coverage's (a wider one would
+    # still be probed for a hidden track first; see _needs_coverage).
     plan = eng.next_probe()
     assert plan.purpose == "refine"
-    assert abs(plan.t - (150.0 + eng.cfg.verify_lead)) < 0.01
+    # The contract is on the audio Shazam hears, not on the window: the
+    # fingerprinted excerpt must start verify_lead after P.
+    excerpt_start = plan.t + eng._fingerprint_lead(plan.window)
+    assert abs(excerpt_start - (150.0 + eng.cfg.verify_lead)) < 0.01
     assert plan.window == eng.cfg.refine_window
 
 

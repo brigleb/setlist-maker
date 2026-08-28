@@ -65,7 +65,13 @@ class EngineConfig:
     offset_tolerance: float = 4.0  # max spread among a track's T-O estimates
     timeskew_max: float = 0.02  # beyond this the playback was tempo-shifted
     min_corroboration: int = 2  # probes needed before offsets are trusted
-    verify_lead: float = 2.0  # verification probe starts this far after P
+    # How far after P the verification probe's *fingerprinted audio* starts
+    # (not its window -- see `_fingerprint_lead`). The excerpt is
+    # `fingerprint_segment` long and Shazam names whichever track dominates it,
+    # so a cut-in is only missed when it is under `verify_lead + segment/2`;
+    # at 0.0 that bound is exactly `precision`, which is what keeps a mistaken
+    # prediction inside the boundary target instead of 3s past it.
+    verify_lead: float = 0.0
     max_refines_per_gap: int = 12  # thrash cap between two coverage probes
     phantom_min: float = 20.0  # min resolved extent for a 1-probe track
     singleton_confidence_keep: float = 0.6
@@ -179,7 +185,7 @@ class BoundaryEngine:
             and identity == enclosing[0].identity
         ):
             p_start = self._trusted_start(enclosing[1].identity)
-            if p_start is not None and probe.t >= p_start - 0.5:
+            if p_start is not None and self._excerpt_start(probe) >= p_start - 0.5:
                 events.append(
                     {
                         "type": "cut_in_detected",
@@ -272,6 +278,16 @@ class BoundaryEngine:
         return None
 
     # ---- offset prediction ----------------------------------------------
+    def _fingerprint_lead(self, window: float) -> float:
+        """How far into a probe window the audio Shazam actually hears begins.
+
+        Below the segment length the whole window is fingerprinted, so none."""
+        return max(0.0, (window - self.cfg.fingerprint_segment) / 2.0)
+
+    def _excerpt_start(self, probe: Probe) -> float:
+        """Where the fingerprinted audio starts, in recording time."""
+        return probe.t + self._fingerprint_lead(probe.window)
+
     def _probe_start_estimate(self, probe: Probe) -> float | None:
         """This probe's implied track start. A *lower bound*: a track the DJ cut
         into mid-song implies a start earlier than the real boundary, which is
@@ -291,8 +307,7 @@ class BoundaryEngine:
         """
         if not probe.offsets:
             return None
-        # Below the segment length the whole window is fingerprinted, so no lead.
-        lead = max(0.0, (probe.window - self.cfg.fingerprint_segment) / 2.0)
+        lead = self._fingerprint_lead(probe.window)
         cands = [
             probe.t + lead - m["offset"]
             for m in probe.offsets
@@ -318,8 +333,11 @@ class BoundaryEngine:
         """The accepted boundary P for an A..B interval, or None.
 
         Pure predicate over the probe set: trusted P inside the interval, and
-        some B probe *started* within [P - 0.5, P + precision] -- i.e. B was
-        confirmed playing just after its predicted start. The verification
+        some B probe whose *fingerprinted audio* began within
+        [P - 0.5, P + precision] -- i.e. B was confirmed playing just after its
+        predicted start. Measured from the excerpt rather than the window
+        because those differ by 10s for a coverage probe, which would otherwise
+        let one vouch for a boundary it never listened to. The verification
         probe the scheduler places at P + verify_lead satisfies this when it
         answers B; a cut-in (probe answers A) never can, because that probe's
         evidence becomes the interval's new left edge, pushing P outside."""
@@ -330,7 +348,10 @@ class BoundaryEngine:
         if p_start is None or not (left.mid < p_start < right.mid):
             return None
         for p, ident in zip(self.probes, self._identity_by_index):
-            if ident == key and p_start - 0.5 <= p.t <= p_start + self.cfg.precision:
+            if (
+                ident == key
+                and p_start - 0.5 <= self._excerpt_start(p) <= p_start + self.cfg.precision
+            ):
                 return p_start
         return None
 
@@ -354,7 +375,7 @@ class BoundaryEngine:
             ratio = (right.mid - left.mid) / self._target(left, right)
             if ratio <= 1.0:
                 continue
-            if self._is_boundary(left, right):
+            if self._is_boundary(left, right) and not self._needs_coverage(left, right):
                 if self._resolved_by_prediction(left, right) is not None:
                     continue
                 if self._capped(left, right):
@@ -369,17 +390,25 @@ class BoundaryEngine:
     def _plan_for(self, left: Evidence, right: Evidence) -> ProbePlan | None:
         cfg = self.cfg
         width = right.mid - left.mid
-        if self._is_boundary(left, right):
+        if self._needs_coverage(left, right):
+            # Too wide to characterise, whatever its endpoints claim.
+            window, purpose = cfg.coverage_window, "coverage"
+            mid = self._grid_mid(left, right)
+        elif self._is_boundary(left, right):
             p_start = self._trusted_start(right.identity)
             if p_start is not None and left.mid < p_start < right.mid:
-                t = p_start + cfg.verify_lead
-                if t + cfg.refine_window / 2.0 < right.mid - 0.25 and not self._near_existing(t):
+                # Offset the window so the *fingerprinted* excerpt lands where
+                # the verification wants it, then clamp: an early P could
+                # otherwise plan a negative start, and extract_window would
+                # quietly hand back different audio than the probe records.
+                t = p_start + cfg.verify_lead - self._fingerprint_lead(cfg.refine_window)
+                t = min(max(t, 0.0), max(0.0, self.duration - cfg.refine_window))
+                if t + cfg.refine_window / 2.0 < right.mid - 0.25 and not self._near_existing(
+                    t, cfg.refine_window
+                ):
                     return ProbePlan(t=t, window=cfg.refine_window, purpose="refine")
             window, purpose = cfg.refine_window, "refine"
             mid = (left.mid + right.mid) / 2.0
-        elif self._target(left, right) == cfg.stride:
-            window, purpose = cfg.coverage_window, "coverage"
-            mid = self._grid_mid(left, right)
         else:  # None-adjacent: hunting identity, not a boundary
             window = cfg.coverage_window if width > cfg.coverage_window * 1.5 else cfg.refine_window
             purpose = "coverage"
@@ -389,7 +418,7 @@ class BoundaryEngine:
         t = min(max(t, 0.0), max(0.0, self.duration - window))
         if not (left.mid + 0.25 < t + window / 2.0 < right.mid - 0.25):
             return None  # unprobeable sliver (edge clamping pushed us out)
-        if self._near_existing(t):
+        if self._near_existing(t, window):
             return None
         return ProbePlan(t=t, window=window, purpose=purpose)
 
@@ -411,8 +440,18 @@ class BoundaryEngine:
             return mid
         return g
 
-    def _near_existing(self, t: float) -> bool:
-        return any(abs(p.t - t) < 0.5 for p in self.probes)
+    def _near_existing(self, t: float, window: float) -> bool:
+        """Would this probe fingerprint audio some earlier probe already heard?
+
+        Compares the *excerpt* Shazam actually listens to, not the window
+        start. Those differ by 9s between a 30s coverage probe and a 12s refine
+        probe, so a window-start test gets it wrong in both directions: it
+        blocks a refine probe that would hear entirely new audio -- measured,
+        this stalled bisection at an 18s interval and left a 7.4s boundary
+        error -- while permitting two probes that would hear the same ten
+        seconds."""
+        start = t + self._fingerprint_lead(window)
+        return any(abs(self._excerpt_start(p) - start) < 0.5 for p in self.probes)
 
     def _coverage_gap(self, left: Evidence, right: Evidence) -> tuple[float, float]:
         """The span between the nearest coverage/virtual evidence either side."""
@@ -433,8 +472,21 @@ class BoundaryEngine:
         n = sum(1 for p in self.probes if p.purpose == "refine" and lo <= p.mid <= hi)
         return n >= self.cfg.max_refines_per_gap
 
+    def _needs_coverage(self, left: Evidence, right: Evidence) -> bool:
+        """Wider than the stride, so a whole track could still be hiding here.
+
+        Checked ahead of every boundary consideration: a predicted boundary
+        retires its interval only once the interval is too narrow to conceal a
+        track. Prediction buys *precision*, never permission to skip coverage.
+        Without this the guarantee the spec calls unconditional -- never miss a
+        track >= 2 minutes, "from splitting geometry, not from offset trust" --
+        silently becomes conditional on offset trust for boundary intervals:
+        measured on the synthetic 4-hour set, five whole tracks vanished into
+        190s+ boundary intervals that prediction had retired unprobed."""
+        return right.mid - left.mid > self.cfg.stride
+
     def _status(self, left: Evidence, right: Evidence) -> str:
-        if self._is_boundary(left, right):
+        if self._is_boundary(left, right) and not self._needs_coverage(left, right):
             if self._resolved_by_prediction(left, right) is not None:
                 return "resolved"
             if self._capped(left, right):
@@ -474,14 +526,14 @@ class BoundaryEngine:
         total = 0
         for left, right, ratio in self._active_pairs():
             width = right.mid - left.mid
-            if self._is_boundary(left, right):
+            if self._needs_coverage(left, right):
+                total += max(1, math.ceil(width / self.cfg.stride) - 1)
+            elif self._is_boundary(left, right):
                 p_start = self._trusted_start(right.identity)
                 if p_start is not None and left.mid < p_start < right.mid:
                     total += 1
                 else:
                     total += max(1, math.ceil(math.log2(ratio)))
-            elif self._target(left, right) == self.cfg.stride:
-                total += max(1, math.ceil(width / self.cfg.stride) - 1)
             else:
                 total += max(1, math.ceil(math.log2(ratio)))
         return total
