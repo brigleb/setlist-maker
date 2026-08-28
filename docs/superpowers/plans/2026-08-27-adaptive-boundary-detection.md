@@ -46,7 +46,7 @@ Design deviations locked in here (record in spec errata in Task 15): the per-bou
 - Consumes: existing `identify_sample_with_retry(shazam, segment, temp_dir, max_retries=..., on_backoff=...)`.
 - Produces: `identify_sample_with_retry(..., include_offsets: bool = False)` — when True, the returned info dict gains `"offsets": [{"offset": float, "timeskew": float|None}, ...]` built from the raw result's top-level `matches` list (same source `estimate_confidence` reads). When False (default), the return value is byte-identical to today.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """Offset capture on identify_sample_with_retry (adaptive engine's raw material)."""
@@ -100,12 +100,12 @@ def test_matches_without_offset_are_skipped(tmp_path):
     assert info["offsets"] == []
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_shazam_offsets.py -v`
 Expected: FAIL with `TypeError: ... unexpected keyword argument 'include_offsets'`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `identify_sample_with_retry`, add the parameter `include_offsets: bool = False` (after `max_retries`, before `on_backoff`). In the success branch (where the info dict is built and returned), change to:
 
@@ -132,11 +132,11 @@ In `identify_sample_with_retry`, add the parameter `include_offsets: bool = Fals
                 return info
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_shazam_offsets.py -v` — Expected: 3 PASS. Then `pytest` (full suite) — expected: no regressions.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/shazam_client.py tests/test_shazam_offsets.py
@@ -154,7 +154,7 @@ git commit -m "feat(shazam): optionally return match offsets for boundary predic
 **Interfaces:**
 - Produces: `extract_window(audio: AudioSegment, start_seconds: float, window_seconds: float) -> AudioSegment` — the [start, start+window) slice, clamped to the audio's bounds.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """extract_window: arbitrary-position slicing for adaptive probes."""
@@ -182,12 +182,12 @@ def test_clamps_negative_start():
     assert len(seg) == 12_000
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_audio_extract_window.py -v`
 Expected: FAIL with `ImportError: cannot import name 'extract_window'`
 
-- [ ] **Step 3: Implement** (place after `slice_audio` in `audio.py`)
+- [x] **Step 3: Implement** (place after `slice_audio` in `audio.py`)
 
 ```python
 def extract_window(
@@ -204,9 +204,9 @@ def extract_window(
     return audio[start_ms:end_ms]
 ```
 
-- [ ] **Step 4: Run tests** — `pytest tests/test_audio_extract_window.py -v` → 3 PASS; full `pytest` green.
+- [x] **Step 4: Run tests** — `pytest tests/test_audio_extract_window.py -v` → 3 PASS; full `pytest` green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/audio.py tests/test_audio_extract_window.py
@@ -224,7 +224,7 @@ git commit -m "feat(audio): add extract_window for arbitrary-position probes"
 - Consumes: `load_audio`, `extract_window` (Task 2), `identify_sample_with_retry(include_offsets=True)` (Task 1).
 - Produces: a throwaway CLI report; findings go into the spec's Errata section and may adjust `EngineConfig.min_corroboration` (Task 4) from its safe default of 2.
 
-- [ ] **Step 1: Write the script** (no test — it is a manual, network-using probe tool; the tests/ network guard does not apply because it lives outside pytest)
+- [x] **Step 1: Write the script** (no test — it is a manual, network-using probe tool; the tests/ network guard does not apply because it lives outside pytest)
 
 ```python
 #!/usr/bin/env python3
@@ -298,11 +298,11 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-- [ ] **Step 2: Run it if a real recording is at hand.** Ask the human partner for a recording path (any file previously processed by setlist-maker is ideal — its tracklist is ground truth). If none is available in this environment, **skip the run**, keep `min_corroboration = 2` (partial trust, the safe default), and add an Errata line: "Spike deferred — shipping partial-trust default (`min_corroboration=2`); rerun `scripts/offset_spike.py` on a real set before promoting to 1."
+- [x] **Step 2: Run it if a real recording is at hand.** Ask the human partner for a recording path (any file previously processed by setlist-maker is ideal — its tracklist is ground truth). If none is available in this environment, **skip the run**, keep `min_corroboration = 2` (partial trust, the safe default), and add an Errata line: "Spike deferred — shipping partial-trust default (`min_corroboration=2`); rerun `scripts/offset_spike.py` on a real set before promoting to 1."
 
-- [ ] **Step 3: Record findings** in the spec's Errata section (offset sign, T−O consistency spread, cut behavior, 12s window match rate) and adjust the Task 4 default for `min_corroboration` if the evidence supports full trust (1) or demands distrust (raise `offset_tolerance`, keep 2).
+- [x] **Step 3: Record findings** in the spec's Errata section (offset sign, T−O consistency spread, cut behavior, 12s window match rate) and adjust the Task 4 default for `min_corroboration` if the evidence supports full trust (1) or demands distrust (raise `offset_tolerance`, keep 2).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/offset_spike.py docs/superpowers/specs/2026-08-27-adaptive-boundary-detection-design.md
@@ -328,7 +328,7 @@ git commit -m "feat(spike): empirical Shazam offset validation script + errata"
   - `START`, `END` sentinels.
   - `BoundaryEngine(duration: float, config: EngineConfig | None = None)` with `.probes`, `.cfg`, `.duration`, `.add_probe(probe) -> list[dict]` (returns `[]` until Task 8), `._points()`, `._pairs()`, `._target(left, right) -> float`, `._is_boundary(left, right) -> bool`, `._enclosing(mid) -> tuple[Evidence, Evidence] | None`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """BoundaryEngine core: identity clustering, evidence ordering, interval targets."""
@@ -410,11 +410,11 @@ def test_cluster_meta_keeps_highest_confidence_variant():
     assert eng._cluster_meta[key]["title"] == "One More Time"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_boundary_engine.py -v` — Expected: FAIL with `ModuleNotFoundError: No module named 'setlist_maker.boundary'`
 
-- [ ] **Step 3: Implement `setlist_maker/boundary.py`**
+- [x] **Step 3: Implement `setlist_maker/boundary.py`**
 
 ```python
 """Adaptive boundary detection engine.
@@ -580,9 +580,9 @@ class BoundaryEngine:
         return None
 ```
 
-- [ ] **Step 4: Run tests** — `pytest tests/test_boundary_engine.py -v` → all PASS; full `pytest` green; `ruff check .` clean.
+- [x] **Step 4: Run tests** — `pytest tests/test_boundary_engine.py -v` → all PASS; full `pytest` green; `ruff check .` clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/boundary.py tests/test_boundary_engine.py
@@ -601,7 +601,7 @@ git commit -m "feat(boundary): core probe fold, identity clustering, interval mo
 - Consumes: Task 4's model.
 - Produces: `BoundaryEngine._probe_start_estimate(probe) -> float | None`, `._trusted_start(key) -> float | None`, `._resolved_by_prediction(left, right) -> float | None`. Semantics per spec: `T − O` is a **lower bound** on the track's start; trusted only with `min_corroboration` estimates agreeing within `offset_tolerance` and small `timeskew`; an `A…B` interval is resolved when trusted `P` lies inside it **and** some B-probe *started* within `[P − 0.5, P + precision]` (the after-P verification, a pure predicate over the probe set — no plan memory).
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/test_boundary_engine.py`)
+- [x] **Step 1: Write the failing tests** (append to `tests/test_boundary_engine.py`)
 
 ```python
 def off(o, skew=0.0):
@@ -652,9 +652,9 @@ def test_resolved_by_prediction_requires_confirming_probe_after_p():
     assert resolved is not None and abs(resolved - 150.0) < 1.0
 ```
 
-- [ ] **Step 2: Run** — `pytest tests/test_boundary_engine.py -v` — Expected: new tests FAIL with `AttributeError: ... has no attribute '_probe_start_estimate'`
+- [x] **Step 2: Run** — `pytest tests/test_boundary_engine.py -v` — Expected: new tests FAIL with `AttributeError: ... has no attribute '_probe_start_estimate'`
 
-- [ ] **Step 3: Implement** (add to `BoundaryEngine`; add `from statistics import median` to imports)
+- [x] **Step 3: Implement** (add to `BoundaryEngine`; add `from statistics import median` to imports)
 
 ```python
     # ---- offset prediction ----------------------------------------------
@@ -707,9 +707,9 @@ def test_resolved_by_prediction_requires_confirming_probe_after_p():
         return None
 ```
 
-- [ ] **Step 4: Run tests** — all PASS; full suite green; ruff clean.
+- [x] **Step 4: Run tests** — all PASS; full suite green; ruff clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/boundary.py tests/test_boundary_engine.py
@@ -736,7 +736,7 @@ Scheduler rules (from spec, plus locked deviations):
 - Other intervals (None-adjacent) bisect at the plain midpoint with `coverage_window` if the interval is wide (> 1.5 × coverage_window) else `refine_window`, purpose `"coverage"` (they hunt identity, not a boundary).
 - Bootstrap: with zero real evidence and `duration > coverage_window`, always plan one coverage probe centered on the file, regardless of ratio (a 60s file must still get one probe).
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/test_boundary_engine.py`)
+- [x] **Step 1: Write the failing tests** (append to `tests/test_boundary_engine.py`)
 
 ```python
 def drive(eng, answer, max_probes=500):
@@ -828,9 +828,9 @@ def test_converges_even_when_oracle_is_noisy_at_boundary():
     assert eng.next_probe() is None
 ```
 
-- [ ] **Step 2: Run** — Expected: FAIL with `AttributeError: ... no attribute 'next_probe'`
+- [x] **Step 2: Run** — Expected: FAIL with `AttributeError: ... no attribute 'next_probe'`
 
-- [ ] **Step 3: Implement** (add to `BoundaryEngine`; add `import math` to imports)
+- [x] **Step 3: Implement** (add to `BoundaryEngine`; add `import math` to imports)
 
 ```python
     # ---- scheduling ------------------------------------------------------
@@ -985,9 +985,9 @@ def test_converges_even_when_oracle_is_noisy_at_boundary():
         return total
 ```
 
-- [ ] **Step 4: Run tests** — all PASS; full suite green; ruff clean.
+- [x] **Step 4: Run tests** — all PASS; full suite green; ruff clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/boundary.py tests/test_boundary_engine.py
@@ -1011,7 +1011,7 @@ git commit -m "feat(boundary): anytime priority scheduler with verification and 
   - After drops, merge adjacent equal-identity runs (no new segment); a boundary across a dropped region sits at the dropped span's center, `"coarse"`.
   - No evidence at all → one unidentified `"coarse"` segment covering the file.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """segments(): folding evidence into a tracklist, with phantom handling."""
@@ -1128,9 +1128,9 @@ def test_boundary_stats_counts_pairs_and_resolution():
     assert found == 2 and at_target == 0
 ```
 
-- [ ] **Step 2: Run** — `pytest tests/test_boundary_segments.py -v` — Expected: FAIL with `AttributeError: ... no attribute 'segments'`
+- [x] **Step 2: Run** — `pytest tests/test_boundary_segments.py -v` — Expected: FAIL with `AttributeError: ... no attribute 'segments'`
 
-- [ ] **Step 3: Implement** (add to `BoundaryEngine`)
+- [x] **Step 3: Implement** (add to `BoundaryEngine`)
 
 ```python
     # ---- finalization ----------------------------------------------------
@@ -1231,9 +1231,9 @@ def test_boundary_stats_counts_pairs_and_resolution():
         return found, at_target
 ```
 
-- [ ] **Step 4: Run tests** — all PASS; full suite green; ruff clean.
+- [x] **Step 4: Run tests** — all PASS; full suite green; ruff clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/boundary.py tests/test_boundary_segments.py
@@ -1252,7 +1252,7 @@ git commit -m "feat(boundary): segments fold with phantom filtering and boundary
 - Consumes: Tasks 4–7.
 - Produces: `add_probe()` now returns a list of event dicts, each with a `"type"` key: always one `probe_result`; plus, when applicable, `track_discovered`, `cut_in_detected`, `interval_split`, `boundary_predicted`, `boundary_confirmed`, `interval_retired`. (`phantom_dropped` comes from `segments()`, Task 7; `budget_exhausted` / `finalized` are driver-emitted, Task 12.) Event payloads carry human-readable fields (`artist`, `title`, times rounded to 0.1s) — the phase-2 visualizer's raw material.
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/test_boundary_engine.py`)
+- [x] **Step 1: Write the failing tests** (append to `tests/test_boundary_engine.py`)
 
 ```python
 def _types(events):
@@ -1306,9 +1306,9 @@ def test_cut_in_detected_when_verify_answers_previous_track():
     assert "cut_in_detected" in _types(evs)
 ```
 
-- [ ] **Step 2: Run** — Expected: FAIL (`add_probe` currently returns `[]`).
+- [x] **Step 2: Run** — Expected: FAIL (`add_probe` currently returns `[]`).
 
-- [ ] **Step 3: Implement** — replace `add_probe` with:
+- [x] **Step 3: Implement** — replace `add_probe` with:
 
 ```python
     def add_probe(self, probe: Probe) -> list[dict]:
@@ -1408,9 +1408,9 @@ def test_cut_in_detected_when_verify_answers_previous_track():
         return events
 ```
 
-- [ ] **Step 4: Run tests** — all boundary tests PASS (earlier tests ignore the return value, so they stay green); full suite green; ruff clean.
+- [x] **Step 4: Run tests** — all boundary tests PASS (earlier tests ignore the return value, so they stay green); full suite green; ruff clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/boundary.py tests/test_boundary_engine.py
@@ -1429,7 +1429,7 @@ git commit -m "feat(boundary): emit structured events from the probe fold"
 - Consumes: the complete engine (Tasks 4–8).
 - Produces: `SyntheticTrack(artist, title, start, cut_in=0.0, confidence=0.9)`, `SyntheticSet(duration, tracks, gaps=(), seed=0, offset_jitter=0.0, offset_dropout=0.0, edge_blur=True)` with `.answer(t, window) -> tuple[dict | None, list[dict] | None]` and `.boundaries() -> list[float]`, and `run_engine(engine, oracle, max_probes=2000) -> int`. Used again by the driver tests (Task 12).
 
-- [ ] **Step 1: Write the oracle helper** (`tests/boundary_oracle.py`)
+- [x] **Step 1: Write the oracle helper** (`tests/boundary_oracle.py`)
 
 ```python
 """Synthetic recordings and a fake Shazam for engine and driver tests.
@@ -1530,7 +1530,7 @@ def run_engine(engine, oracle: SyntheticSet, max_probes: int = 2000) -> int:
     return n
 ```
 
-- [ ] **Step 2: Write the failing property tests** (`tests/test_boundary_properties.py`)
+- [x] **Step 2: Write the failing property tests** (`tests/test_boundary_properties.py`)
 
 ```python
 """Whole-engine properties: correctness, cost, anytime behavior, measured
@@ -1653,11 +1653,11 @@ def test_gap_heavy_set_converges_with_unidentified_segments():
     assert n < 200
 ```
 
-- [ ] **Step 3: Run** — `pytest tests/test_boundary_properties.py -v`. These exercise existing code, so failures here are **engine bugs or default-tuning findings, not missing features**. Debug the engine until green (use `superpowers:systematic-debugging` if anything is surprising). If only the measurement gate fails, tune `EngineConfig` (e.g. `refine_window` up, or `precision` to 6–8s), re-run, and note the adjustment for the spec Errata (Task 15).
+- [x] **Step 3: Run** — `pytest tests/test_boundary_properties.py -v`. These exercise existing code, so failures here are **engine bugs or default-tuning findings, not missing features**. Debug the engine until green (use `superpowers:systematic-debugging` if anything is surprising). If only the measurement gate fails, tune `EngineConfig` (e.g. `refine_window` up, or `precision` to 6–8s), re-run, and note the adjustment for the spec Errata (Task 15).
 
-- [ ] **Step 4: Full suite + ruff green.**
+- [x] **Step 4: Full suite + ruff green.**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/boundary_oracle.py tests/test_boundary_properties.py
@@ -1677,7 +1677,7 @@ git commit -m "test(boundary): synthetic oracle, property suite, precision measu
 - Consumes: `Probe` (Task 4), `load_progress` from `identify.py`.
 - Produces (in `setlist_maker/adaptive.py`): `PROGRESS_VERSION = 2`, `save_progress_v2(duration: float, probes: list[Probe], filepath: Path) -> None`, `load_probes(filepath: Path) -> tuple[list[Probe], float | None]` (handles v2 dicts AND legacy `[timestamp, info]` lists — the legacy format already carries timestamps, only its resume semantics were positional). In `identify.py`: `process_single_file` refuses a v2 progress file with a clear message instead of crashing on a dict.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """Progress v2: fold-ready persistence with legacy sequential conversion."""
@@ -1749,9 +1749,9 @@ def test_sequential_refuses_v2_progress(tmp_path, capsys):
     assert "adaptive" in capsys.readouterr().out
 ```
 
-- [ ] **Step 2: Run** — Expected: FAIL with `ModuleNotFoundError: No module named 'setlist_maker.adaptive'`
+- [x] **Step 2: Run** — Expected: FAIL with `ModuleNotFoundError: No module named 'setlist_maker.adaptive'`
 
-- [ ] **Step 3: Implement** — create `setlist_maker/adaptive.py`:
+- [x] **Step 3: Implement** — create `setlist_maker/adaptive.py`:
 
 ```python
 """Adaptive identify driver: everything impure around the pure engine.
@@ -1826,9 +1826,9 @@ In `identify.py`'s `process_single_file`, immediately after `raw_results = load_
             return None
 ```
 
-- [ ] **Step 4: Run tests** — all PASS; full suite green; ruff clean.
+- [x] **Step 4: Run tests** — all PASS; full suite green; ruff clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/adaptive.py setlist_maker/identify.py tests/test_adaptive_progress.py
@@ -1847,7 +1847,7 @@ git commit -m "feat(adaptive): probe-list progress format with legacy conversion
 - Consumes: existing `results_to_tracklist`, `process_single_file` tail (summary + md/json writing).
 - Produces: `results_to_tracklist(raw_results, source_filename, corrections_db=None, dedup_config=None, *, deduplicate: bool = True)` — when False, corrections still apply but `deduplicate_tracklist` is skipped (the adaptive engine's segments are already one-entry-per-track; running the singleton filter over them would drop *every* track, since each appears exactly once). And `finalize_outputs(tracklist: Tracklist, output_path: Path, summary: bool) -> None` — the extracted tail of `process_single_file` (summary generation + markdown + JSON sidecar + prints), shared verbatim by both drivers.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """Shared identify helpers used by both the sequential and adaptive drivers."""
@@ -1888,9 +1888,9 @@ def test_finalize_outputs_writes_markdown_and_sidecar(tmp_path):
     assert isinstance(sidecar, list)  # the bare-list contract (see CLAUDE.md)
 ```
 
-- [ ] **Step 2: Run** — Expected: FAIL (`unexpected keyword argument 'deduplicate'`).
+- [x] **Step 2: Run** — Expected: FAIL (`unexpected keyword argument 'deduplicate'`).
 
-- [ ] **Step 3: Implement.** In `results_to_tracklist`, change the signature to add the keyword-only `deduplicate: bool = True` and replace the dedup call:
+- [x] **Step 3: Implement.** In `results_to_tracklist`, change the signature to add the keyword-only `deduplicate: bool = True` and replace the dedup call:
 
 ```python
     deduped = deduplicate_tracklist(raw_results, dedup_config) if deduplicate else raw_results
@@ -1924,9 +1924,9 @@ def finalize_outputs(tracklist: Tracklist, output_path: Path, summary: bool) -> 
 
 and have `process_single_file` call `finalize_outputs(tracklist, output_path, summary)` in place of the extracted lines.
 
-- [ ] **Step 4: Run tests** — new tests PASS **and the existing identify tests stay green** (the extraction is behavior-preserving); ruff clean.
+- [x] **Step 4: Run tests** — new tests PASS **and the existing identify tests stay green** (the extraction is behavior-preserving); ruff clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/identify.py tests/test_identify_shared.py
@@ -1945,7 +1945,7 @@ git commit -m "refactor(identify): share output finalization; optional dedup byp
 - Consumes: engine (Tasks 4–8), `extract_window` (Task 2), `identify_sample_with_retry(include_offsets=True)` (Task 1), `save_progress_v2`/`load_probes` (Task 10), `results_to_tracklist(deduplicate=False)` + `finalize_outputs` (Task 11), `live_display` (existing; used disabled until Task 13).
 - Produces: `process_single_file_adaptive(audio_path, output_dir, delay_seconds, engine_config=None, resume=True, corrections_db=None, summary=True, allow_partial=False, panel=True, budget_seconds=None) -> tuple[Tracklist, Path] | None`; `EventLog` (JSONL, append mode, context manager, `.write(event)`); `format_probe_line(t, purpose, track_info, *, width=80, color=False) -> str`; `_sigint_flag()` context manager with `.stop` attribute (first Ctrl-C sets it, second raises `KeyboardInterrupt`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """End-to-end adaptive driver against the synthetic oracle (no network)."""
@@ -2091,9 +2091,9 @@ def test_format_probe_line_shapes():
     assert "not identified" in miss
 ```
 
-- [ ] **Step 2: Run** — Expected: FAIL with ImportError (`EventLog` etc. not defined).
+- [x] **Step 2: Run** — Expected: FAIL with ImportError (`EventLog` etc. not defined).
 
-- [ ] **Step 3: Implement** — extend `setlist_maker/adaptive.py` (new imports at top: `asyncio`, `contextmanager` from `contextlib`, `shutil`, `signal`, `sys`, `tempfile`, `time`, `Shazam` from `shazamio`, plus `BoundaryEngine`, `EngineConfig` from `.boundary`; `extract_window`, `format_timestamp`, `load_audio` from `.audio`; `CorrectionsDB`, `Tracklist` from `.editor`; `finalize_outputs`, `results_to_tracklist`, `tracklist_output_path` from `.identify`; `identify_sample_with_retry` from `.shazam_client`; `live_display` from `.progress`):
+- [x] **Step 3: Implement** — extend `setlist_maker/adaptive.py` (new imports at top: `asyncio`, `contextmanager` from `contextlib`, `shutil`, `signal`, `sys`, `tempfile`, `time`, `Shazam` from `shazamio`, plus `BoundaryEngine`, `EngineConfig` from `.boundary`; `extract_window`, `format_timestamp`, `load_audio` from `.audio`; `CorrectionsDB`, `Tracklist` from `.editor`; `finalize_outputs`, `results_to_tracklist`, `tracklist_output_path` from `.identify`; `identify_sample_with_retry` from `.shazam_client`; `live_display` from `.progress`):
 
 ```python
 _ANSI_GREEN = "\033[32m"
@@ -2278,9 +2278,9 @@ async def process_single_file_adaptive(
 
 (`Probe` is already imported at module top from Task 10.)
 
-- [ ] **Step 4: Run tests** — `pytest tests/test_adaptive_driver.py -v` → all PASS; full suite green; ruff clean.
+- [x] **Step 4: Run tests** — `pytest tests/test_adaptive_driver.py -v` → all PASS; full suite green; ruff clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/adaptive.py tests/test_adaptive_driver.py
@@ -2333,7 +2333,7 @@ Panel rows (same box, title and `_FRAME` colours as the sequential panel, height
 3. phase row: `{spinner} probing 1:23:45 (refine)…` / cooldown countdown / backoff countdown-then-spinner (copy `_phase_row`'s branch shapes, substituting the probe wording) + `elapsed` rail.
 4. stats: `"{tracks_found} tracks · {boundaries_at_target}/{boundaries_found} boundaries sharp · widest ±{widest_gap/2:.0f}s"` + rail `ETA {format_duration(est_probes_remaining * seconds_per_probe)}` where `seconds_per_probe` mirrors `RunState.seconds_per_sample` (elapsed over probes this run, nominal `delay+3` before settling).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """Adaptive panel: pure rendering, fixed height, clock-driven motion."""
@@ -2393,15 +2393,15 @@ def test_narrow_terminal_never_wraps():
         assert len(line) <= 46
 ```
 
-- [ ] **Step 2: Run** — Expected: FAIL with ImportError (`AdaptiveRunState`).
+- [x] **Step 2: Run** — Expected: FAIL with ImportError (`AdaptiveRunState`).
 
-- [ ] **Step 3: Implement.** In `progress.py`: add `AdaptiveRunState` (fields above, plus `__post_init__`, `begin_probe(plan)` setting `current_t/current_purpose/phase="identifying"/phase_deadline=None/retry=0`, `record(track_info)` setting `current_result` when truthy and bumping `probes_done`/`hits`, `update_from_engine(engine)` filling `tracks_found` (identified segments), `boundaries_found`/`boundaries_at_target` (from `boundary_stats()`), `widest_gap` (`max_boundary_width`), `est_probes_remaining`, and the same `begin_cooldown`/`begin_backoff`/`finish`/`elapsed`/`phase_remaining`/`tick`/`seconds_per_sample`-style derived properties as `RunState` — a deliberate small twin, commented as such). Add `render_adaptive_panel(state, width)` reusing `_row`/`_bar`/`_meter`/`_one_line`/`_position`-style code with the four rows specced above (write an adaptive `_position` variant reading `current_t`; reuse `_FRAME`, adding no new phases). Change `ProgressPanel.__init__(self, state, render=render_panel)` storing `self._render`, and `__rich_console__` yielding `self._render(self.state, console.width)`; change `live_display(state, enabled, render=render_panel)` passing it through. Sequential call sites pass nothing → behavior unchanged.
+- [x] **Step 3: Implement.** In `progress.py`: add `AdaptiveRunState` (fields above, plus `__post_init__`, `begin_probe(plan)` setting `current_t/current_purpose/phase="identifying"/phase_deadline=None/retry=0`, `record(track_info)` setting `current_result` when truthy and bumping `probes_done`/`hits`, `update_from_engine(engine)` filling `tracks_found` (identified segments), `boundaries_found`/`boundaries_at_target` (from `boundary_stats()`), `widest_gap` (`max_boundary_width`), `est_probes_remaining`, and the same `begin_cooldown`/`begin_backoff`/`finish`/`elapsed`/`phase_remaining`/`tick`/`seconds_per_sample`-style derived properties as `RunState` — a deliberate small twin, commented as such). Add `render_adaptive_panel(state, width)` reusing `_row`/`_bar`/`_meter`/`_one_line`/`_position`-style code with the four rows specced above (write an adaptive `_position` variant reading `current_t`; reuse `_FRAME`, adding no new phases). Change `ProgressPanel.__init__(self, state, render=render_panel)` storing `self._render`, and `__rich_console__` yielding `self._render(self.state, console.width)`; change `live_display(state, enabled, render=render_panel)` passing it through. Sequential call sites pass nothing → behavior unchanged.
 
 In `adaptive.py`: build the state before the loop, replace `live_display(None, False)` with `live_display(state, live, render=render_adaptive_panel)` (where `live = color and panel`), call `state.begin_probe(plan)` before each identify, define `announce_backoff(wait_time, attempt)` exactly as `process_single_file` does (calling `state.begin_backoff` + `display.log`) and pass `on_backoff=announce_backoff`; after `add_probe` call `state.record(info)`, `state.update_from_engine(engine)`, then `state.begin_cooldown(delay_seconds)` when another probe is coming; `state.finish()` after the loop.
 
-- [ ] **Step 4: Run tests** — panel tests PASS; driver tests from Task 12 still PASS (they run with `panel=True` but a non-tty stdout, so `live` stays False); full suite green; ruff clean.
+- [x] **Step 4: Run tests** — panel tests PASS; driver tests from Task 12 still PASS (they run with `panel=True` but a non-tty stdout, so `live` stays False); full suite green; ruff clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/progress.py setlist_maker/adaptive.py tests/test_adaptive_panel.py
@@ -2420,7 +2420,7 @@ git commit -m "feat(progress): adaptive run panel with boundary stats and ETA"
 - Consumes: `process_single_file_adaptive`, `EngineConfig` (imported in `cli.py` from `setlist_maker.adaptive` / `setlist_maker.boundary`).
 - Produces: `parse_budget(text: str) -> float` (seconds; `"2h"`, `"45m"`, `"90s"`, bare number = minutes; `ValueError` on junk); identify flags `--sequential`, `--precision` (float, default 5.0), `--budget DURATION`, `--stride` (float, default 90.0), `--refine-window` (float, default 12.0, dest `refine_window`); routing in `cmd_identify`; `--no-smoothing` note under adaptive; epilog updates.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """CLI: budget parsing and adaptive-vs-sequential routing."""
@@ -2513,9 +2513,9 @@ def test_bad_precision_fails_fast(tmp_path, monkeypatch):
         cli.cmd_identify(_args(tmp_path, precision=0.0))
 ```
 
-- [ ] **Step 2: Run** — Expected: FAIL with ImportError (`parse_budget`).
+- [x] **Step 2: Run** — Expected: FAIL with ImportError (`parse_budget`).
 
-- [ ] **Step 3: Implement** in `cli.py`:
+- [x] **Step 3: Implement** in `cli.py`:
 
 ```python
 _BUDGET_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([hms]?)\s*$", re.IGNORECASE)
@@ -2569,9 +2569,9 @@ Add imports (`re`; `process_single_file_adaptive` from `setlist_maker.adaptive`;
 
 (`budget_seconds` computed in the validation block, `None` when `--budget` absent.) Update the main epilog: the opening description line ("samples a long recording every 30 seconds" → adaptive boundary hunting, `--sequential` for the old scan) and add the new flags under "identify options" with their defaults, keeping the aligned layout.
 
-- [ ] **Step 4: Run tests** — CLI tests PASS; full suite green; ruff clean. Also smoke the help by hand: `setlist-maker identify -h` renders the new group.
+- [x] **Step 4: Run tests** — CLI tests PASS; full suite green; ruff clean. Also smoke the help by hand: `setlist-maker identify -h` renders the new group.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setlist_maker/cli.py tests/test_cli_adaptive.py
@@ -2586,17 +2586,17 @@ git commit -m "feat(cli): adaptive by default with --sequential, --precision, --
 - Modify: `CLAUDE.md`
 - Modify: `docs/superpowers/specs/2026-08-27-adaptive-boundary-detection-design.md` (Errata)
 
-- [ ] **Step 1: Update `CLAUDE.md`.** Add two module sections after the `identify.py` one, written in the file's house style (mechanism + why, cross-referencing the spec):
+- [x] **Step 1: Update `CLAUDE.md`.** Add two module sections after the `identify.py` one, written in the file's house style (mechanism + why, cross-referencing the spec):
   - `### setlist_maker/boundary.py` — pure adaptive engine: fold over probes, interval model with per-kind targets (`stride`/`precision`/`precision_none`), priority = width/target, offset prediction as a lower bound with after-P verification, grid-snapped coverage, per-coverage-gap thrash cap, phantom rule replacing A-B-A smoothing, `segments()` callable at any prefix (the anytime property). Note replay-determinism as the resume contract.
   - `### setlist_maker/adaptive.py` — the impure driver: progress v2 (probe list; legacy sequential lists convert on load and resume as a dense prefix), `EventLog` JSONL for the phase-2 visualizer, SIGINT finalize, budget, panel wiring.
   - Amend the `identify.py` section: adaptive is the default; `--sequential` keeps the old scan; sequential refuses v2 progress files; `results_to_tracklist(deduplicate=False)` exists because segments are already one-per-track and the singleton filter would drop everything; `finalize_outputs` shared by both drivers.
   - Amend the `progress.py` section: `AdaptiveRunState`/`render_adaptive_panel`, same fixed-height discipline.
 
-- [ ] **Step 2: Update the spec's Errata** with: the per-coverage-gap cap (`max_refines_per_gap = 12`) replacing the per-boundary cap and why; grid-snapped coverage probes; any `EngineConfig` default adjustments forced by the Task 9 measurement gate; Task 3 spike findings (or its deferral note).
+- [x] **Step 2: Update the spec's Errata** with: the per-coverage-gap cap (`max_refines_per_gap = 12`) replacing the per-boundary cap and why; grid-snapped coverage probes; any `EngineConfig` default adjustments forced by the Task 9 measurement gate; Task 3 spike findings (or its deferral note).
 
-- [ ] **Step 3: Full verification** — `pytest` (entire suite), `ruff check .`, `ruff format --check .`. Fix anything found.
+- [x] **Step 3: Full verification** — `pytest` (entire suite), `ruff check .`, `ruff format --check .`. Fix anything found.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add CLAUDE.md docs/superpowers/specs/2026-08-27-adaptive-boundary-detection-design.md
