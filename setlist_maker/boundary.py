@@ -381,3 +381,108 @@ class BoundaryEngine:
             else:
                 total += max(1, math.ceil(math.log2(ratio)))
         return total
+
+    # ---- finalization ----------------------------------------------------
+    def _runs(self) -> list[list[Evidence]]:
+        runs: list[list[Evidence]] = []
+        for ev in self._evidence:
+            if runs and runs[-1][-1].identity == ev.identity:
+                runs[-1].append(ev)
+            else:
+                runs.append([ev])
+        return runs
+
+    def segments(self) -> tuple[list[Segment], list[dict]]:
+        """Fold the evidence into a tracklist. Callable at ANY point -- this is
+        what makes every stopping rule (converged, budget, Ctrl-C) the same
+        code path. Returns (segments, phantom_dropped audit events)."""
+        cfg = self.cfg
+        runs = self._runs()
+        if not runs:
+            return ([Segment(0.0, None, "coarse")] if self.duration > 0 else [], [])
+
+        # Boundary between run i and i+1, with its confidence.
+        bounds: list[tuple[float, str]] = []
+        for a, b in zip(runs, runs[1:]):
+            left, right = a[-1], b[0]
+            p_start = self._resolved_by_prediction(left, right)
+            if p_start is not None:
+                bounds.append((p_start, "resolved"))
+            else:
+                gap = right.mid - left.mid
+                conf = "resolved" if gap <= self._target(left, right) else "coarse"
+                bounds.append(((left.mid + right.mid) / 2.0, conf))
+
+        starts = [0.0] + [b for b, _ in bounds]
+        ends = [b for b, _ in bounds] + [self.duration]
+
+        # Phantom filtering. Confidence read from the run's own probe, not its
+        # cluster -- same reasoning as _smooth_sequence's gate (#7).
+        keep: list[int] = []
+        drops: list[dict] = []
+        for i, run in enumerate(runs):
+            ident = run[0].identity
+            span = ends[i] - starts[i]
+            if ident is None and span < cfg.phantom_min:
+                drops.append(
+                    {
+                        "type": "phantom_dropped",
+                        "kind": "gap",
+                        "start": round(starts[i], 1),
+                        "extent": round(span, 1),
+                    }
+                )
+                continue
+            if ident is not None and len(run) == 1 and span < cfg.phantom_min:
+                conf = (run[0].probe.result or {}).get("confidence") or 0
+                if conf < cfg.singleton_confidence_keep:
+                    meta = self._cluster_meta.get(ident) or {}
+                    drops.append(
+                        {
+                            "type": "phantom_dropped",
+                            "kind": "track",
+                            "artist": meta.get("artist"),
+                            "title": meta.get("title"),
+                            "start": round(starts[i], 1),
+                            "extent": round(span, 1),
+                        }
+                    )
+                    continue
+            keep.append(i)
+
+        out: list[Segment] = []
+        prev_kept: int | None = None
+        for i in keep:
+            ident = runs[i][0].identity
+            info = self._cluster_meta.get(ident) if ident is not None else None
+            if prev_kept is None:
+                out.append(Segment(0.0, info, "resolved"))
+            elif ident == runs[prev_kept][0].identity:
+                pass  # same track continues across a dropped blip
+            elif i == prev_kept + 1:
+                b, conf = bounds[prev_kept]
+                out.append(Segment(b, info, conf))
+            else:
+                # Dropped run(s) in between: boundary at the dropped span's center.
+                b = (bounds[prev_kept][0] + bounds[i - 1][0]) / 2.0
+                out.append(Segment(b, info, "coarse"))
+            prev_kept = i
+
+        if not out:
+            out = [Segment(0.0, None, "coarse")]
+        return out, drops
+
+    def boundary_stats(self) -> tuple[int, int]:
+        """(boundaries between distinct identified runs, of those at target)."""
+        runs = self._runs()
+        found = at_target = 0
+        for a, b in zip(runs, runs[1:]):
+            left, right = a[-1], b[0]
+            if not self._is_boundary(left, right):
+                continue
+            found += 1
+            if self._resolved_by_prediction(
+                left, right
+            ) is not None or right.mid - left.mid <= self._target(left, right):
+                at_target += 1
+        return found, at_target
