@@ -401,6 +401,15 @@ async def process_single_file(
     start_index = 0
     if resume and progress_path.exists():
         raw_results = load_progress(progress_path)
+        # An adaptive run writes a v2 *object* here, not a list of samples.
+        # Refuse it by shape rather than letting `len()` count its keys and
+        # resume from a nonsense index.
+        if isinstance(raw_results, dict):
+            print(
+                f"  Error: {progress_path.name} was written by adaptive mode. "
+                "Resume without --sequential, or pass --no-resume to discard it."
+            )
+            return None
         start_index = len(raw_results)
         if start_index > 0:
             print(f"  Resuming from sample {start_index + 1} ({start_index} previous results)")
