@@ -225,3 +225,53 @@ def test_converges_even_when_oracle_is_noisy_at_boundary():
     n = drive(eng, answer)
     assert n < 120  # bounded spend, no livelock
     assert eng.next_probe() is None
+
+
+def _types(events):
+    return [e["type"] for e in events]
+
+
+def test_add_probe_emits_probe_result_and_discovery():
+    eng = BoundaryEngine(600.0)
+    evs = eng.add_probe(probe(85.0, title="A"))
+    assert "probe_result" in _types(evs) and "track_discovered" in _types(evs)
+    evs = eng.add_probe(probe(185.0, title="A"))
+    assert "track_discovered" not in _types(evs)  # known cluster
+
+
+def test_interval_split_and_retire_events():
+    eng = BoundaryEngine(170.0)
+    evs = eng.add_probe(probe(75.0, title="A"))  # mid 90
+    assert "interval_split" in _types(evs)
+    # Both children (0..90, 90..170) are within the 90s stride -> born retired.
+    assert "interval_retired" in _types(evs)
+
+
+def test_boundary_predicted_fires_when_trust_established():
+    eng = BoundaryEngine(1000.0)
+    eng.add_probe(probe(60.0, title="A"))
+    evs = eng.add_probe(probe(300.0, title="B", offsets=[off(160.0)]))
+    assert "boundary_predicted" not in _types(evs)  # one probe, no corroboration
+    evs = eng.add_probe(probe(390.0, title="B", offsets=[off(250.0)]))
+    predicted = [e for e in evs if e["type"] == "boundary_predicted"]
+    assert predicted and abs(predicted[0]["predicted_start"] - 150.0) < 1.0
+
+
+def test_boundary_confirmed_fires_when_verification_lands():
+    eng = BoundaryEngine(1000.0)
+    eng.add_probe(probe(60.0, title="A"))
+    eng.add_probe(probe(300.0, title="B", offsets=[off(160.0)]))
+    eng.add_probe(probe(390.0, title="B", offsets=[off(250.0)]))
+    evs = eng.add_probe(probe(152.0, title="B", window=12.0, purpose="refine", offsets=[off(3.0)]))
+    confirmed = [e for e in evs if e["type"] == "boundary_confirmed"]
+    assert confirmed and abs(confirmed[0]["start"] - 150.0) < 1.0
+
+
+def test_cut_in_detected_when_verify_answers_previous_track():
+    eng = BoundaryEngine(1000.0)
+    eng.add_probe(probe(60.0, title="A"))
+    # B cut in mid-song: offsets imply start 150 but B really began ~250.
+    eng.add_probe(probe(300.0, title="B", offsets=[off(160.0)]))
+    eng.add_probe(probe(390.0, title="B", offsets=[off(250.0)]))
+    evs = eng.add_probe(probe(152.0, title="A", window=12.0, purpose="refine"))
+    assert "cut_in_detected" in _types(evs)

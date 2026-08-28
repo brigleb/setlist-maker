@@ -122,14 +122,118 @@ class BoundaryEngine:
 
     # ---- fold ------------------------------------------------------------
     def add_probe(self, probe: Probe) -> list[dict]:
-        """Fold one completed probe into the model. Returns events."""
+        """Fold one completed probe into the model and report what changed.
+
+        Events are computed by snapshotting interval statuses and per-cluster
+        predictions before/after the insert -- no incremental bookkeeping to
+        drift out of sync with the fold."""
+        before = {
+            (round(left.mid, 3), round(right.mid, 3)): self._status(left, right)
+            for left, right in self._pairs()
+        }
+        pred_before = {k: self._trusted_start(k) for k in self._clusters}
+        enclosing = self._enclosing(probe.mid)
+
+        # Peek at cluster novelty without mutating (real assignment below).
+        is_new = False
+        if probe.result:
+            peek = _assign_cluster(
+                _normalized_key(probe.result),
+                list(self._clusters),
+                self.cfg.title_threshold,
+                self.cfg.artist_threshold,
+            )
+            is_new = peek not in self._clusters
+
         identity = self._identify(probe.result)
         ev = Evidence(mid=probe.mid, identity=identity, probe=probe)
         mids = [e.mid for e in self._evidence]
         self._evidence.insert(bisect.bisect_left(mids, ev.mid), ev)
         self.probes.append(probe)
         self._identity_by_index.append(identity)
-        return []
+
+        meta = (self._cluster_meta.get(identity) or {}) if identity else {}
+        events: list[dict] = [
+            {
+                "type": "probe_result",
+                "t": round(probe.t, 1),
+                "window": probe.window,
+                "purpose": probe.purpose,
+                "artist": meta.get("artist"),
+                "title": meta.get("title"),
+                "confidence": (probe.result or {}).get("confidence"),
+            }
+        ]
+        if is_new and identity is not None:
+            events.append(
+                {
+                    "type": "track_discovered",
+                    "artist": meta.get("artist"),
+                    "title": meta.get("title"),
+                    "at": round(probe.mid, 1),
+                }
+            )
+        if (
+            enclosing is not None
+            and self._is_boundary(*enclosing)
+            and identity == enclosing[0].identity
+        ):
+            p_start = self._trusted_start(enclosing[1].identity)
+            if p_start is not None and probe.t >= p_start - 0.5:
+                events.append(
+                    {
+                        "type": "cut_in_detected",
+                        "at": round(probe.mid, 1),
+                        "predicted": round(p_start, 1),
+                    }
+                )
+
+        after = {
+            (round(left.mid, 3), round(right.mid, 3)): self._status(left, right)
+            for left, right in self._pairs()
+        }
+        if after.keys() - before.keys():
+            events.append({"type": "interval_split", "at": round(probe.mid, 1)})
+        for key, status in after.items():
+            prev = before.get(key)
+            if status == "retired" and prev != "retired":
+                events.append(
+                    {
+                        "type": "interval_retired",
+                        "left": round(key[0], 1),
+                        "right": round(key[1], 1),
+                    }
+                )
+            elif status == "resolved" and prev != "resolved":
+                lo, hi = key
+                pair = next(
+                    (pl, pr)
+                    for pl, pr in self._pairs()
+                    if round(pl.mid, 3) == lo and round(pr.mid, 3) == hi
+                )
+                p_start = self._resolved_by_prediction(*pair)
+                rmeta = self._cluster_meta.get(pair[1].identity) or {}
+                events.append(
+                    {
+                        "type": "boundary_confirmed",
+                        "start": round(p_start, 1),
+                        "artist": rmeta.get("artist"),
+                        "title": rmeta.get("title"),
+                    }
+                )
+        for key in self._clusters:
+            now = self._trusted_start(key)
+            if now is not None and pred_before.get(key) is None:
+                kmeta = self._cluster_meta.get(key) or {}
+                events.append(
+                    {
+                        "type": "boundary_predicted",
+                        "predicted_start": round(now, 1),
+                        "artist": kmeta.get("artist"),
+                        "title": kmeta.get("title"),
+                    }
+                )
+        return events
 
     # ---- interval model --------------------------------------------------
     def _points(self) -> list[Evidence]:
