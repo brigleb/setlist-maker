@@ -2247,10 +2247,8 @@ async def process_single_file_adaptive(
                 shazam, segment, temp_dir, include_offsets=True
             )
             offsets = info.pop("offsets", None) if info else None
-            from setlist_maker.boundary import Probe as _Probe
-
-            probe = _Probe(t=plan.t, window=plan.window, purpose=plan.purpose,
-                           result=info, offsets=offsets)
+            probe = Probe(t=plan.t, window=plan.window, purpose=plan.purpose,
+                          result=info, offsets=offsets)
             for event in engine.add_probe(probe):
                 events.write(event)
             probes.append(probe)
@@ -2278,7 +2276,7 @@ async def process_single_file_adaptive(
     return tracklist, output_path
 ```
 
-Note the top-level `Probe` import already exists from Task 10 — drop the inline `from setlist_maker.boundary import Probe as _Probe` and use `Probe` directly (shown inline above only for clarity of where it is used).
+(`Probe` is already imported at module top from Task 10.)
 
 - [ ] **Step 4: Run tests** — `pytest tests/test_adaptive_driver.py -v` → all PASS; full suite green; ruff clean.
 
