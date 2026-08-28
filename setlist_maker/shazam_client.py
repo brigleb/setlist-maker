@@ -41,6 +41,7 @@ async def identify_sample_with_retry(
     segment: AudioSegment,
     temp_dir: str,
     max_retries: int = MAX_RETRIES,
+    include_offsets: bool = False,
     on_backoff: Callable[[float, int], None] | None = None,
     on_error: Callable[[Exception], None] | None = None,
 ) -> dict | None:
@@ -70,7 +71,7 @@ async def identify_sample_with_retry(
             if result and "track" in result:
                 track = result["track"]
                 images = track.get("images", {})
-                return {
+                info = {
                     "title": track.get("title", "Unknown Title"),
                     "artist": track.get("subtitle", "Unknown Artist"),
                     "shazam_url": track.get("url"),
@@ -80,6 +81,16 @@ async def identify_sample_with_retry(
                     "coverart_url": images.get("coverarthq") or images.get("coverart"),
                     "confidence": estimate_confidence(result),
                 }
+                if include_offsets:
+                    # Raw material for adaptive boundary prediction: where within
+                    # the matched song this sample aligned. Opt-in so the
+                    # sequential path's progress files keep their exact shape.
+                    info["offsets"] = [
+                        {"offset": m.get("offset"), "timeskew": m.get("timeskew")}
+                        for m in (result.get("matches") or [])
+                        if isinstance(m.get("offset"), (int, float))
+                    ]
+                return info
             return None
         except Exception as e:
             error_str = str(e).lower()

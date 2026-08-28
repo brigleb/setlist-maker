@@ -133,6 +133,7 @@ def test_prose_lines_are_not_mistaken_for_headings(parser):
         "Typical workflow",
         "Commands",
         "identify options",
+        "adaptive sampling",
         "detection tuning",
         "chapters options",
         "global options",

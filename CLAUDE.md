@@ -94,7 +94,17 @@ CLI application with the following modules:
   attached to each result as `confidence` and used by the dedup pipeline
 - Constants: `MAX_RETRIES`, `INITIAL_BACKOFF`
 
-### `setlist_maker/identify.py` - Identification pipeline
+### `setlist_maker/identify.py` - Sequential identification pipeline
+- **No longer the default.** `identify` samples adaptively now (`boundary.py` + `adaptive.py`);
+  everything below is what `--sequential` selects. The two drivers share `apply`-side code
+  rather than duplicating it: `finalize_outputs()` (summary + markdown + JSON sidecar, extracted
+  verbatim from this file's tail) and `results_to_tracklist()`. The latter grew a keyword-only
+  `deduplicate=False`, which the adaptive driver passes: `segments()` already yields one entry
+  per track, and every track appearing exactly once is precisely what the singleton filter
+  drops — running the dedup pipeline over it would empty the tracklist.
+- **Resume guard:** an adaptive run writes a progress *object*, not a list of samples. This path
+  refuses one by shape rather than letting `len()` count its keys and resume from a nonsense
+  index.
 - **process_single_file():** Orchestrates slicing → recognition → dedup → summary → output
 - **deduplicate_tracklist():** Fuzzy-clusters matches (normalizes remix/feat/edit tags so metadata
   drift for one track collapses), smooths isolated single-sample outliers (A B A / A None A → A),
@@ -114,6 +124,95 @@ CLI application with the following modules:
 - **Call log:** each sample is timed, its HTTP attempts drained from a `CallRecorder`, and one
   JSONL line written. Off unless `call_log=` is passed; the CLI resolves it (`_resolve_call_log`),
   so calling `process_single_file()` directly logs nothing. See `call_log.py`.
+
+### `setlist_maker/boundary.py` - Adaptive sampling engine (pure)
+
+- **What it is:** the default `identify` strategy. Sample sparsely, notice where two probes
+  disagree, spend the rest of the budget narrowing exactly those disagreements. Measured against
+  the synthetic oracle: ~240 Shazam calls for a 4-hour set against the sequential scan's 480,
+  with boundaries inside 5s instead of ±30s. Design spec and all measurements:
+  `docs/superpowers/specs/2026-08-27-adaptive-boundary-detection-design.md`.
+- **Pure — no I/O, no clock, no network, no async.** It consumes completed `Probe`s and answers
+  two questions: `next_probe()` ("what should be probed next?") and `segments()` ("what does the
+  evidence say this recording contains?"). That is what lets the whole algorithm be tested
+  against a fake oracle with no seams to patch, exactly as `progress.render_panel()` is.
+- **All state is a deterministic fold over the probe list.** Nothing else is persisted, so
+  **resume is replay** — `adaptive.py` loads the probes and re-adds them. `test_replay_equality`
+  guards it. This is also why `add_probe()` computes its events by snapshotting interval statuses
+  before and after the insert rather than keeping incremental bookkeeping that could drift out of
+  sync with the fold.
+- **Interval model:** the timeline is cut at each probe's window *midpoint* plus two virtual
+  endpoints. Each interval gets a target width by kind — `stride` (90s) for same-track and edge,
+  `precision` (5s) for a boundary, `precision_none` (30s) onto an unidentified stretch — and
+  priority is `width / target`. That single ordering is the anytime property: early pops are
+  breadth-first coverage of the whole file, later pops tighten the worst boundary, so stopping
+  after any prefix leaves the smallest maximum uncertainty that many probes could buy.
+  `_target` tests the **edge** case before the `None` case, so a recording that opens on
+  unidentifiable audio is still *covered* rather than bisected against a sentinel.
+- **`_needs_coverage` outranks every boundary consideration.** An interval wider than `stride`
+  is split for coverage no matter what its endpoints claim, because a whole track could be
+  hiding in it. Without this the guarantee the spec calls unconditional — never miss a track
+  ≥ 2 minutes, "from splitting geometry, not from offset trust" — silently becomes conditional:
+  a confirmed prediction retired 190s-wide boundary intervals unprobed and **five whole tracks
+  vanished** from a 4-hour set. Prediction buys precision, never permission to skip coverage.
+- **Offset prediction.** A probe of track B reports where inside B it matched, so one probe can
+  locate a boundary that bisection needs four or five for. Two things make it safe:
+  - **`_probe_start_estimate` is not `T - O`.** `Shazam.recognize` goes through `shazamio_core`,
+    which fingerprints a **centered 10s excerpt** (`fingerprint_segment`) of whatever window it
+    is handed — so the matched audio begins `(window - 10) / 2` after the probe does. Measured on
+    a real set: uncorrected, a 30s coverage probe and a 12s refine probe of the same track
+    disagree by exactly 9.0s, which *exceeds* `offset_tolerance`, so `_trusted_start` would
+    reject every track the verification protocol reaches and the prediction path would be dead
+    code that never announced itself. Corrected, the two window sizes agree to 0.1s.
+  - **P is a lower bound, not an estimate.** A track the DJ cut into mid-song implies a start
+    earlier than the real boundary, so P is only accepted once some probe of B *was heard*
+    starting just after it. Both the verification probe's placement and the acceptance test use
+    the **excerpt**, not the window: `verify_lead = 0.0` puts the fingerprinted audio at
+    `[P, P+10]`, which bounds a missed cut-in at `fingerprint_segment / 2` = 5s — exactly
+    `precision`, which is why that default holds rather than needing to be relaxed. A cut-in
+    instead answers A, and that probe's evidence becomes the interval's new left edge, pushing P
+    outside it so the prediction cannot fire again.
+- **`_near_existing` compares excerpts, not window starts** — those differ by 9s between window
+  sizes, so a start-time test both blocks probes that would hear new audio (measured: it stalled
+  bisection at an 18s interval, leaving a 7.4s error) and permits ones that would hear the same
+  ten seconds.
+- **`segments()` is callable at any prefix**, which is what makes every stopping rule —
+  converged, budget, Ctrl-C — one code path. The **phantom rule** replaces the sequential path's
+  A-B-A smoothing: a single-probe track is dropped only when it is *pinned* by contradicting
+  evidence on both sides into under `phantom_min` **and** its own sample confidence is below
+  `singleton_confidence_keep` (the sample's, not its cluster's — the #7 lesson). A lone claim
+  with an open flank might genuinely span it, so the rule refuses to drop it until refinement
+  squeezes it.
+- Identity clustering is `identify.py`'s `_assign_cluster` / `_normalized_key` reused as-is, so
+  the same track under two labels never manufactures a boundary. Note the corollary for
+  fixtures: names like `Artist 1` / `Artist 11` score 0.94 and legitimately merge — see
+  `tests/boundary_oracle.py`'s `assert_identities_distinct`.
+- Tunables live in `EngineConfig`; `--precision`, `--stride` and `--refine-window` expose the
+  interesting ones.
+
+### `setlist_maker/adaptive.py` - Adaptive driver (impure)
+
+- **Owns everything `boundary.py` refuses to touch:** the Shazam client, the inter-call delay,
+  persistence, signals, the panel and the call log. `process_single_file_adaptive()` is a
+  drop-in sibling of `process_single_file()` — same inputs, same output files, different
+  sampling strategy — and finishes through the shared `finalize_outputs()` so the two cannot
+  produce different artifacts.
+- **Progress v2** is `{"version": 2, "audio_duration": D, "probes": [...]}`, written after every
+  probe. A **legacy** sequential list is detected by shape and converted in memory to 30s
+  coverage probes: that format already carried timestamps (only its *resume* was positional), so
+  a half-finished sequential run resumes as an adaptive one with a dense probed prefix, with no
+  migration step. The reverse is refused loudly in `identify.py`.
+- **`EventLog`** appends one JSONL line per event beside the progress file — the phase-2
+  visualizer's input. Append mode so a resume extends history, flushed per event so a `tail -f`
+  sees probes land.
+- **Anytime stopping.** First Ctrl-C sets a flag and finalizes after the in-flight probe; a
+  second aborts (per-probe persistence means nothing is lost either way). `--budget` stops on
+  wall clock. Both funnel into the same `segments()` → `results_to_tracklist(deduplicate=False)`
+  → `finalize_outputs()` tail as natural convergence, so there is no "interrupted" output shape.
+- **The call log is wired in here too**, not only in the sequential driver: adaptive is the
+  default, so a log reachable only through `--sequential` would be empty for exactly the
+  ordinary runs a throttling question gets asked about. `total` is the engine's live estimate,
+  there being no fixed count.
 
 ### `setlist_maker/summary.py` - Playlist summary generation
 - **generate_summary():** Shells out to the Claude CLI (`claude -p --strict-mcp-config`) from a
@@ -439,6 +538,14 @@ CLI application with the following modules:
 - The rail widens past `RAIL` when the recording needs it (a 10-hour file wants
   `5:00:00 / 10:00:00`): the rail exists to hold the position steady, so widen rather than
   ellipsize the one number it is there to show.
+- **`AdaptiveRunState` / `render_adaptive_panel()`** are the adaptive run's twin, under the same
+  fixed-height and one-cell-wide discipline, and `ProgressPanel` / `live_display()` take a
+  `render` parameter so the sequential call sites pass nothing and behave identically. The twin
+  is deliberate rather than a shared base: `RunState` has non-default fields, so a
+  default-bearing mixin cannot slot under it without making the whole sequential path
+  keyword-only. What differs is the numbers — there is no fixed total to count towards, so the
+  bar's denominator is `probes_done + est_probes_remaining` and moves as the engine learns, and
+  the stats row reports boundaries sharp and the widest remaining gap instead of a sample count.
 - Gated by `identify --no-panel`, and skipped automatically when stdout is not a terminal.
   Note the two questions are **separate**: a terminal gets the colorized log either way, so
   `--no-panel` drops only the dashboard, never the log's own rendering.

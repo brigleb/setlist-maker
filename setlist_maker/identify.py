@@ -245,10 +245,17 @@ def results_to_tracklist(
     source_filename: str,
     corrections_db: CorrectionsDB | None = None,
     dedup_config: DedupConfig | None = None,
+    *,
+    deduplicate: bool = True,
 ) -> Tracklist:
     """
     Convert raw Shazam results to a Tracklist object.
     Applies corrections from the database and deduplicates.
+
+    `deduplicate=False` keeps every entry, corrections still applied. The
+    adaptive engine's `segments()` already yields one entry per track, so its
+    output must skip this pipeline entirely -- every track appears exactly
+    once there, which is precisely what the singleton filter drops.
     """
     # Apply corrections before deduplication
     if corrections_db:
@@ -267,7 +274,7 @@ def results_to_tracklist(
         raw_results = corrected_results
 
     # Deduplicate
-    deduped = deduplicate_tracklist(raw_results, dedup_config)
+    deduped = deduplicate_tracklist(raw_results, dedup_config) if deduplicate else raw_results
 
     # Convert to Track objects
     tracks = []
@@ -360,6 +367,39 @@ def format_progress_line(
     return f"  {counter} {time_col}  {found_glyph}  {conf_str}  {label}"
 
 
+def finalize_outputs(tracklist: Tracklist, output_path: Path, summary: bool) -> None:
+    """Summary + markdown + JSON sidecar writes, shared by both drivers.
+
+    Extracted from `process_single_file`'s tail verbatim so the adaptive driver
+    produces byte-identical outputs rather than a second implementation of
+    them.
+    """
+    # Add a one-paragraph playlist description ahead of the listing. Warns and
+    # continues if the Claude CLI is unavailable or the call fails. Disabled
+    # with `identify --no-summary`.
+    if summary:
+        print("  Generating playlist summary...")
+        summary_lines = [
+            f"{t.artist} - {t.title}"
+            for t in tracklist.tracks
+            if not t.rejected and not t.is_unidentified
+        ]
+        tracklist.summary = generate_summary(summary_lines)
+
+    # Write markdown plus a JSON sidecar. The JSON carries each track's
+    # Shazam cover-art URL, which the chapters command relies on, so it is
+    # always written here -- not only when the editor saves.
+    with open(output_path, "w") as f:
+        f.write(tracklist.to_markdown())
+
+    json_path = output_path.with_suffix(".json")
+    with open(json_path, "w") as f:
+        json.dump(tracklist.to_json(), f, indent=2)
+
+    print(f"  Saved: {output_path}")
+    print(f"  Found {len(tracklist.tracks)} unique tracks")
+
+
 async def process_single_file(
     audio_path: Path,
     output_dir: Path | None,
@@ -401,6 +441,15 @@ async def process_single_file(
     start_index = 0
     if resume and progress_path.exists():
         raw_results = load_progress(progress_path)
+        # An adaptive run writes a v2 *object* here, not a list of samples.
+        # Refuse it by shape rather than letting `len()` count its keys and
+        # resume from a nonsense index.
+        if isinstance(raw_results, dict):
+            print(
+                f"  Error: {progress_path.name} was written by adaptive mode. "
+                "Resume without --sequential, or pass --no-resume to discard it."
+            )
+            return None
         start_index = len(raw_results)
         if start_index > 0:
             print(f"  Resuming from sample {start_index + 1} ({start_index} previous results)")
@@ -524,30 +573,7 @@ async def process_single_file(
     print("\n  Processing complete. Generating tracklist...")
     tracklist = results_to_tracklist(raw_results, audio_path.name, corrections_db, dedup_config)
 
-    # Add a one-paragraph playlist description ahead of the listing. Warns and
-    # continues if the Claude CLI is unavailable or the call fails. Disabled
-    # with `identify --no-summary`.
-    if summary:
-        print("  Generating playlist summary...")
-        summary_lines = [
-            f"{t.artist} - {t.title}"
-            for t in tracklist.tracks
-            if not t.rejected and not t.is_unidentified
-        ]
-        tracklist.summary = generate_summary(summary_lines)
-
-    # Write markdown plus a JSON sidecar. The JSON carries each track's
-    # Shazam cover-art URL, which the chapters command relies on, so it is
-    # always written here -- not only when the editor saves.
-    with open(output_path, "w") as f:
-        f.write(tracklist.to_markdown())
-
-    json_path = output_path.with_suffix(".json")
-    with open(json_path, "w") as f:
-        json.dump(tracklist.to_json(), f, indent=2)
-
-    print(f"  Saved: {output_path}")
-    print(f"  Found {len(tracklist.tracks)} unique tracks")
+    finalize_outputs(tracklist, output_path, summary)
 
     # Retain the progress file rather than deleting it: a later run on the same
     # audio resumes from these cached Shazam results instead of re-scanning from
