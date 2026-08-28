@@ -76,3 +76,50 @@ def test_cluster_meta_keeps_highest_confidence_variant():
     eng.add_probe(probe(150.0, title="One More Time", confidence=0.9))
     key = eng._identity_by_index[0]
     assert eng._cluster_meta[key]["title"] == "One More Time"
+
+
+def off(o, skew=0.0):
+    return {"offset": o, "timeskew": skew}
+
+
+def test_probe_start_estimate_is_t_minus_offset():
+    eng = BoundaryEngine(1000.0)
+    p = probe(200.0, title="B", offsets=[off(50.0)])
+    assert eng._probe_start_estimate(p) == 150.0
+
+
+def test_probe_start_estimate_ignores_timeskewed_matches():
+    eng = BoundaryEngine(1000.0)
+    p = probe(200.0, title="B", offsets=[off(50.0, skew=0.5)])
+    assert eng._probe_start_estimate(p) is None
+
+
+def test_trusted_start_needs_corroboration_and_agreement():
+    eng = BoundaryEngine(1000.0)
+    eng.add_probe(probe(200.0, title="B", offsets=[off(50.0)]))
+    key = eng._identity_by_index[0]
+    assert eng._trusted_start(key) is None  # min_corroboration = 2
+    eng.add_probe(probe(290.0, title="B", offsets=[off(141.0)]))
+    assert eng._trusted_start(key) == 149.5  # median of 150.0, 149.0
+    eng.add_probe(probe(380.0, title="B", offsets=[off(100.0)]))  # wildly off
+    assert eng._trusted_start(key) is None  # spread > offset_tolerance
+
+
+def test_resolved_by_prediction_requires_confirming_probe_after_p():
+    eng = BoundaryEngine(1000.0)
+    eng.add_probe(probe(60.0, title="A"))
+    eng.add_probe(probe(200.0, title="B", offsets=[off(50.0)]))
+    eng.add_probe(probe(290.0, title="B", offsets=[off(140.0)]))
+    pts = eng._points()
+    boundary = next(
+        (left, right) for left, right in zip(pts, pts[1:]) if eng._is_boundary(left, right)
+    )
+    # P = 150, inside (75, 215); but no B probe *starts* within [149.5, 155].
+    assert eng._resolved_by_prediction(*boundary) is None
+    eng.add_probe(probe(152.0, title="B", window=12.0, purpose="refine", offsets=[off(2.0)]))
+    pts = eng._points()
+    boundary = next(
+        (left, right) for left, right in zip(pts, pts[1:]) if eng._is_boundary(left, right)
+    )
+    resolved = eng._resolved_by_prediction(*boundary)
+    assert resolved is not None and abs(resolved - 150.0) < 1.0

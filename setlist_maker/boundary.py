@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import bisect
 from dataclasses import dataclass
+from statistics import median
 
 from setlist_maker.identify import _assign_cluster, _normalized_key
 
@@ -158,4 +159,53 @@ class BoundaryEngine:
         for left, right in self._pairs():
             if left.mid <= mid < right.mid:
                 return (left, right)
+        return None
+
+    # ---- offset prediction ----------------------------------------------
+    def _probe_start_estimate(self, probe: Probe) -> float | None:
+        """This probe's implied track start (T - O). A *lower bound*: a track
+        the DJ cut into mid-song implies a start earlier than the real
+        boundary, which is why prediction is verified after P, never before
+        (see spec: Verification protocol)."""
+        if not probe.offsets:
+            return None
+        cands = [
+            probe.t - m["offset"]
+            for m in probe.offsets
+            if isinstance(m.get("offset"), (int, float))
+            and abs(m.get("timeskew") or 0.0) <= self.cfg.timeskew_max
+        ]
+        return median(cands) if cands else None
+
+    def _trusted_start(self, key: object) -> float | None:
+        """The cluster's predicted start, if enough probes agree on it."""
+        starts = [
+            est
+            for p, ident in zip(self.probes, self._identity_by_index)
+            if ident == key and (est := self._probe_start_estimate(p)) is not None
+        ]
+        if len(starts) < self.cfg.min_corroboration:
+            return None
+        if max(starts) - min(starts) > self.cfg.offset_tolerance:
+            return None
+        return median(starts)
+
+    def _resolved_by_prediction(self, left: Evidence, right: Evidence) -> float | None:
+        """The accepted boundary P for an A..B interval, or None.
+
+        Pure predicate over the probe set: trusted P inside the interval, and
+        some B probe *started* within [P - 0.5, P + precision] -- i.e. B was
+        confirmed playing just after its predicted start. The verification
+        probe the scheduler places at P + verify_lead satisfies this when it
+        answers B; a cut-in (probe answers A) never can, because that probe's
+        evidence becomes the interval's new left edge, pushing P outside."""
+        if not self._is_boundary(left, right):
+            return None
+        key = right.identity
+        p_start = self._trusted_start(key)
+        if p_start is None or not (left.mid < p_start < right.mid):
+            return None
+        for p, ident in zip(self.probes, self._identity_by_index):
+            if ident == key and p_start - 0.5 <= p.t <= p_start + self.cfg.precision:
+                return p_start
         return None
