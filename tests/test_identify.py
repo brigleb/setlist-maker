@@ -4,6 +4,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from setlist_maker.call_log import LOG_FILENAME
 from setlist_maker.editor import CorrectionsDB
 from setlist_maker.identify import (
     deduplicate_tracklist,
@@ -534,3 +535,53 @@ class TestFormatProgressLine:
         info = {"artist": "X", "title": "Y"}
         line = format_progress_line(1, 9, "0:00", info, width=80, color=False)
         assert "X - Y" in line
+
+
+class TestProcessSingleFileCallLog:
+    """The per-call telemetry log written alongside a run (see call_log.py)."""
+
+    def _run(self, temp_dir, audio_path, **kwargs):
+        fake_track = {"artist": "Artist", "title": "Track", "confidence": 0.9}
+        slices = [(0, MagicMock()), (30, MagicMock())]
+        with (
+            patch("setlist_maker.identify.load_audio", return_value=MagicMock()),
+            patch("setlist_maker.identify.slice_audio", return_value=slices),
+            patch("setlist_maker.identify.Shazam", return_value=MagicMock()),
+            patch(
+                "setlist_maker.identify.identify_sample_with_retry",
+                new=AsyncMock(return_value=fake_track),
+            ),
+        ):
+            return asyncio.run(
+                process_single_file(
+                    audio_path=audio_path,
+                    output_dir=temp_dir,
+                    delay_seconds=0,
+                    resume=False,
+                    summary=False,
+                    **kwargs,
+                )
+            )
+
+    def test_a_run_header_and_one_line_per_sample_are_written(self, temp_dir):
+        audio_path = temp_dir / "set.mp3"
+        audio_path.write_bytes(b"fake audio")
+        log_path = temp_dir / "calls.jsonl"
+
+        assert self._run(temp_dir, audio_path, call_log=log_path) is not None
+
+        lines = [json.loads(x) for x in log_path.read_text().splitlines() if x.strip()]
+        assert [line["type"] for line in lines] == ["run", "call", "call"]
+        assert lines[0]["source"] == "set.mp3"
+        assert lines[0]["total"] == 2
+        assert [line["i"] for line in lines[1:]] == [1, 2]
+        assert [line["pos_s"] for line in lines[1:]] == [0, 30]
+        assert all(line["matched"] for line in lines[1:])
+        assert all(line["dur_s"] >= 0 for line in lines[1:])
+
+    def test_no_log_is_written_when_none_is_requested(self, temp_dir):
+        audio_path = temp_dir / "set.mp3"
+        audio_path.write_bytes(b"fake audio")
+
+        assert self._run(temp_dir, audio_path, call_log=None) is not None
+        assert not (temp_dir / LOG_FILENAME).exists()

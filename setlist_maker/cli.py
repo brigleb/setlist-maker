@@ -49,6 +49,7 @@ from setlist_maker import __version__
 from setlist_maker.artwork import CoverImageError, create_chapter_image, load_cover_image
 from setlist_maker.artwork_cache import chapter_image, source_artwork
 from setlist_maker.audio import get_audio_file
+from setlist_maker.call_log import LOG_FILENAME, call_log_path
 from setlist_maker.chapters import embed_chapters
 from setlist_maker.editor import (
     CorrectionsDB,
@@ -127,6 +128,24 @@ def _resolve_cover(cover_arg: str | None) -> bytes | None:
         sys.exit(1)
     print(f"  Cover image: {cover_path.name}")
     return data
+
+
+def _resolve_call_log(
+    args: argparse.Namespace, audio_path: Path, output_dir: Path | None
+) -> Path | None:
+    """Where this run's per-call telemetry goes, or None when it is switched off.
+
+    On by default: the log exists to be reviewed across several ordinary runs,
+    and one that had to be enabled per run would be empty exactly when a
+    throttling question came up. `--no-call-log` outranks an explicit
+    `--call-log`, so the off switch is never overridden by a stale path.
+    """
+    if getattr(args, "no_call_log", False):
+        return None
+    explicit = getattr(args, "call_log", None)
+    if explicit:
+        return Path(explicit)
+    return call_log_path(audio_path, output_dir)
 
 
 def cmd_identify(args: argparse.Namespace) -> None:
@@ -220,6 +239,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
                 summary=not args.no_summary,
                 allow_partial=args.allow_partial,
                 panel=not args.no_panel,
+                call_log=_resolve_call_log(args, audio_path, output_dir),
             )
         )
 
@@ -505,6 +525,8 @@ identify options
       --no-learn              Don't read or save corrections
       --no-summary            Skip the Claude-generated set summary (on by default)
       --no-panel              Don't pin the live progress panel under the log
+      --call-log PATH         Where to append per-call telemetry (default: beside output)
+      --no-call-log           Don't record per-call telemetry
   detection tuning
       --title-threshold N       Title similarity 0-1 to merge matches (default: {d_title})
       --artist-threshold N      Artist similarity 0-1 to merge matches (default: {d_artist})
@@ -640,6 +662,18 @@ Examples:
         action="store_true",
         help="Skip the Claude-generated playlist summary paragraph "
         "(on by default; requires the 'claude' CLI)",
+    )
+
+    identify_parser.add_argument(
+        "--call-log",
+        metavar="PATH",
+        help=f"Where to append per-call telemetry (default: {LOG_FILENAME} beside the output)",
+    )
+
+    identify_parser.add_argument(
+        "--no-call-log",
+        action="store_true",
+        help="Don't record per-call telemetry",
     )
 
     identify_parser.add_argument(

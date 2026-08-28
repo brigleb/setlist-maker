@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,6 +21,7 @@ from setlist_maker.audio import (
     load_audio,
     slice_audio,
 )
+from setlist_maker.call_log import CallLog, CallRecorder, describe_error
 from setlist_maker.editor import CorrectionsDB, Track, Tracklist
 from setlist_maker.progress import RunState, live_display
 from setlist_maker.shazam_client import MAX_RETRIES, identify_sample_with_retry
@@ -368,6 +370,7 @@ async def process_single_file(
     summary: bool = True,
     allow_partial: bool = False,
     panel: bool = True,
+    call_log: Path | None = None,
 ) -> tuple[Tracklist, Path] | None:
     """
     Process a single audio file and generate its tracklist.
@@ -402,7 +405,10 @@ async def process_single_file(
         if start_index > 0:
             print(f"  Resuming from sample {start_index + 1} ({start_index} previous results)")
 
-    # Initialize Shazam
+    # Initialize Shazam. The call log observes it rather than wrapping it: a
+    # recorder subscribed to shazamio's own trace config sees every HTTP attempt
+    # -- including the 429s shazamio retries away internally, which never reach
+    # this loop at all -- while changing no behaviour. See call_log.py.
     shazam = Shazam()
 
     # Process each slice. Each sample gets a single compact status line, and on
@@ -410,6 +416,19 @@ async def process_single_file(
     # progress.py). Piped/redirected output just receives the final lines, no
     # escape codes and no panel.
     total_slices = len(slices)
+
+    log = CallLog(call_log) if call_log is not None else None
+    recorder = CallRecorder()
+    if log is not None:
+        if not recorder.attach(shazam):
+            print("  Warning: call log has no HTTP detail (shazamio trace seam moved)")
+        log.write_run(
+            source=audio_path.name,
+            total=total_slices,
+            delay_seconds=delay_seconds,
+            resumed_from=start_index,
+        )
+
     # Two separate questions. A terminal gets the colorized log either way;
     # --no-panel drops only the pinned dashboard, not the log's rendering.
     color = sys.stdout.isatty()
@@ -447,9 +466,31 @@ async def process_single_file(
                 time_str = format_timestamp(timestamp)
                 state.begin_sample(i)
 
+                errors: list[Exception] = []
+                recorder.drain()  # discard anything not attributable to this sample
+                started = time.monotonic()
                 track_info = await identify_sample_with_retry(
-                    shazam, segment, temp_dir, on_backoff=announce_backoff
+                    shazam,
+                    segment,
+                    temp_dir,
+                    on_backoff=announce_backoff,
+                    on_error=errors.append,
                 )
+                duration = time.monotonic() - started
+
+                if log is not None:
+                    log.write_call(
+                        index=i,
+                        total=total_slices,
+                        # `slice_audio` already yields seconds, as
+                        # `format_timestamp(timestamp)` above relies on.
+                        position_seconds=timestamp,
+                        delay_seconds=delay_seconds,
+                        duration_s=duration,
+                        track_info=track_info,
+                        attempts=recorder.drain(),
+                        error=describe_error(errors[0]) if errors else None,
+                    )
 
                 state.record(track_info)
                 is_last = i >= total_slices
