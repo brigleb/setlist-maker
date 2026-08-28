@@ -123,3 +123,97 @@ def test_resolved_by_prediction_requires_confirming_probe_after_p():
     )
     resolved = eng._resolved_by_prediction(*boundary)
     assert resolved is not None and abs(resolved - 150.0) < 1.0
+
+
+def drive(eng, answer, max_probes=500):
+    """Loop next_probe -> add_probe, answering via `answer(t, window)`."""
+    n = 0
+    while (plan := eng.next_probe()) is not None:
+        assert n < max_probes, "scheduler failed to converge"
+        result, offsets = answer(plan.t, plan.window)
+        eng.add_probe(
+            Probe(
+                t=plan.t, window=plan.window, purpose=plan.purpose, result=result, offsets=offsets
+            )
+        )
+        n += 1
+    return n
+
+
+def test_first_probe_is_center_of_file():
+    eng = BoundaryEngine(14400.0)
+    plan = eng.next_probe()
+    assert plan.purpose == "coverage"
+    assert abs((plan.t + plan.window / 2) - 7200.0) < 45.0  # near center, on grid
+
+
+def test_tiny_file_still_gets_one_probe():
+    eng = BoundaryEngine(60.0)
+    plan = eng.next_probe()
+    assert plan is not None and plan.purpose == "coverage"
+    eng.add_probe(Probe(plan.t, plan.window, plan.purpose, None, None))
+    assert eng.next_probe() is None
+
+
+def test_coverage_lands_on_stride_grid_and_costs_duration_over_stride():
+    eng = BoundaryEngine(1800.0)  # 30 min, one track everywhere
+
+    def answer(t, w):
+        return ({"artist": "X", "title": "A", "confidence": 0.9}, None)
+
+    n = drive(eng, answer)
+    # duration/stride = 20 intervals -> 19 interior grid points, +-2 for edges
+    assert n <= 22
+    mids = sorted(p.mid for p in eng.probes)
+    gaps = [b - a for a, b in zip(mids, mids[1:])]
+    assert max(gaps) <= eng.cfg.stride + 0.5
+    assert all(g > 1.0 for g in gaps)
+
+
+def test_boundary_refined_to_precision_without_offsets():
+    eng = BoundaryEngine(600.0)
+    true_boundary = 293.0
+
+    def answer(t, w):
+        mid = t + w / 2
+        title = "A" if mid < true_boundary else "B"
+        return ({"artist": "X", "title": title, "confidence": 0.9}, None)
+
+    drive(eng, answer)
+    pts = eng._points()
+    boundary = next(
+        (left, right) for left, right in zip(pts, pts[1:]) if eng._is_boundary(left, right)
+    )
+    assert boundary[1].mid - boundary[0].mid <= eng.cfg.precision + 0.01
+
+
+def test_trusted_prediction_plans_verification_after_p():
+    eng = BoundaryEngine(1000.0)
+    eng.add_probe(probe(60.0, title="A"))
+    eng.add_probe(probe(300.0, title="B", offsets=[off(150.0)]))
+    eng.add_probe(probe(390.0, title="B", offsets=[off(240.0)]))
+    # P = 150 inside (75, 315): expect verify at P + verify_lead with refine window.
+    plan = eng.next_probe()
+    assert plan.purpose == "refine"
+    assert abs(plan.t - (150.0 + eng.cfg.verify_lead)) < 0.01
+    assert plan.window == eng.cfg.refine_window
+
+
+def test_converges_even_when_oracle_is_noisy_at_boundary():
+    import random
+
+    rng = random.Random(7)
+    eng = BoundaryEngine(600.0)
+    true_boundary = 300.0
+
+    def answer(t, w):
+        mid = t + w / 2
+        if abs(mid - true_boundary) < w / 2:  # window straddles: coin flip
+            title = rng.choice(["A", "B"])
+        else:
+            title = "A" if mid < true_boundary else "B"
+        return ({"artist": "X", "title": title, "confidence": 0.9}, None)
+
+    n = drive(eng, answer)
+    assert n < 120  # bounded spend, no livelock
+    assert eng.next_probe() is None

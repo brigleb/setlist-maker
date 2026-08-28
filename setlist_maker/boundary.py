@@ -11,6 +11,7 @@ probe list and replay it" (see the design spec).
 from __future__ import annotations
 
 import bisect
+import math
 from dataclasses import dataclass
 from statistics import median
 
@@ -209,3 +210,155 @@ class BoundaryEngine:
             if ident == key and p_start - 0.5 <= p.t <= p_start + self.cfg.precision:
                 return p_start
         return None
+
+    # ---- scheduling ------------------------------------------------------
+    def next_probe(self) -> ProbePlan | None:
+        """The highest-value probe to run next, or None when converged.
+
+        Priority is width/target, so early pops are breadth-first coverage of
+        the whole file and later pops tighten the worst boundary -- which is
+        the anytime property: stopping after any prefix leaves the maximum
+        remaining uncertainty as small as that many probes allowed."""
+        if not self._evidence:
+            if self.duration <= 1.0:
+                return None
+            window = min(self.cfg.coverage_window, self.duration)
+            t = max(0.0, self.duration / 2.0 - window / 2.0)
+            return ProbePlan(t=t, window=window, purpose="coverage")
+
+        best: tuple[float, ProbePlan] | None = None
+        for left, right in self._pairs():
+            ratio = (right.mid - left.mid) / self._target(left, right)
+            if ratio <= 1.0:
+                continue
+            if self._is_boundary(left, right):
+                if self._resolved_by_prediction(left, right) is not None:
+                    continue
+                if self._capped(left, right):
+                    continue
+            plan = self._plan_for(left, right)
+            if plan is None:
+                continue
+            if best is None or ratio > best[0] + 1e-9:
+                best = (ratio, plan)
+        return best[1] if best else None
+
+    def _plan_for(self, left: Evidence, right: Evidence) -> ProbePlan | None:
+        cfg = self.cfg
+        width = right.mid - left.mid
+        if self._is_boundary(left, right):
+            p_start = self._trusted_start(right.identity)
+            if p_start is not None and left.mid < p_start < right.mid:
+                t = p_start + cfg.verify_lead
+                if t + cfg.refine_window / 2.0 < right.mid - 0.25 and not self._near_existing(t):
+                    return ProbePlan(t=t, window=cfg.refine_window, purpose="refine")
+            window, purpose = cfg.refine_window, "refine"
+            mid = (left.mid + right.mid) / 2.0
+        elif self._target(left, right) == cfg.stride:
+            window, purpose = cfg.coverage_window, "coverage"
+            mid = self._grid_mid(left, right)
+        else:  # None-adjacent: hunting identity, not a boundary
+            window = cfg.coverage_window if width > cfg.coverage_window * 1.5 else cfg.refine_window
+            purpose = "coverage"
+            mid = (left.mid + right.mid) / 2.0
+
+        t = mid - window / 2.0
+        t = min(max(t, 0.0), max(0.0, self.duration - window))
+        if not (left.mid + 0.25 < t + window / 2.0 < right.mid - 0.25):
+            return None  # unprobeable sliver (edge clamping pushed us out)
+        if self._near_existing(t):
+            return None
+        return ProbePlan(t=t, window=window, purpose=purpose)
+
+    def _grid_mid(self, left: Evidence, right: Evidence) -> float:
+        """Nearest stride multiple strictly inside the interval.
+
+        Splitting on the stride grid instead of the raw midpoint means full
+        coverage tiles the file in exactly duration/stride probes; blind
+        halving can cost up to 2x that (14400/2^k first dips under 90 at
+        56.25s spacing)."""
+        s = self.cfg.stride
+        mid = (left.mid + right.mid) / 2.0
+        g = round(mid / s) * s
+        if g <= left.mid + 0.5:
+            g += s
+        if g >= right.mid - 0.5:
+            g -= s
+        if not (left.mid + 0.5 < g < right.mid - 0.5):
+            return mid
+        return g
+
+    def _near_existing(self, t: float) -> bool:
+        return any(abs(p.t - t) < 0.5 for p in self.probes)
+
+    def _coverage_gap(self, left: Evidence, right: Evidence) -> tuple[float, float]:
+        """The span between the nearest coverage/virtual evidence either side."""
+        lo, hi = 0.0, self.duration
+        for e in self._points():
+            anchored = e.probe is None or e.probe.purpose == "coverage"
+            if anchored and e.mid <= left.mid:
+                lo = e.mid
+            if anchored and e.mid >= right.mid:
+                hi = e.mid
+                break
+        return lo, hi
+
+    def _capped(self, left: Evidence, right: Evidence) -> bool:
+        """Thrash guard: a transition zone that keeps contradicting itself
+        stops absorbing probes once its coverage gap has eaten the cap."""
+        lo, hi = self._coverage_gap(left, right)
+        n = sum(1 for p in self.probes if p.purpose == "refine" and lo <= p.mid <= hi)
+        return n >= self.cfg.max_refines_per_gap
+
+    def _status(self, left: Evidence, right: Evidence) -> str:
+        if self._is_boundary(left, right):
+            if self._resolved_by_prediction(left, right) is not None:
+                return "resolved"
+            if self._capped(left, right):
+                return "capped"
+        ratio = (right.mid - left.mid) / self._target(left, right)
+        return "retired" if ratio <= 1.0 else "active"
+
+    # ---- progress metrics (panel / driver) -------------------------------
+    def _active_pairs(self) -> list[tuple[Evidence, Evidence, float]]:
+        out = []
+        for left, right in self._pairs():
+            if self._status(left, right) != "active":
+                continue
+            if self._plan_for(left, right) is None:
+                continue
+            out.append((left, right, (right.mid - left.mid) / self._target(left, right)))
+        return out
+
+    @property
+    def max_ratio(self) -> float:
+        return max((ratio for _, _, ratio in self._active_pairs()), default=0.0)
+
+    @property
+    def max_boundary_width(self) -> float:
+        return max(
+            (
+                right.mid - left.mid
+                for left, right, _ in self._active_pairs()
+                if self._is_boundary(left, right)
+            ),
+            default=0.0,
+        )
+
+    def estimated_probes_remaining(self) -> int:
+        if not self._evidence:
+            return 1 if self.duration > 1.0 else 0
+        total = 0
+        for left, right, ratio in self._active_pairs():
+            width = right.mid - left.mid
+            if self._is_boundary(left, right):
+                p_start = self._trusted_start(right.identity)
+                if p_start is not None and left.mid < p_start < right.mid:
+                    total += 1
+                else:
+                    total += max(1, math.ceil(math.log2(ratio)))
+            elif self._target(left, right) == self.cfg.stride:
+                total += max(1, math.ceil(width / self.cfg.stride) - 1)
+            else:
+                total += max(1, math.ceil(math.log2(ratio)))
+        return total
