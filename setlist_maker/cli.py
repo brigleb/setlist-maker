@@ -219,6 +219,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
                 dedup_config=dedup_config,
                 summary=not args.no_summary,
                 allow_partial=args.allow_partial,
+                panel=not args.no_panel,
             )
         )
 
@@ -503,6 +504,7 @@ identify options
       --allow-partial         Process even if far less audio decodes than reported
       --no-learn              Don't read or save corrections
       --no-summary            Skip the Claude-generated set summary (on by default)
+      --no-panel              Don't pin the live progress panel under the log
   detection tuning
       --title-threshold N       Title similarity 0-1 to merge matches (default: {d_title})
       --artist-threshold N      Artist similarity 0-1 to merge matches (default: {d_artist})
@@ -638,6 +640,13 @@ Examples:
         action="store_true",
         help="Skip the Claude-generated playlist summary paragraph "
         "(on by default; requires the 'claude' CLI)",
+    )
+
+    identify_parser.add_argument(
+        "--no-panel",
+        action="store_true",
+        help="Don't pin the live progress panel under the log "
+        "(it is already skipped when output is piped or redirected)",
     )
 
     # Deduplication tuning (see DedupConfig in identify.py)

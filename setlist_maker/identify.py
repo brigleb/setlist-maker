@@ -21,7 +21,8 @@ from setlist_maker.audio import (
     slice_audio,
 )
 from setlist_maker.editor import CorrectionsDB, Track, Tracklist
-from setlist_maker.shazam_client import identify_sample_with_retry
+from setlist_maker.progress import RunState, live_display
+from setlist_maker.shazam_client import MAX_RETRIES, identify_sample_with_retry
 from setlist_maker.summary import generate_summary
 
 DEFAULT_DELAY_SECONDS = 15  # Pause between API calls
@@ -366,6 +367,7 @@ async def process_single_file(
     dedup_config: DedupConfig | None = None,
     summary: bool = True,
     allow_partial: bool = False,
+    panel: bool = True,
 ) -> tuple[Tracklist, Path] | None:
     """
     Process a single audio file and generate its tracklist.
@@ -403,43 +405,79 @@ async def process_single_file(
     # Initialize Shazam
     shazam = Shazam()
 
-    # Process each slice. Each sample gets a single compact status line. On a
-    # terminal we print a transient "identifying" marker and overwrite it in
-    # place with the result, so the line stays responsive without scrolling;
-    # piped/redirected output just receives the final line, no escape codes.
-    live = sys.stdout.isatty()
+    # Process each slice. Each sample gets a single compact status line, and on
+    # a terminal a live dashboard is pinned beneath the scrolling log (see
+    # progress.py). Piped/redirected output just receives the final lines, no
+    # escape codes and no panel.
+    total_slices = len(slices)
+    # Two separate questions. A terminal gets the colorized log either way;
+    # --no-panel drops only the pinned dashboard, not the log's rendering.
+    color = sys.stdout.isatty()
+    live = color and panel
     term_width = shutil.get_terminal_size(fallback=(80, 24)).columns
 
-    total_slices = len(slices)
-    idx_width = len(str(total_slices))
+    state = RunState(
+        source_name=audio_path.name,
+        total_samples=total_slices,
+        audio_seconds=total_slices * (SAMPLE_DURATION_MS // 1000),
+        delay_seconds=delay_seconds,
+        results=[info for _ts, info in raw_results],
+        resumed_from=start_index,
+        # The panel renders once as `Live` opens, before the loop has begun a
+        # sample -- point it at the one about to run rather than at sample 0.
+        index=start_index + 1,
+    )
+
     with tempfile.TemporaryDirectory() as temp_dir:
-        for i, (timestamp, segment) in enumerate(slices[start_index:], start_index + 1):
-            time_str = format_timestamp(timestamp)
+        with live_display(state, live) as display:
 
-            if live:
-                marker = f"  [{i:>{idx_width}}/{total_slices}] {time_str:>7}  …  identifying"
-                sys.stdout.write(f"\r\033[K{marker}")
-                sys.stdout.flush()
+            def announce_backoff(wait_time: float, attempt: int) -> None:
+                """Show the rate-limit wait as a phase the panel can count down.
 
-            track_info = await identify_sample_with_retry(shazam, segment, temp_dir)
+                Also left in the scrollback, since a slow run should still
+                explain itself in a piped log or once the panel is gone.
+                """
+                state.begin_backoff(wait_time, attempt)
+                display.log(
+                    f"  Warning: Rate limited. Backing off for {wait_time:.0f} seconds "
+                    f"(attempt {attempt}/{MAX_RETRIES})..."
+                )
 
-            line = format_progress_line(
-                i, total_slices, time_str, track_info, width=term_width, color=live
-            )
-            if live:
-                sys.stdout.write(f"\r\033[K{line}\n")
-                sys.stdout.flush()
-            else:
-                print(line)
+            for i, (timestamp, segment) in enumerate(slices[start_index:], start_index + 1):
+                time_str = format_timestamp(timestamp)
+                state.begin_sample(i)
 
-            raw_results.append((timestamp, track_info))
+                track_info = await identify_sample_with_retry(
+                    shazam, segment, temp_dir, on_backoff=announce_backoff
+                )
 
-            # Save progress after each sample
-            save_progress(raw_results, progress_path)
+                state.record(track_info)
+                is_last = i >= total_slices
 
-            # Delay before next request (except for the last one)
-            if i < total_slices:
-                await asyncio.sleep(delay_seconds)
+                # Enter the cooldown phase *before* the logging and the progress
+                # write below, so the panel never claims to still be asking
+                # about a sample it has already recorded.
+                if not is_last:
+                    state.begin_cooldown(delay_seconds)
+
+                display.log(
+                    format_progress_line(
+                        i, total_slices, time_str, track_info, width=term_width, color=color
+                    )
+                )
+
+                raw_results.append((timestamp, track_info))
+
+                # Save progress after each sample
+                save_progress(raw_results, progress_path)
+
+                # Delay before next request (except for the last one). The panel
+                # animates the countdown from rich's own refresh thread, so this
+                # sleep stays exactly as it was.
+                if not is_last:
+                    await asyncio.sleep(delay_seconds)
+
+            state.finish()
 
     # Convert to Tracklist with corrections applied
     print("\n  Processing complete. Generating tracklist...")
