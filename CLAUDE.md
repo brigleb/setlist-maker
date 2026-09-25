@@ -608,6 +608,11 @@ CLI application with the following modules:
   of it -- the textarea has its own undo, and the shortcut sits past the input guard so ⌘Z
   in a field stays the field's. Saving clears the history: inserted rows get real indices
   then, and undoing past that would re-send one as new.
+- **Splitting** is one function, `splitAt(track, seconds)`, reached three ways: the inspector's
+  button (selected track, playhead), **S** (whichever kept track holds the playhead -- automatic
+  advance does not select, so the selection may be elsewhere) and **Alt-click** on a block (that
+  block, pointer position). S leaves focus alone so Space and the arrows keep driving playback.
+  The new row is inserted in timestamp order, since a kept window runs over merged rows.
 - Selection is an object reference (`selectedTrack`), like `playingTrack`/`artTrack`. Choosing
   to play a track selects it; automatic advance does not. During a replay the inspector is not
   rebuilt, or a tick would take the focus out of a field being typed in.
