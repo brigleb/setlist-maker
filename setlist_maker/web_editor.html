@@ -172,6 +172,7 @@
     background-image:repeating-linear-gradient(-45deg, var(--hatch) 0 3px, transparent 3px 7px); }
   .tl-playhead { position:absolute; top:14px; bottom:0; width:0; border-left:2px solid var(--accent); pointer-events:none; z-index:8; }
   .tl-cursor { position:absolute; top:-18px; transform:translateX(-50%); background:var(--accent); color:#fff; font-size:10px; padding:1px 5px; border-radius:4px; pointer-events:none; white-space:nowrap; z-index:9; font-variant-numeric:tabular-nums; }
+  .tl-cursor.split { background:var(--warn); }
   .tl-legend { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:11px; padding:6px 0 2px 42px; }
   .tl-legend i { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--text); margin-right:4px; vertical-align:middle; }
   .tl-legend i.refine { background:var(--accent); width:5px; height:5px; }
@@ -246,7 +247,7 @@
         <button id="tl-replay" class="tbtn" type="button" title="Drop the samples in again, in the order the run asked for them">▶ Replay the run</button>
       </div>
       <div id="tl-rows"></div>
-      <div class="tl-legend"><span><i></i>30s sample</span><span><i class="refine"></i>12s refine</span><span><i class="miss"></i>heard nothing</span><span><i class="manual"></i>you asked</span><span id="tl-hint">click a track to inspect · double-click to play from there · click a pin to hear what Shazam heard</span></div>
+      <div class="tl-legend"><span><i></i>30s sample</span><span><i class="refine"></i>12s refine</span><span><i class="miss"></i>heard nothing</span><span><i class="manual"></i>you asked</span><span id="tl-hint">click a track to inspect · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard</span></div>
     </div>
     <aside id="tl-side">
       <div id="insp" class="tl-card"></div>
@@ -772,6 +773,11 @@
       case "ArrowRight": e.preventDefault(); skip(SKIP_SECONDS); break;
       case "ArrowUp":    e.preventDefault(); prevTrack(); break;
       case "ArrowDown":  e.preventDefault(); nextTrack(); break;
+      case "s": case "S": {
+        const t = keptTrackAt(audio.currentTime || 0);
+        if (t && splitAt(t, audio.currentTime || 0)) e.preventDefault();
+        break;
+      }
     }
   });
 
@@ -1154,7 +1160,7 @@
       canSample = !!data.can_sample;
       nextProbe = data.next || null;
       document.getElementById("tl-hint").textContent =
-        "click a track to inspect · double-click to play from there · click a pin to hear what Shazam heard"
+        "click a track to inspect · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard"
         + (canSample ? " · click the pin lane to ask Shazam about any moment" : "");
       if (wasLive && !data.live) {
         // The run finished and this server is now its editor. Everything on
@@ -1388,6 +1394,11 @@
       return;
     }
     const hit = e.target.closest("[data-i]");
+    if (hit && e.altKey && hit.classList.contains("tl-seg")) {
+      const t = timeAt(e);
+      if (t !== null && !splitAt(tracks[+hit.dataset.i], t)) toast("Too close to the edge of the track to split there");
+      return;
+    }
     if (hit) { selectTrack(tracks[+hit.dataset.i]); return; }
     if (canSample && e.target.closest(".tl-pins") && !e.target.closest(".tl-pin")) {
       const t = timeAt(e);
@@ -1409,7 +1420,9 @@
     const r = lanes.getBoundingClientRect();
     cur.style.left = (e.clientX - r.left) + "px";
     cur.style.top = onPins ? "58px" : "28px";
-    cur.textContent = (onPins ? "Ask Shazam about " : "") + TL.fmt(t);
+    const splitting = e.altKey && !onPins && !liveMode;
+    cur.textContent = (onPins ? "Ask Shazam about " : splitting ? "Split here at " : "") + TL.fmt(t);
+    cur.classList.toggle("split", splitting);
   });
   tlRows.addEventListener("mouseleave", () => { const cur = tlRows.querySelector(".tl-cursor"); if (cur) cur.remove(); });
 
@@ -1444,12 +1457,14 @@
     return TL.keptWindows(tracks, D).find(x => x.index === i) || TL.windows(tracks, D)[i];
   }
 
-  function splitAtPlayhead() {
-    const t = selectedTrack;
+  // Cut track t at `seconds`: the new row starts there, blank, and is selected
+  // so it can be named straight away. The Split button and S cut at the
+  // playhead; Alt-click cuts wherever the pointer is, with no need to play.
+  function splitAt(t, seconds) {
     const i = tracks.indexOf(t);
-    const at = Math.floor(audio.currentTime);
+    const at = Math.floor(seconds);
     const w = splitWindow(t);
-    if (i === -1 || !w || !(at > w.start && at < w.end)) return;
+    if (liveMode || i === -1 || !w || !(at > w.start && at < w.end)) return false;
     const row = { artist: "", title: "", timestamp: at, time: fmt(at), rejected: false, _new: true };
     // In timestamp order: a merged track's span runs over the rows merged into it.
     let j = i + 1;
@@ -1459,9 +1474,24 @@
     setDirty(true);
     selectedTrack = row;
     render();
-    const input = document.querySelector("#insp input.in-artist");
-    if (input) input.focus();
+    toast("Split at " + TL.fmt(at) + " — name the new track, or ⌘Z");
+    return true;
   }
+
+  function splitAtPlayhead() {
+    if (splitAt(selectedTrack, audio.currentTime)) {
+      const input = document.querySelector("#insp input.in-artist");
+      if (input) input.focus();
+    }
+  }
+
+  // The kept track whose span holds `seconds` -- what S splits while listening,
+  // which need not be the selected track (automatic advance does not select).
+  function keptTrackAt(seconds) {
+    const w = TL.keptWindows(tracks, setDuration()).find(x => seconds >= x.start && seconds < x.end);
+    return w ? tracks[w.index] : null;
+  }
+
 
   function renderInspector() {
     const box = document.getElementById("insp");
