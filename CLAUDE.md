@@ -613,6 +613,13 @@ CLI application with the following modules:
   advance does not select, so the selection may be elsewhere) and **Alt-click** on a block (that
   block, pointer position). S leaves focus alone so Space and the arrows keep driving playback.
   The new row is inserted in timestamp order, since a kept window runs over merged rows.
+- **Identify at playhead** (inspector button, **I**) is `identifyAt(track, seconds)`: a
+  `sampleAt()` centred on the playhead, then `setNames()` -- an ordinary, undoable edit. The track
+  is captured by reference *before* the request, since the answer can wait out a pacing
+  interval. Unidentified: filled in. Same `identity()`: "Shazam agrees", no edit. Named
+  otherwise: `confirm()` first, because Shazam is often wrong mid-mix and the name may be the
+  user's own correction; declining leaves the answer in "Shazam heard" with its Use button.
+  Live mode only samples: nothing may be edited under the run.
 - Selection is an object reference (`selectedTrack`), like `playingTrack`/`artTrack`. Choosing
   to play a track selects it; automatic advance does not. During a replay the inspector is not
   rebuilt, or a tick would take the focus out of a field being typed in.

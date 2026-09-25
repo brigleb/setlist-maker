@@ -181,6 +181,12 @@ listening to split at the playhead (the side panel's **Split at playhead** does
 the same for the selected track). Every change can be undone with **Undo** / ⌘Z (and
 redone with **Redo** / ⇧⌘Z) until you save.
 
+To name a track Shazam missed, park the playhead in it and press **I** (or
+**Identify at playhead** in the side panel): Shazam is asked about the 30
+seconds around the playhead, and an unidentified track is filled in with the
+answer -- an ordinary edit, so ⌘Z takes it back and nothing is written until
+you save. A track that already has a name is only replaced after you confirm.
+
 Click the pin lane under the tracks to ask Shazam about any moment. The answer
 lands as a purple pin and is saved to the run's `_progress.json`, so a later
 resume counts it as evidence too. Lookups are spaced like an identify run's
