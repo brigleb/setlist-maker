@@ -93,6 +93,16 @@
   #artwork-url { display:flex; gap:8px; }
   #artwork-url input { flex:1; font:inherit; font-size:13px; padding:6px 9px; border:1px solid var(--input-border);
     border-radius:6px; background:var(--card); color:var(--text); }
+  #artwork-upload { display:flex; gap:10px; align-items:center; color:var(--muted); font-size:12px; }
+  #artwork-panel.drop #artwork-large, #episode.drop { outline:3px dashed var(--accent); outline-offset:3px; }
+  #episode { display:flex; align-items:center; gap:12px; max-width:760px; margin:0 auto; padding:10px 20px 12px; background:var(--card); border-bottom:1px solid var(--summary-line); }
+  #ep-thumb { width:56px; height:56px; border-radius:8px; flex:none; background-size:cover; background-position:center; background-color:var(--player-thumb); }
+  #ep-thumb.empty { background-image:linear-gradient(135deg, var(--hairline), var(--line)); }
+  .ep-text { min-width:0; }
+  .ep-title { font-weight:600; font-size:14px; }
+  .ep-note { color:var(--muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ep-spacer { flex:1; }
+  body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
   .star { color:var(--warn); font-size:13px; flex:none; }
   .meta { flex:1; min-width:0; cursor:text; }
   .artist { font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -255,6 +265,18 @@
     </aside>
   </section>
   <textarea id="summary" class="summary" rows="2" aria-label="Set description" placeholder="Add a description for this set…"></textarea>
+  <section id="episode" aria-label="Podcast episode">
+    <div id="ep-thumb" class="empty" title="Episode cover — drop an image here"></div>
+    <div class="ep-text">
+      <div class="ep-title">Episode cover</div>
+      <div id="ep-note" class="ep-note"></div>
+    </div>
+    <button id="ep-upload" class="artbtn" type="button">Upload…</button>
+    <button id="ep-remove" class="artbtn" type="button" hidden>Remove</button>
+    <input id="ep-file" type="file" accept="image/*" hidden>
+    <div class="ep-spacer"></div>
+    <button id="embed" class="artbtn" type="button" hidden title="Write chapter markers, chapter artwork and the episode cover into the MP3 (saves first)">Embed chapters in MP3</button>
+  </section>
   <main id="list"></main>
   <div id="player" class="disabled">
     <div id="pthumb"></div>
@@ -293,6 +315,11 @@
           <input id="art-url" type="url" placeholder="…or paste an image URL" aria-label="Cover art URL">
           <button id="art-url-use" class="artbtn" type="button">Use</button>
           <button id="art-auto" class="artbtn" type="button">Automatic</button>
+        </div>
+        <div id="artwork-upload">
+          <button id="art-upload" class="artbtn" type="button">Upload image…</button>
+          <span>or drop an image anywhere on this panel</span>
+          <input id="art-file" type="file" accept="image/*" hidden>
         </div>
       </div>
     </div>
@@ -403,11 +430,11 @@
   let steps = [], stepAt = 0, savedAt = 0, recordQueued = false, savedSummary = "";
 
   function snapshot() {
-    return { order: tracks.slice(), fields: tracks.map(t => Object.assign({}, t)) };
+    return { order: tracks.slice(), fields: tracks.map(t => Object.assign({}, t)), cover: coverChoice };
   }
 
   function sameSnapshot(a, b) {
-    return a.order.length === b.order.length && a.order.every((t, i) => t === b.order[i])
+    return a.cover === b.cover && a.order.length === b.order.length && a.order.every((t, i) => t === b.order[i])
       && JSON.stringify(a.fields) === JSON.stringify(b.fields);
   }
 
@@ -442,6 +469,7 @@
       for (const k of Object.keys(t)) if (!(k in snap.fields[i])) delete t[k];
       Object.assign(t, snap.fields[i]);
     });
+    coverChoice = snap.cover;
     reindexPlayingTrack();
     if (selectedTrack && !tracks.includes(selectedTrack)) selectedTrack = null;
     if (overlay.classList.contains("open")) closeArtwork();  // it may show a pick being undone
@@ -473,6 +501,9 @@
     if (was) selectedTrack = tracks.find(t => t.timestamp === was.timestamp && t.artist === was.artist) || null;
     summaryEl.value = data.summary || "";
     autosizeSummary();
+    coverVersion = data.cover === undefined ? null : data.cover;
+    coverChoice = undefined;
+    canEmbed = !!data.can_embed;
     resetHistory();
     render();
     loadProbes();
@@ -502,6 +533,7 @@
     // is null and cannot recurse back into render().
     setPlayingIndex(playingIndex, { scroll: false });
     renderTimeline();
+    renderCover();
   }
 
   let artVersion = 0;  // bumped on save so re-requested thumbs bypass the browser's decoded-image cache
@@ -558,7 +590,7 @@
       // cover as the one in use.
       artCurrentUrl = t.coverart_url || null;
       overlayImg.hidden = !t.coverart_url;
-      if (t.coverart_url) overlayImg.src = t.coverart_url;
+      if (t.coverart_url) overlayImg.src = artSrc(t.coverart_url);
       setPickNote(t.coverart_url);
     } else {
       artCurrentUrl = null;
@@ -604,6 +636,8 @@
     const on = !artTrack.episode_cover;
     tracks.forEach(t => { t.episode_cover = false; });
     artTrack.episode_cover = on;
+    // One episode cover: starring a track replaces an uploaded one.
+    if (on && hasUploadedCover()) coverChoice = null;
     setDirty(true);
     syncCoverButton();
     render();
@@ -663,7 +697,7 @@
       // Loaded straight from the source, like the player bar's thumbnail: the
       // covers differ only in the picture, and the identical lower-third they
       // would all be composited under adds nothing to the comparison.
-      img.src = c.url;
+      img.src = artSrc(c.url);
       const cap = document.createElement("span");
       cap.textContent = c.source;  // textContent, not innerHTML — no XSS surface
       tile.append(img, cap);
@@ -697,13 +731,153 @@
     artCurrentUrl = url || null;
     setDirty(true);
     overlayImg.hidden = !url;
-    if (url) overlayImg.src = url;
+    if (url) overlayImg.src = artSrc(url);
     setPickNote(url);
     markCurrentAlt();
     render();
   }
 
   document.getElementById("art-auto").onclick = () => chooseArtwork(null);
+
+  // ---- uploads ----
+  // An uploaded image is stored beside the tracklist straight away and comes
+  // back as an "upload:<hash>.jpg" reference, which is then *chosen* like any
+  // other cover: an ordinary edit, undoable, written on Save. The body is the
+  // file itself with its image/* type -- the server refuses anything else, so
+  // a cross-site form cannot post one.
+  function artSrc(url) {
+    return url && url.startsWith("upload:") ? "/api/upload/" + url.slice(7) : url;
+  }
+
+  async function uploadImage(file) {
+    if (!file || !(file.type || "").startsWith("image/")) throw new Error("That file is not an image.");
+    if (file.size > 25 * 1024 * 1024) throw new Error("That image is over 25 MB.");
+    const r = await fetch("/api/upload", { method: "POST", headers: { "Content-Type": file.type }, body: file });
+    const res = await r.json().catch(() => ({}));
+    if (!r.ok || !res.ok) throw new Error(res.error ? "Upload failed: " + res.error : "Upload failed (" + r.status + ")");
+    return res.ref;
+  }
+
+  // A file dropped anywhere else would make the browser open it in place of the
+  // editor; outside the two drop zones a drop does nothing.
+  document.addEventListener("dragover", e => e.preventDefault());
+  document.addEventListener("drop", e => e.preventDefault());
+
+  // Drop targets: stop the browser opening the file, show where it will land.
+  function dropZone(node, onFile) {
+    node.addEventListener("dragover", e => { e.preventDefault(); node.classList.add("drop"); });
+    node.addEventListener("dragleave", () => node.classList.remove("drop"));
+    node.addEventListener("drop", e => {
+      e.preventDefault();
+      node.classList.remove("drop");
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) onFile(file);
+    });
+  }
+
+  async function uploadTrackArt(file) {
+    const target = artTrack;  // the panel may move on while the upload runs
+    artNote.textContent = "Uploading…";
+    artNote.hidden = false;
+    try {
+      const ref = await uploadImage(file);
+      if (target && target === artTrack) chooseArtwork(ref);
+    } catch (e) {
+      if (target === artTrack) artNote.textContent = e.message;
+    }
+  }
+  const artFile = document.getElementById("art-file");
+  document.getElementById("art-upload").onclick = () => artFile.click();
+  artFile.onchange = () => { if (artFile.files[0]) uploadTrackArt(artFile.files[0]); artFile.value = ""; };
+  dropZone(document.getElementById("artwork-panel"), file => { if (!liveMode) uploadTrackArt(file); });
+
+  // ---- episode cover ----
+  // The file <set>_cover.jpg beside the tracklist, embedded as the MP3's cover
+  // by Embed chapters. coverVersion is the saved file's mtime (null: none), and
+  // coverChoice the unsaved change: undefined for none, an upload reference for
+  // a new cover, null to remove it. It is part of the undo snapshot.
+  let coverVersion = null;
+  let coverChoice;
+  let canEmbed = false;
+
+  function hasUploadedCover() {
+    return typeof coverChoice === "string" || (coverChoice === undefined && coverVersion !== null);
+  }
+
+  function renderCover() {
+    const src = typeof coverChoice === "string" ? artSrc(coverChoice)
+      : coverChoice === undefined && coverVersion !== null ? "/api/cover?v=" + coverVersion : null;
+    const thumb = document.getElementById("ep-thumb");
+    thumb.style.backgroundImage = src ? "url('" + src + "')" : "";
+    thumb.classList.toggle("empty", !src);
+    document.getElementById("ep-remove").hidden = !src;
+    document.getElementById("embed").hidden = !canEmbed;
+    const star = tracks.find(t => t.episode_cover && !t.rejected);
+    document.getElementById("ep-note").textContent = src
+      ? (typeof coverChoice === "string" ? "Uploaded — Save to keep it" : "Uploaded")
+      : star ? "From ★ " + trackName(star) : "Automatic — the first track with artwork";
+  }
+
+  async function uploadCover(file) {
+    if (liveMode) return;
+    document.getElementById("ep-note").textContent = "Uploading…";
+    try {
+      coverChoice = await uploadImage(file);
+      tracks.forEach(t => { t.episode_cover = false; });  // one episode cover
+      setDirty(true);
+      render();
+      toast("Episode cover set — Save to keep it");
+    } catch (e) {
+      renderCover();
+      toast(e.message);
+    }
+  }
+  const epFile = document.getElementById("ep-file");
+  document.getElementById("ep-upload").onclick = () => epFile.click();
+  epFile.onchange = () => { if (epFile.files[0]) uploadCover(epFile.files[0]); epFile.value = ""; };
+  dropZone(document.getElementById("episode"), uploadCover);
+  document.getElementById("ep-remove").onclick = () => {
+    // Removing an upload that was never saved is back to "no change".
+    coverChoice = coverVersion === null ? undefined : null;
+    setDirty(true);
+    render();
+  };
+
+  // Everything `setlist-maker chapters` does, from the saved tracklist -- so an
+  // unsaved page is saved first. The MP3 is rewritten in place while the
+  // player may be streaming it, so playback stops and reloads around it.
+  let embedding = false;
+  document.getElementById("embed").onclick = async () => {
+    if (liveMode || embedding) return;
+    if (dirty && !(await save())) return;
+    const btn = document.getElementById("embed");
+    embedding = true;
+    btn.disabled = true;
+    btn.textContent = "Embedding…";
+    const at = audio.currentTime || 0, wasPlaying = !audio.paused;
+    audio.pause();
+    try {
+      const r = await fetch("/api/chapters", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const res = await r.json().catch(() => ({}));
+      if (res.ok) {
+        toast("Embedded " + res.chapters + " chapters, " + res.images + " images"
+          + (res.cover ? " and the episode cover" : "") + " into the MP3");
+      } else {
+        toast("Embed failed: " + (res.error || r.status));
+      }
+    } catch (e) {
+      toast("Embed failed");
+    } finally {
+      embedding = false;
+      btn.disabled = false;
+      btn.textContent = "Embed chapters in MP3";
+      audio.src = "/api/audio?v=" + Date.now();
+      audio.addEventListener("loadedmetadata", () => {
+        audio.currentTime = at;
+        if (wasPlaying) audio.play();
+      }, { once: true });
+    }
+  };
   document.getElementById("art-url-use").onclick = () => useTypedUrl();
   artUrlEl.addEventListener("keydown", e => {
     if (e.key === "Enter") { e.preventDefault(); useTypedUrl(); }
@@ -811,7 +985,7 @@
         // still built from the old art, so requesting it would contradict what
         // the user just chose; show the raw choice instead. "Automatic" leaves
         // no URL to show, so the gradient placeholder stands in until the save.
-        if (t.coverart_url) thumb.style.backgroundImage = "url('" + t.coverart_url + "')";
+        if (t.coverart_url) thumb.style.backgroundImage = "url('" + artSrc(t.coverart_url) + "')";
       } else {
         artObserver.observe(thumb);
       }
@@ -976,7 +1150,7 @@
     const pt = document.getElementById("pthumb");
     // backgroundImage, never the `background` shorthand -- see the CSS comment.
     pt.style.backgroundImage = t.coverart_url
-      ? "url('" + t.coverart_url + "')"
+      ? "url('" + artSrc(t.coverart_url) + "')"
       : GRADS[i % GRADS.length];
     highlightPlayingRow(opts && opts.scroll);
   }
@@ -1082,7 +1256,10 @@
     seekTo(w.start + (e.target.value / 1000) * w.length);
   });
 
-  document.getElementById("save").onclick = async () => {
+  document.getElementById("save").onclick = () => save();
+
+  // Returns whether the save landed, so Embed chapters can save first.
+  async function save() {
     // Existing rows map back by their stable server index (NOT array position,
     // which inserted rows shift); new rows carry a timestamp and no index.
     const hasNew = tracks.some(t => t._new);
@@ -1096,6 +1273,7 @@
       if (t._art) edit.coverart_url = t.coverart_url;
       return edit;
     }) };
+    if (coverChoice !== undefined) payload.cover = coverChoice;
     try {
       const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const res = await r.json();
@@ -1110,12 +1288,16 @@
         // note, and after a reload its track object is stale; close it rather
         // than leave either lying.
         if (overlay.classList.contains("open")) closeArtwork();
+        if (coverChoice !== undefined) { coverVersion = coverChoice ? Date.now() : null; coverChoice = undefined; }
         if (hasNew) await load();  // inserted rows also need real indices
         else render();
         setDirty(false); resetHistory(); toast("Saved");
-      } else { toast("Save failed: " + (res.error || "")); }
+        return true;
+      }
+      toast("Save failed: " + (res.error || ""));
     } catch (e) { toast("Save failed"); }
-  };
+    return false;
+  }
 
   document.getElementById("done").onclick = async () => {
     if (dirty && !confirm("You have unsaved changes. Close anyway?")) return;
@@ -1252,7 +1434,7 @@
           th.style.left = at(w.start);
           th.dataset.i = i;
           th.title = trackName(t) + " · " + TL.fmt(w.start);
-          if (t.coverart_url) th.style.backgroundImage = "url('" + t.coverart_url.replace(/'/g, "%27") + "')";
+          if (t.coverart_url) th.style.backgroundImage = "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')";
           else th.style.backgroundImage = GRADS[i % GRADS.length];
           art.appendChild(th);
         }
@@ -1523,7 +1705,7 @@
     const hero = el("div", "in-hero");
     const thumb = el("div", "thumb");
     thumb.style.backgroundImage = t.coverart_url
-      ? "url('" + t.coverart_url.replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
+      ? "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
     const canArt = (t.artist || t.title) && t.index !== undefined && t.index !== null;
     if (canArt) { thumb.title = "Artwork and episode cover"; thumb.onclick = () => showArtwork(t); }
     else thumb.style.cursor = "default";

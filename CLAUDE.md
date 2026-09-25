@@ -465,8 +465,9 @@ CLI application with the following modules:
   state, not the page's live fields, so the preview always reflects what would be
   embedded), `GET /api/artwork/options?index=N` (the picker's candidate list — see
   **Artwork curation** below), `POST /api/done` (graceful shutdown → returns control
-  to the CLI), `GET /api/probes` + `GET /timeline.js` (the timeline -- see below), and
-  `POST /api/sample` (click-to-sample, see `sampler.py`). Both artwork endpoints resolve
+  to the CLI), `GET /api/probes` + `GET /timeline.js` (the timeline -- see below),
+  `POST /api/sample` (click-to-sample, see `sampler.py`), and the upload / episode cover /
+  embed endpoints described under `uploads.py`. Both artwork endpoints resolve
   `index` through the shared `_track_for_query()`, so they answer for exactly the same set of tracks and 404 alike.
 - **Host-header guard:** `_reject_foreign_host()` runs at the top of both `do_GET`
   and `do_POST` — a single gate, so a new endpoint cannot forget it. Requires the
@@ -567,6 +568,42 @@ CLI application with the following modules:
   input/textarea — except `#seek`, a range input that's deliberately exempted
   so the arrows still seek when the scrubber has focus.
 
+### `setlist_maker/uploads.py` - Uploaded artwork and episode covers
+
+- **Files beside the tracklist, not in the cache**, so they travel with the set (iCloud
+  included) and survive a cache clear: track art in `<set>_artwork/<hash>.jpg`, the episode cover
+  as `<set>_cover.jpg`. `<set>` is `progress_path_for`'s stem rule.
+- **Track art is an `upload:<hash>.jpg` reference in `coverart_url`**, not a URL:
+  `download_image()` (http(s) only) is never asked to fetch it. `_picked_artwork_url()` accepts
+  it beside http(s), and the pick pins it like any other. The name is a hash of the *stored*
+  bytes, so it is also the artwork cache's key, and every read validates it against `_REF`
+  before joining it onto a path -- the sidecar is hand-editable.
+- **Resolved in `artwork_cache.source_artwork(..., uploads_dir)`**, which reads the file and
+  touches neither cache. A missing file (an iCloud folder not synced yet) must not write a
+  `.fallback` marker or cache a gradient composite, or the wrong art would outlive the sync;
+  `chapter_image()` skips caching exactly that case. Every chapter path has to thread
+  `uploads_dir` (`embed_chapters_for_tracklist(tracklist_path=)`, the editor's `/api/artwork`),
+  or an upload silently becomes the gradient card.
+- `store_upload()` decodes with Pillow, centre-crops square (`create_chapter_image` resizes, so
+  a portrait would be squashed), caps at `MAX_STORED_EDGE` and re-encodes JPEG. HEIC fails with
+  a message saying so rather than adding a plugin dependency.
+- **The episode cover is a file because the sidecar is a bare list** (see *The JSON sidecar's
+  shape*) and the cover belongs to the set. Precedence in `embed_chapters_for_tracklist`:
+  `--cover` > `<set>_cover.jpg` > the starred track > the first track with real art; the file is
+  honoured with `--no-artwork`, as `--cover` is. Uploading one un-stars every track (page and
+  server), and starring a track removes it (page), so there is one choice.
+- **Endpoints.** `POST /api/upload` takes the raw file with its own `image/*` type and refuses
+  anything else -- `multipart/form-data` and `text/plain` are types a cross-site form can POST
+  to a loopback port without a preflight, and this endpoint writes files. An oversized body is
+  drained in chunks before the 413, or the client sees a reset instead of the answer. Storing
+  is not choosing: the page pins the reference with an ordinary edit (undoable, saved on Save).
+  `GET /api/upload/<hash>.jpg` is `immutable`; `GET /api/cover` is `no-store`. The save
+  payload's `cover` key is a reference, `null` (remove) or absent (unchanged), validated before
+  anything is applied. `POST /api/chapters` runs `embed_chapters_for_tracklist` on the *saved*
+  tracklist (the page saves first), one at a time, never while live; the page pauses the
+  `<audio>` around it and reloads it after, because mutagen rewrites the file it streams from.
+  The endpoint imports `cli` lazily -- `cli` imports this module.
+
 ### `setlist_maker/web_timeline.js` + the editor's timeline
 
 - **The tracklist is the truth; probes are evidence laid over it.** The grid's blocks come from
@@ -601,7 +638,8 @@ CLI application with the following modules:
   recording and must survive.
 - **Undo/redo** (header buttons, ⌘Z / ⇧⌘Z) is recorded in `setDirty(true)`, the one call every edit
   path already ends in, so a new mutation cannot forget it. A step is the list's order plus a
-  copy of each track's fields, restored onto the **same objects** so the `selectedTrack` /
+  copy of each track's fields (plus the unsaved episode-cover choice, `coverChoice`), restored
+  onto the **same objects** so the `selectedTrack` /
   `playingTrack` / `artTrack` references stay valid. It is taken in a microtask, which makes
   one user action one step (a Tidy retitling eight tracks, a commit that renames and
   re-sorts), and a step that changed no track is dropped, which keeps description typing out

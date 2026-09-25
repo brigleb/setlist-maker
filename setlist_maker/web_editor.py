@@ -33,6 +33,16 @@ from setlist_maker.editor import (
     save_tracklist,
 )
 from setlist_maker.sampler import SampleRequests, SampleRequestsClosed, ShazamSampler
+from setlist_maker.uploads import (
+    MAX_UPLOAD_BYTES,
+    UploadError,
+    artwork_dir_for,
+    cover_path_for,
+    is_upload_ref,
+    set_episode_cover,
+    store_upload,
+    upload_path,
+)
 
 # Host names a browser may legitimately use to reach this loopback server. The
 # port must match too, so a rebinding attacker cannot forge a valid Host.
@@ -143,10 +153,12 @@ def _picked_artwork_url(edit: dict) -> str | None:
     Refusing anything but http(s) here matters because this URL is persisted to
     the JSON sidecar and handed to ``urlopen`` by this process on every later
     run; its default opener would treat ``file://`` as a perfectly good source
-    of "cover art".
+    of "cover art". The one other thing accepted is an ``upload:`` reference to
+    an image uploaded through this page, which is resolved as a local file
+    under the set's own artwork folder and never fetched.
     """
     url = (edit.get("coverart_url") or "").strip() or None
-    if url is not None and not is_fetchable_url(url):
+    if url is not None and not (is_fetchable_url(url) or is_upload_ref(url)):
         raise ValueError(f"artwork URL must be http:// or https:// -- got {url!r}")
     return url
 
@@ -276,6 +288,9 @@ class EditorContext:
 # run answers between its own probes, so this is generous, not expected.
 LIVE_SAMPLE_TIMEOUT = 600.0
 
+# Chapter embedding rewrites the MP3 in place; two at once would interleave.
+_EMBED_LOCK = threading.Lock()
+
 
 @dataclass
 class LiveRun:
@@ -367,7 +382,7 @@ class _Handler(BaseHTTPRequestHandler):
         if self._reject_foreign_host():
             return
         path = urlparse(self.path).path
-        if path in ("/api/save", "/api/sample") and not self._is_json():
+        if path in ("/api/save", "/api/sample", "/api/chapters") and not self._is_json():
             # A cross-site form or text/plain fetch can reach a loopback port
             # with a valid Host and no preflight; application/json cannot be
             # sent cross-origin without one, which this server never grants.
@@ -379,6 +394,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_done()
         elif path == "/api/sample":
             self._handle_sample()
+        elif path == "/api/upload":
+            self._handle_upload()
+        elif path == "/api/chapters":
+            self._handle_chapters()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -407,13 +426,26 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             data = json.loads(raw)
             edits = data.get("tracks", [])
+            cover = data.get("cover", _UNSET)
+            if cover not in (_UNSET, None):
+                # Checked before anything is applied, so a bad cover saves nothing.
+                if not is_upload_ref(cover):
+                    raise ValueError(f"episode cover must be an uploaded image -- got {cover!r}")
+                if not upload_path(artwork_dir_for(ctx.output_path), cover).exists():
+                    raise ValueError(f"uploaded image {cover} is missing")
             apply_edits(
                 ctx.tracklist,
                 edits,
                 ctx.corrections_db,
                 summary=data.get("summary", _UNSET),
             )
+            if cover not in (_UNSET, None):
+                # One episode cover: an uploaded one replaces the starred track.
+                for track in ctx.tracklist.tracks:
+                    track.is_episode_cover = False
             save_tracklist(ctx.tracklist, ctx.output_path, ctx.corrections_db)
+            if cover is not _UNSET:
+                set_episode_cover(ctx.output_path, cover)
         except Exception as exc:  # surface to the page; keep state intact
             self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -439,6 +471,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_artwork()
         elif path == "/api/artwork/options":
             self._send_artwork_options()
+        elif path.startswith("/api/upload/"):
+            self._send_upload(path[len("/api/upload/") :])
+        elif path == "/api/cover":
+            self._send_image_file(cover_path_for(self._ctx.output_path), "no-store")
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -454,6 +490,14 @@ class _Handler(BaseHTTPRequestHandler):
         tracklist, live = self._current_tracklist()
         api = tracklist_to_api(tracklist)
         api["live"] = live
+        # A version for the page to cache-bust /api/cover with, or None when
+        # the set has no uploaded episode cover.
+        try:
+            api["cover"] = cover_path_for(self._ctx.output_path).stat().st_mtime_ns // 1_000_000
+        except OSError:
+            api["cover"] = None
+        audio = self._ctx.audio_path
+        api["can_embed"] = bool(audio and audio.suffix.lower() == ".mp3" and audio.exists())
         self._send_json(api)
 
     def _current_tracklist(self) -> tuple[Tracklist, bool]:
@@ -637,7 +681,8 @@ class _Handler(BaseHTTPRequestHandler):
             else None
         )
         if in_use:
-            candidates.append({"source": "In use", "url": in_use, "label": ""})
+            source = "Uploaded" if is_upload_ref(in_use) else "In use"
+            candidates.append({"source": source, "url": in_use, "label": ""})
         error = None
         try:
             candidates += [
@@ -669,7 +714,10 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         data = chapter_image(
-            artist=track.artist, title=track.title, coverart_url=track.coverart_url
+            artist=track.artist,
+            title=track.title,
+            coverart_url=track.coverart_url,
+            uploads_dir=artwork_dir_for(self._ctx.output_path),
         )
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "image/jpeg")
@@ -681,6 +729,119 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError):
             pass  # row scrolled away / page closed
+
+    def _handle_upload(self) -> None:
+        """Store an uploaded image beside the tracklist; answer with its reference.
+
+        The body is the raw file with its own ``image/*`` type -- never
+        ``multipart/form-data``. That, like ``text/plain``, is a type a
+        cross-site form may POST to a loopback port without a preflight, and
+        this endpoint writes files; an ``image/*`` body cannot be sent
+        cross-origin without one, which this server never grants.
+
+        Storing is not choosing: the page pins the reference with an ordinary
+        edit, so nothing about the tracklist changes until Save.
+        """
+        ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        if not ctype.startswith("image/"):
+            self.send_error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "expected an image/* body")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            length = 0
+        if length <= 0:
+            self._send_json({"ok": False, "error": "empty upload"}, HTTPStatus.BAD_REQUEST)
+            return
+        if length > MAX_UPLOAD_BYTES:
+            # Drained in chunks and discarded, so an oversized body never lands
+            # in memory -- but is read, or the client sees a reset connection
+            # instead of this answer.
+            remaining = length
+            while remaining > 0:
+                chunk = self.rfile.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+            self._send_json(
+                {"ok": False, "error": f"image is over {MAX_UPLOAD_BYTES // (1024 * 1024)} MB"},
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            )
+            return
+        data = self.rfile.read(length)
+        try:
+            ref = store_upload(artwork_dir_for(self._ctx.output_path), data)
+        except UploadError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        except OSError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self._send_json({"ok": True, "ref": ref})
+
+    def _send_upload(self, name: str) -> None:
+        """Serve one uploaded image. Content-addressed, so cacheable forever."""
+        path = upload_path(artwork_dir_for(self._ctx.output_path), "upload:" + name)
+        if path is None:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        self._send_image_file(path, "max-age=31536000, immutable")
+
+    def _send_image_file(self, path: Path, cache_control: str) -> None:
+        try:
+            data = path.read_bytes()
+        except OSError:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", cache_control)
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _handle_chapters(self) -> None:
+        """Embed chapter markers, chapter art and the episode cover into the MP3.
+
+        Exactly what ``setlist-maker chapters`` does, from the *saved* tracklist
+        (the page saves first). Refused while a run is live -- it is reading the
+        same file -- and one at a time: mutagen rewrites the file in place.
+        """
+        ctx = self._ctx
+        if ctx.live is not None:
+            self._send_json({"ok": False, "error": "still identifying"}, HTTPStatus.CONFLICT)
+            return
+        audio = ctx.audio_path
+        if audio is None or not audio.exists() or audio.suffix.lower() != ".mp3":
+            self._send_json(
+                {"ok": False, "error": "chapter markers need the set's MP3"},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if not any(not t.is_unidentified for t in ctx.tracklist.tracks if not t.rejected):
+            self._send_json(
+                {"ok": False, "error": "no identified tracks to mark"}, HTTPStatus.BAD_REQUEST
+            )
+            return
+        if not _EMBED_LOCK.acquire(blocking=False):
+            self._send_json({"ok": False, "error": "already embedding"}, HTTPStatus.CONFLICT)
+            return
+        try:
+            # Imported here: cli imports this module, so a top-level import is a cycle.
+            from setlist_maker.cli import embed_chapters_for_tracklist
+
+            chapters, images, cover = embed_chapters_for_tracklist(
+                ctx.tracklist, audio, fetch_art=True, tracklist_path=ctx.output_path
+            )
+        except Exception as exc:  # a handler that raises sends no response at all
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        finally:
+            _EMBED_LOCK.release()
+        self._send_json({"ok": True, "chapters": chapters, "images": images, "cover": cover})
 
     def _send_audio(self) -> None:
         audio_path = self._ctx.audio_path

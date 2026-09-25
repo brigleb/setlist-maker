@@ -23,6 +23,7 @@ from setlist_maker.artwork import (
     create_chapter_image,
     fetch_artwork,
 )
+from setlist_maker.uploads import is_upload_ref, read_upload
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,7 @@ def source_artwork(
     title: str,
     coverart_url: str | None = None,
     size: int = CHAPTER_IMAGE_SIZE,
+    uploads_dir: Path | None = None,
 ) -> bytes | None:
     """Return the raw fetched cover art for a track, or None if none was found.
 
@@ -164,7 +166,20 @@ def source_artwork(
     A ``None`` return means "no artwork for this track" and is the caller's to
     interpret; the episode cover uses it to skip artless tracks, the way it did
     before compositing moved behind this cache.
+
+    An ``upload:`` reference (see ``uploads.py``) is read from ``uploads_dir``
+    and touches neither cache: it is a local read, and a missing file -- an
+    iCloud folder not synced yet -- must not leave a ``.fallback`` marker that
+    would keep this key artless in every later process.
     """
+    if is_upload_ref(coverart_url):
+        data = read_upload(uploads_dir, coverart_url)
+        if data is None:
+            logger.warning(
+                "Uploaded artwork %s for '%s - %s' is missing", coverart_url, artist, title
+            )
+        return data
+
     key = cache_key(artist, title, coverart_url, size)
     path = cache_dir() / f"{key}.src"
 
@@ -257,12 +272,14 @@ def chapter_image(
     title: str,
     coverart_url: str | None = None,
     size: int = CHAPTER_IMAGE_SIZE,
+    uploads_dir: Path | None = None,
 ) -> bytes:
     """Return the chapter composite for a track, generating it only on a miss.
 
     Always returns JPEG bytes: when no artwork is found anywhere,
     ``create_chapter_image`` renders its gradient fallback, which is exactly
-    what would be embedded, so it is cached like any other result.
+    what would be embedded, so it is cached like any other result -- except
+    for an upload whose file is missing, which is not an answer but a delay.
     """
     key = cache_key(artist, title, coverart_url, size)
     path = cache_dir() / f"{key}.jpg"
@@ -277,10 +294,13 @@ def chapter_image(
         if cached is not None:
             return cached
 
-        artwork_bytes = source_artwork(artist, title, coverart_url, size)
+        artwork_bytes = source_artwork(artist, title, coverart_url, size, uploads_dir)
         data = create_chapter_image(
             artwork_bytes=artwork_bytes, artist=artist, title=title, size=size
         )
 
-        _write_cached(path, data)
+        # A missing upload renders the gradient fallback, but caching it under
+        # the upload's key would keep serving the gradient once the file arrives.
+        if artwork_bytes is not None or not is_upload_ref(coverart_url):
+            _write_cached(path, data)
         return data

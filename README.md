@@ -233,8 +233,10 @@ composite that will be embedded, not the raw album cover. The panel that opens
 also lets you fix it when the automatic lookup picked wrong.
 
 **Choose artwork…** asks iTunes, Deezer and the Cover Art Archive all at once
-and shows what each one offers, labelled by source. Click a cover to use it, or
-paste the URL of any image. This lookup is the reason it is a button and not
+and shows what each one offers, labelled by source. Click a cover to use it,
+paste the URL of any image, or **Upload image…** from your computer (or drop one
+anywhere on the panel). Uploads are cropped square and kept in a
+`<set>_artwork/` folder beside the tracklist, so they travel with the set. This lookup is the reason it is a button and not
 automatic: the unattended waterfall stops at the first source that answers, so
 gathering alternates means asking every source, and that only happens for a
 track you actually opened. The answers are cached, so reopening a track is
@@ -251,6 +253,14 @@ happens to be the first with real artwork. The starred row shows a ★ in the
 list, and only one track can carry it. `--cover` still wins if you pass it, and
 if the starred track turns out to have no findable artwork the set falls back
 to the default rather than going without a cover.
+
+To use your own image as the episode cover instead — a poster, a flyer, a photo
+— use **Upload…** in the **Episode cover** strip under the description (or drop
+an image on it). On Save it is written as `<set>_cover.jpg` beside the
+tracklist, and replaces a starred track (starring one later replaces it back).
+**Embed chapters in MP3**, beside it, does what the `chapters` command does —
+chapter markers, chapter artwork and the episode cover — without leaving the
+page, saving your edits first.
 
 ### Chapter Markers & Artwork (`chapters`)
 
@@ -289,7 +299,8 @@ For each track, artwork is fetched using a waterfall of sources: Shazam CDN, iTu
 By default the episode cover is the first track's artwork with real art found,
 relabelled with the set name; starring a track in the web editor picks a
 different one. To use your own image instead — a poster, a flyer, a photo —
-pass `--cover`, which overrides both:
+pass `--cover`, which overrides both — and an episode cover uploaded in the web
+editor (`<set>_cover.jpg`), which `chapters` picks up on its own:
 
 ```bash
 setlist-maker chapters my_set_tracklist.md --cover artwork/keys-lounge.jpg

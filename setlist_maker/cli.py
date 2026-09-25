@@ -72,6 +72,7 @@ from setlist_maker.identify import (
     process_single_file,
     tracklist_output_path,
 )
+from setlist_maker.uploads import artwork_dir_for, cover_path_for
 from setlist_maker.web_editor import WatchSession, run_web_editor
 
 # Sourced from EngineConfig so the flags, their help text and the epilog can
@@ -126,7 +127,11 @@ def _chain_chapters_after_identify(
     print(f"Embedding chapters into: {audio_path.name}")
     print(f"{'=' * 60}")
     embed_chapters_for_tracklist(
-        tracklist, audio_path, fetch_art=fetch_art, cover_image=cover_image
+        tracklist,
+        audio_path,
+        fetch_art=fetch_art,
+        cover_image=cover_image,
+        tracklist_path=output_path,
     )
 
 
@@ -521,7 +526,9 @@ def _load_tracklist_with_artwork_urls(
     return tracklist, coverart_urls
 
 
-def _episode_cover_image(tracklist: Tracklist, chapter_tracks: list[Track]) -> bytes | None:
+def _episode_cover_image(
+    tracklist: Tracklist, chapter_tracks: list[Track], uploads_dir: Path | None = None
+) -> bytes | None:
     """Build the episode-level cover from one track's artwork, relabelled for the set.
 
     Prefers the track the user starred in the editor; otherwise falls back to
@@ -543,7 +550,7 @@ def _episode_cover_image(tracklist: Tracklist, chapter_tracks: list[Track]) -> b
         identified = [starred] + [t for t in identified if t is not starred]
 
     for track in identified:
-        src = source_artwork(track.artist, track.title, track.coverart_url)
+        src = source_artwork(track.artist, track.title, track.coverart_url, uploads_dir=uploads_dir)
         if src:
             return create_chapter_image(
                 artwork_bytes=src,
@@ -558,7 +565,8 @@ def embed_chapters_for_tracklist(
     audio_path: Path,
     fetch_art: bool = True,
     cover_image: bytes | None = None,
-) -> None:
+    tracklist_path: Path | None = None,
+) -> tuple[int, int, bool]:
     """
     Embed chapter markers (and, optionally, artwork) into an MP3 for a tracklist.
 
@@ -570,6 +578,15 @@ def embed_chapters_for_tracklist(
     the one normally derived from the first track's art. It is independent of
     ``fetch_art``, so a hand-picked cover can be embedded with or without
     per-track chapter images.
+
+    ``tracklist_path`` locates what the web editor stores beside the tracklist
+    (``uploads.py``): uploaded track artwork, and an uploaded episode cover,
+    which ranks below ``--cover`` and above the starred track -- and, like
+    ``--cover``, is embedded whether or not ``fetch_art`` is on. Every caller
+    must pass it: without it an uploaded image is simply not found, and the
+    chapter gets the gradient card with nothing said.
+
+    Returns ``(chapters, chapter images, whether an episode cover was embedded)``.
     """
     # Get all non-rejected tracks (including unidentified) for chapter timing
     chapter_tracks = [t for t in tracklist.tracks if not t.rejected]
@@ -579,6 +596,15 @@ def embed_chapters_for_tracklist(
     # Seeding with the supplied cover both uses it and short-circuits the
     # first-track derivation below, which is already guarded on "still None"
     episode_image: bytes | None = cover_image
+    uploads_dir = artwork_dir_for(tracklist_path) if tracklist_path else None
+    if episode_image is None and tracklist_path is not None:
+        saved_cover = cover_path_for(tracklist_path)
+        if saved_cover.exists():
+            try:
+                episode_image = load_cover_image(saved_cover)
+                print(f"  Cover image: {saved_cover.name}")
+            except CoverImageError as e:
+                print(f"  Warning: ignoring the saved episode cover: {e}")
 
     if fetch_art:
         print(f"\n{'─' * 60}")
@@ -598,12 +624,13 @@ def embed_chapters_for_tracklist(
                 artist=track.artist,
                 title=track.title,
                 coverart_url=track.coverart_url,
+                uploads_dir=uploads_dir,
             )
 
         print(f"  Generated {len(chapter_images)} chapter image(s)")
 
         if episode_image is None:
-            episode_image = _episode_cover_image(tracklist, chapter_tracks)
+            episode_image = _episode_cover_image(tracklist, chapter_tracks, uploads_dir)
 
     # Embed chapters into MP3
     print(f"\n{'─' * 60}")
@@ -626,6 +653,7 @@ def embed_chapters_for_tracklist(
     print(f"\n{'=' * 60}")
     print("Done! Chapter markers embedded successfully.")
     print(f"{'=' * 60}")
+    return len(chapter_tracks), len(chapter_images), episode_image is not None
 
 
 def cmd_chapters(args: argparse.Namespace) -> None:
@@ -667,7 +695,11 @@ def cmd_chapters(args: argparse.Namespace) -> None:
 
     cover_image = _resolve_cover(args.cover)
     embed_chapters_for_tracklist(
-        tracklist, audio_path, fetch_art=not args.no_artwork, cover_image=cover_image
+        tracklist,
+        audio_path,
+        fetch_art=not args.no_artwork,
+        cover_image=cover_image,
+        tracklist_path=tracklist_path,
     )
 
 

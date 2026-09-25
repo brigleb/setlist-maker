@@ -726,6 +726,10 @@ def _request(base, path, host=None, method="GET", body=None):
         ("/timeline.js", "GET", None),
         ("/api/save", "POST", b'{"tracks": []}'),
         ("/api/done", "POST", b"{}"),
+        ("/api/cover", "GET", None),
+        ("/api/upload/" + "0" * 24 + ".jpg", "GET", None),
+        ("/api/upload", "POST", b"GIF89a"),
+        ("/api/chapters", "POST", b"{}"),
     ],
 )
 def test_every_endpoint_rejects_a_foreign_host(
