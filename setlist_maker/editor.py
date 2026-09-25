@@ -430,6 +430,23 @@ def resolve_audio_path(audio_path: Path | None, output_path: Path) -> Path | Non
     return find_audio_file(output_path)
 
 
+# Reissue bookkeeping in a title: "(2009 Remaster)", "[Remastered]", "- 2012 Remaster".
+# Mirrors cleanTitle() in web_timeline.js, whose "Tidy" fix removes exactly this.
+_REISSUE_TAG = re.compile(
+    r"\s*[(\[](?:\d{4}\s+)?(?:digital(?:ly)?\s+)?remaster(?:ed)?(?:\s+(?:version|\d{4}))?[)\]]",
+    re.IGNORECASE,
+)
+_REISSUE_DASH = re.compile(
+    r"\s+-\s+(?:\d{4}\s+)?(?:digital(?:ly)?\s+)?remaster(?:ed)?(?:\s+(?:version|\d{4}))?\s*$",
+    re.IGNORECASE,
+)
+
+
+def strip_reissue_tag(title: str) -> str:
+    """A title without its remaster tag; "(Vocal)" and the like are left alone."""
+    return _REISSUE_DASH.sub("", _REISSUE_TAG.sub("", title or "")).strip()
+
+
 def apply_track_edit(
     track: Track,
     artist: str,
@@ -450,7 +467,10 @@ def apply_track_edit(
     regenerating the same wrong picture (#30). Dropping it lets iTunes /
     Deezer / MusicBrainz search on what the user actually said the track is.
 
-    ``artwork_pinned`` is the exception, and the reason the field exists: a
+    Tidying a remaster tag off a title is not a correction of *which* track it
+    is, so it keeps the URL too.
+
+    ``artwork_pinned`` is the other exception, and the reason the field exists: a
     cover chosen in the editor's picker is not Shazam's guess about the old
     identification, it is the user's answer about this track, and clearing it
     on a later typo fix would silently throw that answer away (#20).
@@ -473,9 +493,15 @@ def apply_track_edit(
     if track.original_title is None:
         track.original_title = track.title
 
+    # Removing a remaster tag names the same recording, so Shazam's cover is
+    # still the right one; clearing it would send every tidied track back
+    # through a search that can find another edition's art, or none.
+    same_recording = artist == track.artist and strip_reissue_tag(title) == strip_reissue_tag(
+        track.title
+    )
     track.artist = artist
     track.title = title
-    if not track.artwork_pinned:
+    if not track.artwork_pinned and not same_recording:
         track.coverart_url = None
 
     if corrections_db and track.was_corrected:

@@ -9,16 +9,21 @@ small JSON + audio API bound to loopback (``127.0.0.1``).
 import json
 import re
 import threading
+import time
 import webbrowser
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from setlist_maker.adaptive import append_probe, live_snapshot, load_probes
 from setlist_maker.artwork import CHAPTER_IMAGE_SIZE, is_fetchable_url, resize_cover_art_url
 from setlist_maker.artwork_cache import artwork_options, chapter_image
+from setlist_maker.audio import probe_duration_seconds
+from setlist_maker.boundary import EngineConfig
 from setlist_maker.editor import (
     CorrectionsDB,
     Track,
@@ -27,6 +32,7 @@ from setlist_maker.editor import (
     resolve_audio_path,
     save_tracklist,
 )
+from setlist_maker.sampler import SampleRequests, SampleRequestsClosed, ShazamSampler
 
 # Host names a browser may legitimately use to reach this loopback server. The
 # port must match too, so a rebinding attacker cannot forge a valid Host.
@@ -70,6 +76,49 @@ def tracklist_to_api(tracklist: Tracklist) -> dict:
             for i, t in enumerate(tracklist.tracks)
         ],
     }
+
+
+def probes_to_api(probes: list, duration: float | None) -> dict:
+    """Shape a run's probes into the JSON the timeline draws as pins.
+
+    The probes are evidence *about* the tracklist, never a second copy of it:
+    the page joins each one to whichever track's window holds its midpoint, so
+    a merge or split made in the editor moves the evidence with it rather than
+    having to be reconciled against a folded engine answer. Order is preserved
+    -- it is the order the engine asked for them, which is what a replay shows.
+    """
+    return {"duration": duration, "probes": [probe_to_api(p) for p in probes]}
+
+
+def probe_to_api(p) -> dict:
+    """One probe as a pin: where it listened, why, and what came back."""
+    info = p.result or {}
+    return {
+        "t": p.t,
+        "window": p.window,
+        "purpose": p.purpose,
+        "artist": info.get("artist"),
+        "title": info.get("title"),
+        "confidence": info.get("confidence"),
+        "coverart_url": info.get("coverart_url"),
+    }
+
+
+def progress_path_for(output_path: Path, audio_path: Path | None) -> Path:
+    """Where the identify run that produced ``output_path`` kept its probes.
+
+    Both drivers write ``<audio stem>_progress.json`` beside the tracklist, so
+    the tracklist's own ``<stem>_tracklist.md`` name is the surest key; the
+    audio's stem covers a markdown file that was renamed.
+    """
+    name = output_path.name
+    if name.endswith("_tracklist.md"):
+        stem = name[: -len("_tracklist.md")]
+    elif audio_path is not None:
+        stem = audio_path.stem
+    else:
+        stem = output_path.stem
+    return output_path.with_name(f"{stem}_progress.json")
 
 
 _UNSET = object()  # "summary not provided" — distinct from an empty/cleared summary
@@ -196,6 +245,11 @@ def _load_page() -> str:
     return (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
 
 
+def _load_timeline_script() -> str:
+    """The timeline's pure derivations, kept out of the page so Node can test them."""
+    return (files("setlist_maker") / "web_timeline.js").read_text(encoding="utf-8")
+
+
 @dataclass
 class EditorContext:
     """Mutable state shared with the request handler for one editing session."""
@@ -204,6 +258,67 @@ class EditorContext:
     output_path: Path
     corrections_db: CorrectionsDB | None
     audio_path: Path | None
+    # The run's saved probes, drawn as pins on the timeline. Optional: a set
+    # identified before adaptive sampling existed has none, and the timeline
+    # then draws the tracklist alone.
+    progress_path: Path | None = None
+    # Takes a second on the timeline and returns the Probe Shazam answered
+    # with (see sampler.ShazamSampler). None disables click-to-sample.
+    sampler: Callable[[float], object] | None = None
+    # Set while `identify --watch` is still identifying: the page is read-only
+    # and everything it shows is replayed from the progress file.
+    live: "LiveRun | None" = None
+    # The page said Done; the server is shutting down.
+    closed: bool = False
+
+
+# How long a click on the live timeline waits for the run to get to it. The
+# run answers between its own probes, so this is generous, not expected.
+LIVE_SAMPLE_TIMEOUT = 600.0
+
+
+@dataclass
+class LiveRun:
+    """A run still identifying, as the watch page sees it.
+
+    Everything comes from the progress file the run already writes after every
+    probe (atomically, so a read never lands mid-write) replayed through the
+    engine by ``adaptive.live_snapshot`` -- no channel into the running process
+    beyond that file, and the ``requests`` queue it serves the user's clicks
+    from. The replay is cached on the file's mtime and size, so polling costs
+    one ``stat`` until the run records another probe.
+    """
+
+    source_file: str
+    engine_config: EngineConfig | None = None
+    requests: SampleRequests | None = None
+    duration_hint: float | None = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _key: tuple | None = field(default=None, repr=False)
+    _snap: tuple | None = field(default=None, repr=False)
+
+    def snapshot(self, progress_path: Path) -> tuple:
+        """``(tracklist, next_plan, probes, duration)`` as of the latest probe."""
+        with self._lock:
+            try:
+                stat = progress_path.stat()
+                key = (stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                key = None
+            if self._snap is None or key != self._key:
+                try:
+                    self._snap = live_snapshot(
+                        progress_path,
+                        self.source_file,
+                        self.engine_config,
+                        duration_hint=self.duration_hint,
+                    )
+                except (OSError, ValueError, KeyError, TypeError):
+                    # Keep showing the last good answer; the next probe rewrites the file.
+                    if self._snap is None:
+                        self._snap = (Tracklist(source_file=self.source_file), None, [], None)
+                self._key = key
+            return self._snap
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -252,19 +367,40 @@ class _Handler(BaseHTTPRequestHandler):
         if self._reject_foreign_host():
             return
         path = urlparse(self.path).path
+        if path in ("/api/save", "/api/sample") and not self._is_json():
+            # A cross-site form or text/plain fetch can reach a loopback port
+            # with a valid Host and no preflight; application/json cannot be
+            # sent cross-origin without one, which this server never grants.
+            self.send_error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "expected application/json")
+            return
         if path == "/api/save":
             self._handle_save()
         elif path == "/api/done":
             self._handle_done()
+        elif path == "/api/sample":
+            self._handle_sample()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
+    def _is_json(self) -> bool:
+        ctype = self.headers.get("Content-Type", "")
+        return ctype.split(";")[0].strip().lower() == "application/json"
+
     def _handle_done(self) -> None:
+        self._ctx.closed = True
         self._send_json({"ok": True})
         # shut down from another thread so this response flushes first
         threading.Thread(target=self.server.shutdown, daemon=True).start()
 
     def _handle_save(self) -> None:
+        if self._ctx.live is not None:
+            # The run writes the tracklist when it finishes, over whatever is
+            # there -- an edit saved now would be silently thrown away.
+            self._send_json(
+                {"ok": False, "error": "still identifying; edits open when the run finishes"},
+                HTTPStatus.CONFLICT,
+            )
+            return
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b"{}"
         ctx = self._ctx
@@ -290,14 +426,13 @@ class _Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         if path == "/":
-            body = _load_page().encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_text(_load_page(), "text/html; charset=utf-8")
+        elif path == "/timeline.js":
+            self._send_text(_load_timeline_script(), "text/javascript; charset=utf-8")
         elif path == "/api/tracklist":
-            self._send_json(tracklist_to_api(self._ctx.tracklist))
+            self._send_tracklist()
+        elif path == "/api/probes":
+            self._send_probes()
         elif path == "/api/audio":
             self._send_audio()
         elif path == "/api/artwork":
@@ -306,6 +441,136 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_artwork_options()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _send_text(self, text: str, content_type: str) -> None:
+        body = text.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_tracklist(self) -> None:
+        tracklist, live = self._current_tracklist()
+        api = tracklist_to_api(tracklist)
+        api["live"] = live
+        self._send_json(api)
+
+    def _current_tracklist(self) -> tuple[Tracklist, bool]:
+        """The tracklist the page is looking at, and whether it is a live guess.
+
+        While a run is live that is the replayed snapshot -- read, never stored
+        on the context. A GET that assigned ``ctx.tracklist`` could land just
+        after ``WatchSession.finish()`` installed the finished tracklist and
+        put the live guess back over it, and that guess has no summary: the
+        next Save would write the description out of the markdown, its only
+        store, for good.
+        """
+        ctx = self._ctx
+        live = ctx.live
+        if live is not None and ctx.progress_path is not None:
+            return live.snapshot(ctx.progress_path)[0], True
+        return ctx.tracklist, False
+
+    def _send_probes(self) -> None:
+        """Serve the run's probes, re-read from disk on every request.
+
+        Re-reading is deliberate: the file is small, and a run still in progress
+        rewrites it after every probe, so a cached copy would be the wrong answer
+        for exactly the page that polls. An absent or unreadable file is not an
+        error -- it is a set with no evidence to draw.
+        """
+        path = self._ctx.progress_path
+        live = self._ctx.live
+        if live is not None and path is not None:
+            _tracklist, plan, probes, duration = live.snapshot(path)
+            api = probes_to_api(probes, duration)
+            api["live"] = True
+            api["next"] = (
+                {"t": plan.t, "window": plan.window, "purpose": plan.purpose} if plan else None
+            )
+            api["can_sample"] = live.requests is not None
+            self._send_json(api)
+            return
+        probes, duration = [], None
+        if path is not None and path.exists():
+            try:
+                probes, duration = load_probes(path)
+            except (OSError, ValueError, KeyError, TypeError):
+                # Unreadable or not a shape load_probes knows; draw no pins.
+                probes, duration = [], None
+        api = probes_to_api(probes, duration)
+        api["live"] = False
+        api["can_sample"] = self._can_sample()
+        self._send_json(api)
+
+    def _audio_seconds(self) -> float | None:
+        ctx = self._ctx
+        if ctx.live is not None and ctx.progress_path is not None:
+            duration = ctx.live.snapshot(ctx.progress_path)[3]
+            if duration:
+                return duration
+        return probe_duration_seconds(ctx.audio_path) if ctx.audio_path else None
+
+    def _can_sample(self) -> bool:
+        ctx = self._ctx
+        return (
+            ctx.sampler is not None
+            and ctx.progress_path is not None
+            and ctx.audio_path is not None
+            and ctx.audio_path.exists()
+        )
+
+    def _handle_sample(self) -> None:
+        """Ask Shazam about one moment, keep the answer, and hand it back.
+
+        The probe is appended to the run's progress file before the response,
+        so a reload -- or a later `identify` resume, which replays that file --
+        keeps it. Blocks for as long as the sampler's pacing and the lookup
+        take; the page shows the pin as pending meanwhile.
+        """
+        live = self._ctx.live
+        if live is not None and live.requests is None:
+            self._send_json({"ok": False, "error": "sampling is unavailable"}, HTTPStatus.CONFLICT)
+            return
+        if live is None and not self._can_sample():
+            self._send_json({"ok": False, "error": "sampling is unavailable"}, HTTPStatus.CONFLICT)
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            t = float(json.loads(self.rfile.read(length) if length else b"{}")["t"])
+            if not t >= 0:  # also refuses NaN
+                raise ValueError(t)
+        except (ValueError, KeyError, TypeError):
+            self._send_json({"ok": False, "error": "t must be seconds"}, HTTPStatus.BAD_REQUEST)
+            return
+        # Past the end there is no audio to hear, and in a live run the probe
+        # would be kept in the progress file as evidence forever.
+        end = self._audio_seconds()
+        if end is not None and t > end:
+            self._send_json(
+                {"ok": False, "error": f"t is past the end of the audio ({end:.0f}s)"},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        ctx = self._ctx
+        if live is not None:
+            # The run takes it ahead of its own next probe, records it, and
+            # saves it; nothing to append here.
+            try:
+                probe = live.requests.ask(t, timeout=LIVE_SAMPLE_TIMEOUT)
+            except (SampleRequestsClosed, TimeoutError) as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.CONFLICT)
+                return
+            self._send_json({"ok": True, "probe": probe_to_api(probe)})
+            return
+        try:
+            probe = ctx.sampler(t)
+            append_probe(ctx.progress_path, probe, probe_duration_seconds(ctx.audio_path))
+        except Exception as exc:  # a handler that raises sends no response at all
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+            return
+        self._send_json({"ok": True, "probe": probe_to_api(probe)})
 
     def _track_for_query(self) -> Track | None:
         """Resolve ``?index=N`` to a track, sending the 404 itself on failure.
@@ -321,7 +586,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "bad index")
             return None
 
-        tracks = self._ctx.tracklist.tracks
+        tracks = self._current_tracklist()[0].tracks
         if not 0 <= index < len(tracks):
             self.send_error(HTTPStatus.NOT_FOUND, "no such track")
             return None
@@ -490,11 +755,14 @@ def run_web_editor(
         if applied > 0:
             print(f"Applied {applied} learned correction(s) from previous sessions.")
 
+    resolved_audio = resolve_audio_path(audio_path, output_path)
     ctx = EditorContext(
         tracklist=tracklist,
         output_path=output_path,
         corrections_db=corrections_db,
-        audio_path=resolve_audio_path(audio_path, output_path),
+        audio_path=resolved_audio,
+        progress_path=progress_path_for(output_path, resolved_audio),
+        sampler=ShazamSampler(resolved_audio) if resolved_audio else None,
     )
     httpd = create_server(ctx)
     url = f"http://127.0.0.1:{httpd.server_address[1]}/"
@@ -507,3 +775,92 @@ def run_web_editor(
         pass
     finally:
         httpd.server_close()
+
+
+class WatchSession:
+    """``identify --watch``: the editor's server, opened before the run it watches.
+
+    Starts serving in a background thread in live mode, so the page follows
+    the run as it probes; when the run finishes, :meth:`finish` hands the same
+    server -- and the same browser tab -- the finished tracklist, and it is the
+    ordinary editor from then on. The page notices the switch on its next poll.
+    """
+
+    def __init__(
+        self,
+        audio_path: Path,
+        output_path: Path,
+        engine_config: EngineConfig | None = None,
+        sampling: bool = True,
+        open_browser: bool = True,
+    ):
+        self.requests = SampleRequests() if sampling else None
+        self.ctx = EditorContext(
+            tracklist=Tracklist(source_file=audio_path.name),
+            output_path=output_path,
+            corrections_db=None,
+            audio_path=audio_path,
+            progress_path=progress_path_for(output_path, audio_path),
+            live=LiveRun(
+                source_file=audio_path.name,
+                engine_config=engine_config,
+                requests=self.requests,
+                duration_hint=probe_duration_seconds(audio_path),
+            ),
+        )
+        self.httpd = create_server(self.ctx)
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/"
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        print(f"\nWatching in your browser: {self.url}")
+        if open_browser:
+            webbrowser.open(self.url)
+
+    def finish(
+        self,
+        tracklist: Tracklist,
+        output_path: Path,
+        use_corrections: bool = True,
+        audio_path: Path | None = None,
+    ) -> None:
+        """Turn the watch page into the editor, then serve until Done or Ctrl-C."""
+        if self.requests is not None:
+            self.requests.close()
+        ctx = self.ctx
+        if ctx.closed:
+            self.httpd.server_close()
+            return
+        corrections_db = CorrectionsDB() if use_corrections else None
+        if corrections_db:
+            applied = corrections_db.apply_corrections(tracklist)
+            if applied > 0:
+                print(f"Applied {applied} learned correction(s) from previous sessions.")
+        resolved_audio = resolve_audio_path(audio_path, output_path)
+        # Everything the editor needs is in place before `live` is cleared,
+        # since clearing it is what flips the handler into edit mode.
+        ctx.corrections_db = corrections_db
+        ctx.output_path = output_path
+        ctx.audio_path = resolved_audio
+        ctx.progress_path = progress_path_for(output_path, resolved_audio)
+        # Paced from now: the run's last Shazam call may have been moments ago.
+        ctx.sampler = (
+            ShazamSampler(resolved_audio, last_call=time.monotonic()) if resolved_audio else None
+        )
+        ctx.tracklist = tracklist
+        ctx.live = None
+        print(f"\nEditing in your browser: {self.url}\n(Press Ctrl-C here to stop.)")
+        try:
+            while self.thread.is_alive():
+                self.thread.join(0.5)
+        except KeyboardInterrupt:
+            self.httpd.shutdown()
+        finally:
+            self.httpd.server_close()
+
+    def stop(self) -> None:
+        """Shut down without editing -- the run failed, or was aborted."""
+        if self.requests is not None:
+            self.requests.close("identification stopped")
+        if not self.ctx.closed:
+            self.httpd.shutdown()
+        self.httpd.server_close()

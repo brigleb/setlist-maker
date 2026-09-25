@@ -125,12 +125,106 @@
      the picker is open renders behind the backdrop and is never seen. */
   #toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:var(--player-bg); color:var(--player-text); box-shadow:0 0 0 1px var(--player-line); padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:60; }
   #toast.show { opacity:1; }
+  /* ---- timeline: the set as four hour-long rows, the run's probes as pins ---- */
+  :root { --hatch:rgba(0,0,0,.07); --block-l:62%; }
+  @media (prefers-color-scheme: dark) { :root { --hatch:rgba(255,255,255,.07); --block-l:40%; } }
+  #timeline { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:16px; max-width:1440px; margin:16px auto; padding:0 20px; align-items:start; }
+  .tl-card { background:var(--card); border:1px solid var(--line); border-radius:12px; }
+  #tl-grid { padding:12px 16px 8px; }
+  #tl-head { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
+  #tl-head .tl-title { font-weight:700; }
+  #tl-head .tl-stats { color:var(--muted); font-size:12px; flex:1; }
+  .tl-hour { display:grid; grid-template-columns:34px minmax(0,1fr); gap:8px; padding:8px 0 6px; border-top:1px solid var(--hairline); }
+  .tl-hour:first-of-type { border-top:none; }
+  .tl-hl { font-weight:700; color:var(--muted); font-size:12px; padding-top:34px; font-variant-numeric:tabular-nums; }
+  .tl-lanes { position:relative; }
+  .tl-ruler { position:relative; height:14px; color:var(--text-faint); font-size:10px; font-variant-numeric:tabular-nums; }
+  .tl-ruler span { position:absolute; top:0; }
+  .tl-art { position:relative; height:46px; }
+  .tl-art .tl-thumb { position:absolute; top:2px; width:42px; height:42px; border-radius:5px; background-color:var(--player-thumb);
+    background-size:cover; background-position:center; box-shadow:0 1px 3px rgba(0,0,0,.25); cursor:pointer; transition:transform .12s; }
+  .tl-art .tl-thumb:hover { transform:scale(1.8); z-index:10; }
+  .tl-art .tl-thumb.sel { outline:2px solid var(--accent); outline-offset:1px; z-index:5; }
+  .tl-blocks { position:relative; height:26px; border-radius:4px; overflow:hidden; background:var(--hairline); cursor:pointer; }
+  .tl-seg { position:absolute; top:0; bottom:0; border-right:1px solid var(--card); background:hsl(var(--h) 45% var(--block-l)); overflow:hidden; }
+  .tl-seg.none { background:repeating-linear-gradient(45deg, var(--hatch) 0 5px, transparent 5px 10px); }
+  .tl-seg.merged { opacity:.5; background-image:repeating-linear-gradient(-45deg, var(--hatch) 0 3px, transparent 3px 7px); border-left:1px dashed var(--card); }
+  .tl-seg.sel { box-shadow:inset 0 0 0 2px var(--accent); z-index:2; }
+  .tl-seg span { position:absolute; left:5px; top:6px; right:3px; font-size:10.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.45); pointer-events:none; }
+  .tl-seg.none span { color:var(--muted); text-shadow:none; font-style:italic; }
+  .tl-pins { position:relative; height:20px; }
+  .tl-pin { position:absolute; top:0; width:9px; height:20px; margin-left:-4px; cursor:pointer; }
+  .tl-pin::before { content:""; position:absolute; left:4px; top:7px; bottom:0; border-left:1px solid var(--text-faint); }
+  .tl-pin::after { content:""; position:absolute; left:1px; top:0; width:7px; height:7px; border-radius:50%; background:var(--text); }
+  .tl-pin.refine::after { background:var(--accent); width:5px; height:5px; left:2px; top:1px; }
+  .tl-pin.miss::after { background:var(--card); box-shadow:inset 0 0 0 1.5px var(--muted); }
+  .tl-pin.manual::after { background:#af52de; border-radius:1px; transform:rotate(45deg); width:6px; height:6px; left:1.5px; top:1px; }
+  .tl-pin.pending::after { background:transparent; box-shadow:inset 0 0 0 1.5px var(--accent); animation:tl-pulse 1s infinite; }
+  @keyframes tl-pulse { 50% { opacity:.25; } }
+  .tl-pins.can-sample { cursor:copy; }
+  .tl-pin.drop { animation:tl-drop .35s cubic-bezier(.3,1.6,.6,1); }
+  @keyframes tl-drop { from { transform:translateY(-18px); opacity:0; } }
+  .tl-unheard { position:absolute; top:0; bottom:0; z-index:3; pointer-events:none; background-color:var(--hairline);
+    background-image:repeating-linear-gradient(-45deg, var(--hatch) 0 3px, transparent 3px 7px); }
+  .tl-playhead { position:absolute; top:14px; bottom:0; width:0; border-left:2px solid var(--accent); pointer-events:none; z-index:8; }
+  .tl-cursor { position:absolute; top:-18px; transform:translateX(-50%); background:var(--accent); color:#fff; font-size:10px; padding:1px 5px; border-radius:4px; pointer-events:none; white-space:nowrap; z-index:9; font-variant-numeric:tabular-nums; }
+  .tl-legend { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:11px; padding:6px 0 2px 42px; }
+  .tl-legend i { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--text); margin-right:4px; vertical-align:middle; }
+  .tl-legend i.refine { background:var(--accent); width:5px; height:5px; }
+  .tl-legend i.miss { background:transparent; box-shadow:inset 0 0 0 1.5px var(--muted); }
+  .tl-legend i.manual { background:#af52de; border-radius:1px; transform:rotate(45deg); width:6px; height:6px; }
+  #tl-side { position:sticky; top:72px; display:flex; flex-direction:column; gap:12px; max-height:calc(100vh - 190px); overflow:auto; }
+  #tl-side h3 { margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  #insp, #queue { padding:14px; }
+  #insp .empty { color:var(--muted); font-size:13px; line-height:1.5; }
+  .in-hero { display:flex; gap:12px; align-items:center; }
+  .in-hero .thumb { width:72px; height:72px; border-radius:8px; }
+  .in-when { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  .in-badges { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .badge { font-size:11px; padding:1px 7px; border-radius:10px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .badge.warn { color:var(--warn); border-color:currentColor; }
+  .in-lbl { font-size:10.5px; color:var(--muted); margin:12px 0 4px; text-transform:uppercase; letter-spacing:.05em; }
+  #insp input { width:100%; font:inherit; font-size:14px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); }
+  #insp input:focus { outline:none; border-color:var(--input-border); background:var(--focus-bg); }
+  #insp input.in-title { font-weight:600; }
+  .in-variant { display:flex; gap:8px; align-items:center; padding:4px 0; font-size:12.5px; }
+  .in-variant .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .in-variant .ct { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+  .in-samples { display:flex; flex-direction:column; font-size:12px; font-variant-numeric:tabular-nums; max-height:180px; overflow:auto; }
+  .in-samples button { display:grid; grid-template-columns:52px 1fr 34px; gap:6px; text-align:left; font:inherit; font-size:12px; padding:3px 6px; border:none; border-radius:4px; background:none; color:var(--text-soft); cursor:pointer; }
+  .in-samples button:nth-child(odd) { background:var(--hairline); }
+  .in-samples button:hover { background:var(--focus-bg); }
+  .in-samples .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .in-samples .miss { color:var(--muted); font-style:italic; }
+  .in-btns { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+  .tbtn { font:inherit; font-size:12px; font-weight:600; padding:5px 10px; border-radius:7px; cursor:pointer; background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
+  .tbtn.primary { background:var(--accent); color:#fff; border-color:transparent; }
+  .tbtn:disabled { opacity:.45; cursor:default; }
+  .in-note { color:var(--muted); font-size:11.5px; margin-top:8px; line-height:1.4; }
+  .issue { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-top:1px solid var(--hairline); cursor:pointer; }
+  .issue:first-child { border-top:none; }
+  .issue .ico { width:22px; height:22px; border-radius:6px; flex:none; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#fff; }
+  .issue .txt { flex:1; min-width:0; }
+  .issue .t1 { font-weight:600; font-size:13px; }
+  .issue .t2 { color:var(--muted); font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
+  .issue .x { background:none; border:none; color:var(--icon); cursor:pointer; font-size:14px; padding:0 2px; }
+  #qcount { font-weight:600; }
+  .row.selected { box-shadow:inset 3px 0 0 var(--warn); }
+  /* While a run is still identifying, the page follows it and edits nothing:
+     the run writes the tracklist when it finishes, over anything saved now. */
+  #livepill { display:none; margin-left:8px; font-size:11px; font-weight:600; color:#fff; background:#d9433b; padding:2px 8px; border-radius:10px; vertical-align:middle; }
+  #livepill::before { content:"● "; animation:tl-pulse 1.2s infinite; }
+  body.live #livepill { display:inline-block; }
+  body.live #list .meta { cursor:default; }
+  body.live #list .iconbtn.reject, body.live #list .iconbtn.add, body.live #artwork-tools { display:none; }
+  .tl-pin.next::after { background:#d9433b; animation:tl-pulse 1s infinite; }
+  @media (max-width:1100px) { #timeline { grid-template-columns:1fr; } #tl-side { position:static; max-height:none; } }
 </style>
 </head>
 <body>
   <header>
     <div>
-      <div class="file" id="file">—</div>
+      <div class="file"><span id="file">—</span><span id="livepill" title="Following the run as it samples; editing opens when it finishes">identifying</span></div>
       <div class="counts" id="counts"></div>
     </div>
     <div class="actions">
@@ -138,6 +232,21 @@
       <button id="done">Done</button>
     </div>
   </header>
+  <section id="timeline">
+    <div id="tl-grid" class="tl-card">
+      <div id="tl-head">
+        <div class="tl-title">Timeline</div>
+        <div class="tl-stats" id="tl-stats"></div>
+        <button id="tl-replay" class="tbtn" type="button" title="Drop the samples in again, in the order the run asked for them">▶ Replay the run</button>
+      </div>
+      <div id="tl-rows"></div>
+      <div class="tl-legend"><span><i></i>30s sample</span><span><i class="refine"></i>12s refine</span><span><i class="miss"></i>heard nothing</span><span><i class="manual"></i>you asked</span><span id="tl-hint">click a track to inspect · double-click to play from there · click a pin to hear what Shazam heard</span></div>
+    </div>
+    <aside id="tl-side">
+      <div id="insp" class="tl-card"></div>
+      <div id="queue" class="tl-card"><h3>Needs a look · <span id="qcount">0</span></h3><div id="issues"></div></div>
+    </aside>
+  </section>
   <textarea id="summary" class="summary" rows="2" aria-label="Set description" placeholder="Add a description for this set…"></textarea>
   <main id="list"></main>
   <div id="player" class="disabled">
@@ -181,6 +290,7 @@
       </div>
     </div>
   </div>
+<script src="/timeline.js"></script>
 <script>
   const GRADS = [
     "linear-gradient(135deg,#6a5acd,#0a84ff)",
@@ -266,16 +376,25 @@
     if (idx === -1) playingTrack = null;
   }
 
-  function setDirty(v) { dirty = v; document.getElementById("save").disabled = !v; }
+  function setDirty(v) {
+    if (v && liveMode) return;  // nothing on a live page may be saved over by the run
+    dirty = v; document.getElementById("save").disabled = !v;
+  }
   function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); }
 
   async function load() {
     const data = await (await fetch("/api/tracklist")).json();
     document.getElementById("file").textContent = "🎚 " + data.source_file;
+    // A reload replaces every track object, so the selection is carried over
+    // by what it pointed at rather than by reference.
+    const was = selectedTrack;
+    setLive(!!data.live);
     tracks = data.tracks;
+    if (was) selectedTrack = tracks.find(t => t.timestamp === was.timestamp && t.artist === was.artist) || null;
     summaryEl.value = data.summary || "";
     autosizeSummary();
     render();
+    loadProbes();
   }
 
   function updateCounts() {
@@ -301,6 +420,7 @@
     // label/count/artwork. setPlayingIndex() no-ops safely when playingIndex
     // is null and cannot recurse back into render().
     setPlayingIndex(playingIndex, { scroll: false });
+    renderTimeline();
   }
 
   let artVersion = 0;  // bumped on save so re-requested thumbs bypass the browser's decoded-image cache
@@ -572,7 +692,8 @@
   function rowEl(t, i) {
     const unknown = !t.artist && !t.title;
     const row = document.createElement("div");
-    row.className = "row" + (t.rejected ? " rejected" : "") + (unknown ? " unknown" : "");
+    row.className = "row" + (t.rejected ? " rejected" : "") + (unknown ? " unknown" : "")
+      + (t === selectedTrack ? " selected" : "");
 
     const thumb = document.createElement("div");
     thumb.className = "thumb";
@@ -610,7 +731,7 @@
     titleEl.className = "title";
     titleEl.textContent = t.title || (unknown ? "add a label" : "");
     meta.append(artistEl, titleEl);  // textContent, not innerHTML — no XSS surface
-    meta.onclick = () => startEdit(row, i);
+    meta.onclick = () => { if (!liveMode) startEdit(row, i); };
     row.appendChild(meta);
 
     // Passive badge, not a control: the choice is made in the artwork panel,
@@ -768,6 +889,9 @@
   function playFrom(i, opts) {
     const scroll = !opts || opts.scroll !== false;
     setPlayingIndex(i, { scroll });
+    // Choosing to play a track is choosing to look at it; automatic advance
+    // (setPlayingIndex from timeupdate) deliberately does not move the selection.
+    selectTrack(tracks[i]);
     // Capture the track now, not inside start(): if metadata is still
     // loading, start() runs later and a re-indexed `tracks[i]` at that point
     // could be a different track (or throw if tracks was replaced by load()).
@@ -825,7 +949,9 @@
   audio.addEventListener("loadedmetadata", () => {
     playerEl.classList.remove("disabled");
     syncPlayerUI();
+    renderTimeline();  // the real duration can differ from the saved one
   });
+  audio.addEventListener("timeupdate", () => updatePlayhead());
   audio.addEventListener("error", () => playerEl.classList.add("disabled"));
   audio.addEventListener("timeupdate", syncPlayerUI);
   // Playback deliberately runs past a window's end: hearing the transition is
@@ -902,6 +1028,587 @@
   };
 
   window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+  // ---- timeline -------------------------------------------------------------
+  // The tracklist is the truth about which tracks exist; the run's probes are
+  // evidence drawn over it (see web_timeline.js). Everything here is redrawn
+  // from `tracks` by renderTimeline(), which render() calls, so every existing
+  // mutation -- edit, reject, insert, save, reload -- keeps the grid current
+  // without a second update path.
+  const TL = window.Timeline;
+  let probes = [];
+  let probeDuration = null;
+  // Held as an object reference, like playingTrack and artTrack: render() and
+  // the re-sorts that inserts cause move array positions underneath it.
+  let selectedTrack = null;
+  const dismissedIssues = new Set();
+  let replayShown = null;  // during a replay, how many probes are visible
+  let canSample = false;   // the server has the audio and a sampler
+  let liveMode = false;    // `identify --watch` and the run has not finished
+  let nextProbe = null;    // where the live run will listen next
+  let seenProbes = 0;      // pins already drawn, so only new ones drop in
+  let livePoll = null;
+  const pendingSamples = [];  // seconds asked about and not yet answered
+  const ISSUE_STYLE = {
+    interrupted: ["≡", "var(--accent)"], short: ["↑", "var(--warn)"], variants: ["≠", "var(--accent)"],
+    unidentified: ["?", "var(--muted)"], remaster: ["✂", "var(--ok)"], unheard: ["…", "var(--text-faint)"],
+  };
+
+  function setDuration() {
+    return audio.duration || probeDuration || (tracks.length ? tracks[tracks.length - 1].timestamp + 60 : 60);
+  }
+
+  async function loadProbes() {
+    try {
+      const data = await (await fetch("/api/probes")).json();
+      const wasLive = liveMode;
+      seenProbes = probes.length;
+      probes = data.probes || [];
+      probeDuration = data.duration || null;
+      canSample = !!data.can_sample;
+      nextProbe = data.next || null;
+      document.getElementById("tl-hint").textContent =
+        "click a track to inspect · double-click to play from there · click a pin to hear what Shazam heard"
+        + (canSample ? " · click the pin lane to ask Shazam about any moment" : "");
+      if (wasLive && !data.live) {
+        // The run finished and this server is now its editor. Everything on
+        // the page was a live guess; start over from the saved tracklist.
+        setLive(false);
+        toast("Identification finished — the tracklist is yours to edit");
+        await load();
+        return;
+      }
+      if (data.live && liveMode && probes.length !== seenProbes) await refreshLiveTracks();
+    } catch (e) {
+      probes = [];  // no evidence to draw; the tracklist alone still makes a timeline
+    }
+    renderTimeline();
+  }
+
+  // An element with a class and text; text via textContent, never innerHTML --
+  // artist and title come from Shazam and from whatever the user typed.
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  }
+
+  function trackName(t) {
+    if (!t.artist && !t.title) return "Unidentified";
+    return (t.artist || "Unknown artist") + (t.title ? " — " + t.title : "");
+  }
+
+  // The hue a block is painted: its own identity's, or -- for a track merged
+  // away -- the kept track it now belongs to, so a merge reads as one colour.
+  function blockHue(i) {
+    let k = i;
+    while (k > 0 && tracks[k].rejected) k--;
+    return TL.hue(TL.identity(tracks[k].artist, tracks[k].title) || "?");
+  }
+
+  function renderTimeline() {
+    if (!TL) return;
+    const D = setDuration();
+    const W = TL.windows(tracks, D);
+    const rows = document.getElementById("tl-rows");
+    rows.innerHTML = "";
+    const shown = replayShown === null ? probes : probes.slice(0, replayShown);
+    const gaps = TL.unheard(probes, probeDuration || 0);
+    const hours = Math.max(1, Math.ceil(D / TL.HOUR));
+    for (let h = 0; h < hours; h++) {
+      const a = h * TL.HOUR, b = a + TL.HOUR;
+      const at = t => ((t - a) / TL.HOUR * 100) + "%";
+      const span = d => (d / TL.HOUR * 100) + "%";
+      const row = el("div", "tl-hour");
+      row.appendChild(el("div", "tl-hl", h + "h"));
+      const lanes = el("div", "tl-lanes");
+      lanes.dataset.hour = h;
+
+      const ruler = el("div", "tl-ruler");
+      for (let m = 10; m < 60; m += 10) {
+        const tick = el("span", null, ":" + m);
+        tick.style.left = (m / 60 * 100) + "%";
+        ruler.appendChild(tick);
+      }
+      lanes.appendChild(ruler);
+
+      const art = el("div", "tl-art");
+      const blocks = el("div", "tl-blocks");
+      tracks.forEach((t, i) => {
+        const w = W[i];
+        if (w.end <= a || w.start >= b) return;
+        const x = Math.max(w.start, a), y = Math.min(w.end, b);
+        const seg = el("div", "tl-seg" + (!t.artist && !t.title ? " none" : "") + (t.rejected ? " merged" : "") + (t === selectedTrack ? " sel" : ""));
+        seg.style.setProperty("--h", blockHue(i));
+        seg.style.left = at(x);
+        seg.style.width = span(y - x);
+        seg.dataset.i = i;
+        seg.title = trackName(t) + " · " + TL.fmt(w.start) + (t.rejected ? " · merged into the previous track" : "");
+        if (!t.rejected && y - x > 240) seg.appendChild(el("span", null, TL.cleanTitle(t.title) || t.artist || "Unidentified"));
+        blocks.appendChild(seg);
+        if (!t.rejected && (t.artist || t.title) && w.start >= a && w.start < b) {
+          const th = el("div", "tl-thumb" + (t === selectedTrack ? " sel" : ""));
+          th.style.left = at(w.start);
+          th.dataset.i = i;
+          th.title = trackName(t) + " · " + TL.fmt(w.start);
+          if (t.coverart_url) th.style.backgroundImage = "url('" + t.coverart_url.replace(/'/g, "%27") + "')";
+          else th.style.backgroundImage = GRADS[i % GRADS.length];
+          art.appendChild(th);
+        }
+      });
+      for (const [x0, y0] of gaps) {
+        if (y0 <= a || x0 >= b) continue;
+        const g = el("div", "tl-unheard");
+        g.style.left = at(Math.max(x0, a));
+        g.style.width = span(Math.min(y0, b) - Math.max(x0, a));
+        g.title = "Never sampled: " + TL.fmt(x0) + "–" + TL.fmt(y0);
+        blocks.appendChild(g);
+      }
+      lanes.appendChild(art);
+      lanes.appendChild(blocks);
+
+      const pins = el("div", "tl-pins" + (canSample ? " can-sample" : ""));
+      shown.forEach((p, n) => {
+        const mid = p.t + p.window / 2;
+        if (mid < a || mid >= b) return;
+        const hit = p.artist || p.title;
+        const pin = el("div", "tl-pin" + (p.purpose === "refine" ? " refine" : "") + (p.purpose === "manual" ? " manual" : "") + (hit ? "" : " miss")
+          + ((replayShown !== null && n === replayShown - 1) || (liveMode && replayShown === null && n >= seenProbes && seenProbes) ? " drop" : ""));
+        pin.style.left = at(mid);
+        pin.dataset.t = p.t;
+        pin.title = TL.fmt(p.t) + " · " + p.window + "s " + p.purpose + " · "
+          + (hit ? (p.artist || "?") + " — " + (p.title || "?") + (p.confidence ? " (" + p.confidence + ")" : "") : "no match");
+        pins.appendChild(pin);
+      });
+      if (liveMode && nextProbe && replayShown === null) {
+        const mid = nextProbe.t + nextProbe.window / 2;
+        if (mid >= a && mid < b) {
+          const pin = el("div", "tl-pin next");
+          pin.style.left = at(mid);
+          pin.title = "Listening here next (" + nextProbe.purpose + ")";
+          pins.appendChild(pin);
+        }
+      }
+      for (const t of pendingSamples) {
+        if (t < a || t >= b) continue;
+        const pin = el("div", "tl-pin pending");
+        pin.style.left = at(t);
+        pin.title = "Asking Shazam about " + TL.fmt(t) + "…";
+        pins.appendChild(pin);
+      }
+      lanes.appendChild(pins);
+
+      const head = el("div", "tl-playhead");
+      head.hidden = true;
+      lanes.appendChild(head);
+      row.appendChild(lanes);
+      rows.appendChild(row);
+    }
+    const identified = tracks.filter(t => !t.rejected && (t.artist || t.title)).length;
+    document.getElementById("tl-stats").textContent =
+      TL.fmt(D) + " · " + tracks.filter(t => !t.rejected).length + " tracks (" + identified + " identified)"
+      + (probes.length ? " · " + probes.length + " samples" : " · no samples saved for this set");
+    document.getElementById("tl-replay").hidden = !probes.length;
+    updatePlayhead();
+    // A replay redraws every few dozen milliseconds; rebuilding the inspector
+    // that often would take the focus out of a field the user is typing in.
+    if (replayShown === null) {
+      // Nor when a sample lands or the audio loads while a name is half typed:
+      // a rebuilt input never fires `change`, so the typing would vanish.
+      // Only the text inputs: clicking one of the panel's buttons focuses it
+      // too, and those clicks are exactly what must rebuild the panel.
+      const ae = document.activeElement;
+      if (!(ae && ae.tagName === "INPUT" && document.getElementById("insp").contains(ae))) renderInspector();
+      renderIssues();
+    }
+  }
+
+  function updatePlayhead() {
+    const t = audio.currentTime || 0;
+    const show = !audio.paused || t > 0;
+    document.querySelectorAll("#tl-rows .tl-lanes").forEach(lanes => {
+      const a = +lanes.dataset.hour * TL.HOUR;
+      const head = lanes.querySelector(".tl-playhead");
+      const inside = show && t >= a && t < a + TL.HOUR;
+      head.hidden = !inside;
+      if (inside) head.style.left = ((t - a) / TL.HOUR * 100) + "%";
+    });
+    // "Split at playhead" is only meaningful while the playhead is inside the
+    // selected track, which changes as it plays.
+    const split = document.querySelector("#insp .in-split");
+    if (split && selectedTrack) {
+      const w = windowFor(tracks.indexOf(selectedTrack));
+      split.disabled = !(t > w.start + 1 && t < w.end - 1);
+    }
+  }
+
+  // Seconds under the pointer, from an event inside one hour's lanes.
+  function timeAt(e) {
+    const lanes = e.target.closest(".tl-lanes");
+    if (!lanes) return null;
+    const r = lanes.getBoundingClientRect();
+    const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    return Math.min(setDuration(), +lanes.dataset.hour * TL.HOUR + f * TL.HOUR);
+  }
+
+  function selectTrack(t, opts) {
+    if (!t) return;
+    selectedTrack = t;
+    document.querySelectorAll("#tl-rows .sel").forEach(n => n.classList.remove("sel"));
+    const i = tracks.indexOf(t);
+    document.querySelectorAll('#tl-rows [data-i="' + i + '"]').forEach(n => n.classList.add("sel"));
+    document.querySelectorAll("#list .row.selected").forEach(n => n.classList.remove("selected"));
+    const listRow = document.getElementById("list").children[i];
+    if (listRow) listRow.classList.add("selected");
+    if (opts && opts.reveal) {
+      const block = document.querySelector('#tl-rows .tl-seg[data-i="' + i + '"]');
+      if (block) block.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+    renderInspector();
+  }
+
+  // Start playback at an arbitrary second (a pin, a double-click) rather than
+  // at a track's start, and let the player's own timeupdate re-scoping find
+  // which track that is.
+  function playAt(seconds) {
+    const go = () => {
+      audio.currentTime = Math.max(0, seconds);
+      const i = trackIndexAt(audio.currentTime);
+      if (i !== null) setPlayingIndex(i, { scroll: false });
+      audio.play();
+    };
+    if (audio.readyState >= 1) go();
+    else audio.addEventListener("loadedmetadata", go, { once: true });
+  }
+
+  const tlRows = document.getElementById("tl-rows");
+  tlRows.addEventListener("click", e => {
+    const pin = e.target.closest(".tl-pin");
+    if (pin) {
+      const t = +pin.dataset.t;
+      const i = trackIndexAt(t + 1);
+      if (i !== null) selectTrack(tracks[i]);
+      playAt(t);
+      return;
+    }
+    const hit = e.target.closest("[data-i]");
+    if (hit) { selectTrack(tracks[+hit.dataset.i]); return; }
+    if (canSample && e.target.closest(".tl-pins") && !e.target.closest(".tl-pin")) {
+      const t = timeAt(e);
+      if (t !== null) sampleAt(Math.round(t));
+    }
+  });
+  tlRows.addEventListener("dblclick", e => {
+    if (!e.target.closest(".tl-blocks")) return;
+    const t = timeAt(e);
+    if (t !== null) playAt(t);
+  });
+  tlRows.addEventListener("mousemove", e => {
+    const lanes = e.target.closest(".tl-lanes");
+    let cur = tlRows.querySelector(".tl-cursor");
+    const onPins = canSample && e.target.closest(".tl-pins") && !e.target.closest(".tl-pin");
+    if (!lanes || !(e.target.closest(".tl-blocks") || onPins)) { if (cur) cur.remove(); return; }
+    if (!cur || cur.parentNode !== lanes) { if (cur) cur.remove(); cur = el("div", "tl-cursor"); lanes.appendChild(cur); }
+    const t = timeAt(e);
+    const r = lanes.getBoundingClientRect();
+    cur.style.left = (e.clientX - r.left) + "px";
+    cur.style.top = onPins ? "58px" : "28px";
+    cur.textContent = (onPins ? "Ask Shazam about " : "") + TL.fmt(t);
+  });
+  tlRows.addEventListener("mouseleave", () => { const cur = tlRows.querySelector(".tl-cursor"); if (cur) cur.remove(); });
+
+  // ---- inspector ----
+  // Commits an artist/title change the same way the list's inline editor does,
+  // so the save payload -- and apply_track_edit()'s correction learning -- see
+  // no difference between the two.
+  function setNames(t, artist, title) {
+    artist = (artist || "").trim(); title = (title || "").trim();
+    if (artist === t.artist && title === t.title) return false;
+    t.artist = artist; t.title = title;
+    if (!t._new) t._edited = true;
+    setDirty(true);
+    return true;
+  }
+
+  function toggleMerge(t) {
+    t.rejected = !t.rejected;
+    if (t.rejected) t.episode_cover = false;  // same rule as the list's ✕
+    setDirty(true);
+    render();
+  }
+
+  // Cut the selected track at the playhead: the new row starts where the user
+  // is listening, blank, and is selected so it can be named straight away.
+  function splitAtPlayhead() {
+    const t = selectedTrack;
+    const i = tracks.indexOf(t);
+    const at = Math.floor(audio.currentTime);
+    const w = windowFor(i);
+    if (i === -1 || !(at > w.start && at < w.end)) return;
+    const row = { artist: "", title: "", timestamp: at, time: fmt(at), rejected: false, _new: true };
+    tracks.splice(i + 1, 0, row);
+    reindexPlayingTrack();
+    setDirty(true);
+    selectedTrack = row;
+    render();
+    const input = document.querySelector("#insp input.in-artist");
+    if (input) input.focus();
+  }
+
+  function renderInspector() {
+    const box = document.getElementById("insp");
+    box.innerHTML = "";
+    const t = selectedTrack;
+    const i = t ? tracks.indexOf(t) : -1;
+    if (i === -1) {
+      selectedTrack = null;
+      box.appendChild(el("h3", null, "Track"));
+      box.appendChild(el("div", "empty", "Click a track on the timeline — or anything in “Needs a look” — to see what Shazam heard there and fix it."));
+      return;
+    }
+    const D = setDuration();
+    const w = TL.windows(tracks, D)[i];
+    const joined = TL.joinProbes(tracks, probes, D)[i];
+
+    const hero = el("div", "in-hero");
+    const thumb = el("div", "thumb");
+    thumb.style.backgroundImage = t.coverart_url
+      ? "url('" + t.coverart_url.replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
+    const canArt = (t.artist || t.title) && t.index !== undefined && t.index !== null;
+    if (canArt) { thumb.title = "Artwork and episode cover"; thumb.onclick = () => showArtwork(t); }
+    else thumb.style.cursor = "default";
+    hero.appendChild(thumb);
+    const who = el("div");
+    who.style.minWidth = "0";
+    who.appendChild(el("div", "in-when", TL.fmt(w.start) + " – " + TL.fmt(w.end) + " · " + TL.fmt(w.end - w.start)));
+    who.appendChild(el("div", "in-when", "track " + (i + 1) + " of " + tracks.length));
+    const badges = el("div", "in-badges");
+    if (t.rejected) badges.appendChild(el("span", "badge warn", "merged into previous"));
+    if (t._new) badges.appendChild(el("span", "badge", "new — unsaved"));
+    if (t.episode_cover) badges.appendChild(el("span", "badge", "★ episode cover"));
+    badges.appendChild(el("span", "badge", joined.length + " sample" + (joined.length === 1 ? "" : "s")));
+    who.appendChild(badges);
+    hero.appendChild(who);
+    box.appendChild(hero);
+
+    const artistIn = el("input", "in-artist");
+    artistIn.value = t.artist; artistIn.placeholder = "Artist"; artistIn.setAttribute("aria-label", "Artist");
+    const titleIn = el("input", "in-title");
+    titleIn.value = t.title; titleIn.placeholder = "Title"; titleIn.setAttribute("aria-label", "Title");
+    const commit = () => { if (setNames(t, artistIn.value, titleIn.value)) render(); };
+    artistIn.readOnly = titleIn.readOnly = liveMode;
+    for (const input of [artistIn, titleIn]) {
+      input.addEventListener("change", commit);
+      input.addEventListener("keydown", ev => {
+        if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
+        if (ev.key === "Escape") { input.value = input === artistIn ? t.artist : t.title; input.blur(); }
+      });
+    }
+    box.appendChild(el("div", "in-lbl", "Artist"));
+    box.appendChild(artistIn);
+    box.appendChild(el("div", "in-lbl", "Title"));
+    box.appendChild(titleIn);
+
+    // Every name Shazam gave the audio in this window. The neighbours' names are
+    // left out: a probe at the edge hearing the next track is not a candidate.
+    const kept = TL.keptWindows(tracks, D);
+    const k = kept.findIndex(x => x.index === i);
+    const neighbours = k === -1 ? [] : [kept[k - 1], kept[k + 1]].filter(Boolean).map(x => tracks[x.index]);
+    const names = TL.variants(joined, neighbours);
+    if (names.length) {
+      box.appendChild(el("div", "in-lbl", "Shazam heard"));
+      for (const v of names) {
+        const line = el("div", "in-variant");
+        line.appendChild(el("div", "nm", v.artist + " — " + v.title)).title = v.artist + " — " + v.title;
+        line.appendChild(el("span", "ct", "×" + v.count));
+        const current = v.artist === t.artist && v.title === t.title;
+        const use = el("button", "tbtn", current ? "in use" : "Use");
+        use.disabled = current || liveMode;
+        use.onclick = () => { if (setNames(t, v.artist, v.title)) render(); };
+        line.appendChild(use);
+        box.appendChild(line);
+      }
+    }
+
+    if (joined.length) {
+      box.appendChild(el("div", "in-lbl", "Samples — click to hear one"));
+      const list = el("div", "in-samples");
+      for (const p of joined) {
+        const b = el("button");
+        b.type = "button";
+        b.appendChild(el("span", null, TL.fmt(p.t)));
+        const hit = p.artist || p.title;
+        b.appendChild(el("span", "nm" + (hit ? "" : " miss"), hit ? (p.artist || "?") + " — " + (p.title || "?") : "no match"));
+        b.appendChild(el("span", null, p.purpose === "refine" ? "12s" : p.window + "s"));
+        b.title = p.purpose + (p.confidence ? " · confidence " + p.confidence : "");
+        b.onclick = () => playAt(p.t);
+        list.appendChild(b);
+      }
+      box.appendChild(list);
+    }
+
+    const btns = el("div", "in-btns");
+    const play = el("button", "tbtn primary", "▶ Play");
+    play.onclick = () => playFrom(i, { scroll: false });
+    const split = el("button", "tbtn in-split", "Split at playhead");
+    const now = audio.currentTime || 0;
+    split.disabled = !(now > w.start + 1 && now < w.end - 1);
+    split.title = split.disabled ? "Play inside this track, then split where the next one starts" : "Start a new track at " + TL.fmt(now);
+    split.onclick = splitAtPlayhead;
+    const merge = el("button", "tbtn", t.rejected ? "Unmerge" : (i === 0 ? "Reject" : "Merge into previous"));
+    merge.onclick = () => toggleMerge(t);
+    const add = el("button", "tbtn", "＋ Add below");
+    add.onclick = () => addBelow(i);
+    btns.append(play);
+    if (!liveMode) btns.append(split, merge, add);
+    if (canArt && !liveMode) {
+      const artBtn = el("button", "tbtn", "Artwork…");
+      artBtn.onclick = () => showArtwork(t);
+      btns.appendChild(artBtn);
+    }
+    box.appendChild(btns);
+    if (t.rejected) box.appendChild(el("div", "in-note", "Merged tracks are left out of the tracklist when you save; their time goes to the track before."));
+    if (liveMode) box.appendChild(el("div", "in-note", "Still identifying — this is the run's current answer, and it may change as the run narrows the boundaries. Editing opens when it finishes."));
+  }
+
+  // ---- needs a look ----
+  // Ask Shazam about one moment. The pin shows as pending while the server
+  // waits its turn (it paces lookups like an identify run) and then lands as
+  // a real probe, already saved to the run's progress file.
+  async function sampleAt(t) {
+    pendingSamples.push(t);
+    renderTimeline();
+    try {
+      const r = await fetch("/api/sample", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ t }) });
+      const res = await r.json();
+      if (res.ok) {
+        probes.push(res.probe);
+        const p = res.probe;
+        toast(TL.fmt(t) + " — " + (p.artist || p.title ? (p.artist || "?") + " — " + (p.title || "?") : "Shazam heard nothing it knew"));
+      } else {
+        toast("Sample failed: " + (res.error || r.status));
+      }
+    } catch (e) {
+      toast("Sample failed");
+    } finally {
+      pendingSamples.splice(pendingSamples.indexOf(t), 1);
+      renderTimeline();
+    }
+  }
+
+  function applyFix(fix) {
+    if (fix.sample) {
+      // Evidence, not an edit: nothing to save. Sequential, so the pins land in
+      // the order they were asked for rather than racing the server's queue.
+      (async () => { for (const t of fix.sample) await sampleAt(t); })();
+      return;
+    }
+    for (const idx of fix.reject || []) {
+      const t = tracks[idx];
+      if (!t) continue;
+      t.rejected = true;
+      t.episode_cover = false;
+    }
+    for (const r of fix.retitle || []) {
+      const t = tracks[r.index];
+      if (t) setNames(t, t.artist, r.title);
+    }
+    setDirty(true);
+    render();
+  }
+
+  function renderIssues() {
+    const box = document.getElementById("issues");
+    box.innerHTML = "";
+    const issues = TL.findIssues(tracks, probes, setDuration()).filter(x => !dismissedIssues.has(x.key));
+    document.getElementById("qcount").textContent = issues.length;
+    if (!issues.length) { box.appendChild(el("div", "t2", "Nothing left that looks wrong.")); return; }
+    for (const x of issues) {
+      const [glyph, colour] = ISSUE_STYLE[x.kind] || ["•", "var(--muted)"];
+      const row = el("div", "issue");
+      const ico = el("div", "ico", glyph);
+      ico.style.background = colour;
+      const txt = el("div", "txt");
+      txt.appendChild(el("div", "t1", x.title));
+      txt.appendChild(el("div", "t2", x.detail));
+      row.append(ico, txt);
+      if (x.fix && (x.fix.sample ? canSample : !liveMode)) {
+        const fix = el("button", "tbtn", x.fix.label);
+        fix.onclick = e => {
+          e.stopPropagation();
+          applyFix(x.fix);
+          if (!x.fix.sample) toast(x.fix.label + " — Save to write it");
+        };
+        row.appendChild(fix);
+      }
+      const dismiss = el("button", "x", "×");
+      dismiss.title = "Not a problem";
+      dismiss.onclick = e => { e.stopPropagation(); dismissedIssues.add(x.key); renderIssues(); };
+      row.appendChild(dismiss);
+      row.onclick = () => selectTrack(tracks[x.index], { reveal: true });
+      box.appendChild(row);
+    }
+  }
+
+  // One poll at a time: a replay slower than the interval must not stack, or a
+  // late answer could land after the switch to editing.
+  let polling = false;
+  async function pollLive() {
+    if (polling || !liveMode) return;
+    polling = true;
+    try { await loadProbes(); } finally { polling = false; }
+  }
+
+  function setLive(on) {
+    liveMode = on;
+    document.body.classList.toggle("live", on);
+    summaryEl.readOnly = on;
+    if (on && !livePoll) livePoll = setInterval(pollLive, 3000);
+    if (!on && livePoll) { clearInterval(livePoll); livePoll = null; }
+  }
+
+  // A live run's tracklist is re-derived after every probe, so boundaries move
+  // and tracks appear. Keep the selection on whatever track now covers the
+  // moment that was selected, and the player on whatever covers the playhead.
+  async function refreshLiveTracks() {
+    let focus = null;
+    if (selectedTrack) {
+      const i = tracks.indexOf(selectedTrack);
+      const w = i === -1 ? null : windowFor(i);
+      if (w) focus = (w.start + w.end) / 2;
+    }
+    const data = await (await fetch("/api/tracklist")).json();
+    if (!liveMode || !data.live) return;  // the run finished meanwhile; load() owns the page now
+    tracks = data.tracks;
+    if (focus !== null) {
+      const W = TL.windows(tracks, setDuration());
+      const k = W.findIndex(w => focus >= w.start && focus < w.end);
+      selectedTrack = k === -1 ? null : tracks[k];
+    }
+    if (playingIndex !== null) {
+      playingIndex = null;
+      playingTrack = null;
+      const k = trackIndexAt(audio.currentTime);
+      if (k !== null && !audio.paused) playingIndex = k;
+    }
+    render();
+  }
+
+  // Drop the pins back in, in the order the run asked for them -- the coarse
+  // sweep first, then the refinement crowding into each boundary.
+  document.getElementById("tl-replay").onclick = () => {
+    if (replayShown !== null || !probes.length) return;
+    replayShown = 0;
+    const step = Math.max(15, Math.min(120, 12000 / probes.length));
+    const tick = () => {
+      replayShown++;
+      if (replayShown >= probes.length) { replayShown = null; renderTimeline(); return; }
+      renderTimeline();
+      setTimeout(tick, step);
+    };
+    tick();
+  };
 
   load();
 </script>

@@ -53,7 +53,7 @@ Issues = "https://github.com/brigleb/setlist-maker/issues"
 where = ["."]
 
 [tool.setuptools.package-data]
-setlist_maker = ["web_editor.html"]
+setlist_maker = ["web_editor.html", "web_timeline.js"]
 
 [tool.ruff]
 line-length = 100

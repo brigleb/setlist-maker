@@ -28,6 +28,7 @@ def _args(tmp_path, **over):
         path=str(audio),
         edit=False,
         web_edit=False,
+        watch=False,
         chapters=False,
         cover=None,
         no_artwork=False,

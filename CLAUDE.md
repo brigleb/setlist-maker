@@ -465,8 +465,9 @@ CLI application with the following modules:
   state, not the page's live fields, so the preview always reflects what would be
   embedded), `GET /api/artwork/options?index=N` (the picker's candidate list — see
   **Artwork curation** below), `POST /api/done` (graceful shutdown → returns control
-  to the CLI). Both artwork endpoints resolve `index` through the shared
-  `_track_for_query()`, so they answer for exactly the same set of tracks and 404 alike.
+  to the CLI), `GET /api/probes` + `GET /timeline.js` (the timeline -- see below), and
+  `POST /api/sample` (click-to-sample, see `sampler.py`). Both artwork endpoints resolve
+  `index` through the shared `_track_for_query()`, so they answer for exactly the same set of tracks and 404 alike.
 - **Host-header guard:** `_reject_foreign_host()` runs at the top of both `do_GET`
   and `do_POST` — a single gate, so a new endpoint cannot forget it. Requires the
   loopback name (`127.0.0.1`/`localhost`, case-insensitive) **and** this server's
@@ -565,6 +566,73 @@ CLI application with the following modules:
   Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, all suppressed while focus is in an
   input/textarea — except `#seek`, a range input that's deliberately exempted
   so the arrows still seek when the scrubber has focus.
+
+### `setlist_maker/web_timeline.js` + the editor's timeline
+
+- **The tracklist is the truth; probes are evidence laid over it.** The grid's blocks come from
+  `tracks[]` (each track's window is the player's own `windowFor()` rule, via `Timeline.windows`)
+  and each probe from `GET /api/probes` is joined to whichever window holds its *midpoint*. It
+  never draws from the engine's `segments()` in edit mode: the first merge or split would make
+  the two disagree, and the `.md` is what gets saved. Merge, split and "Use this name" are the
+  existing mutations (`rejected`, an inserted `_new` row, `_edited` artist/title), so the save
+  payload, `apply_track_edit()`'s correction learning and the list all work unchanged.
+  "Merge into previous" **is** reject: `to_markdown()` drops rejected rows, so the span goes to
+  the kept track before it (`Timeline.keptWindows`), and the grid paints a merged block in that
+  track's hue.
+- **Pure, and tested under Node.** `web_timeline.js` holds every derivation (`identity`,
+  `cleanTitle`, `joinProbes`, `variants`, `unheard`, `findIssues`) with no DOM, served at
+  `/timeline.js` and `require`d by `tests/test_web_timeline.py`, which skips when `node` is
+  missing. Issue rules: an **A x y A** run where every interloper is under `BLIP_SECONDS` is one
+  merge (the real 09-23 set's *Computer Love* split by 11s/3s/8s blips); a lone track under
+  `SHORT_SECONDS`; unidentified stretches; remaster tags as one batched "Tidy"; stretches over
+  `UNHEARD_SECONDS` no probe heard; and **name variants**, which count only a rival heard twice
+  or under the *same artist* (Trio's German/English *Da Da Da*), compared by `identity()` so a
+  tidied title is not a rival of Shazam's "(2009 Remaster)" spelling. A lone stray from another
+  artist is noise every long track collects -- the inspector still lists it. There is
+  deliberately no "heard only once" rule: 0.66 is ordinary Shazam confidence on these sets.
+- `cleanTitle` strips reissue bookkeeping only; "(Vocal)" and "(Maxi Version)" name a different
+  recording and must survive.
+- Selection is an object reference (`selectedTrack`), like `playingTrack`/`artTrack`. Choosing
+  to play a track selects it; automatic advance does not. During a replay the inspector is not
+  rebuilt, or a tick would take the focus out of a field being typed in.
+
+### `setlist_maker/sampler.py` - Click-to-sample
+
+- **ShazamSampler:** one lookup at a moment the user picked. The window is *centred* on the click
+  (`sample_window_start`), because shazamio fingerprints the middle 10s of what it is handed.
+  Slices with pydub's `start_second`/`duration` so ffmpeg seeks: never `load_audio()` in the
+  editor, four hours of PCM is ~2.5GB. Serialized on a lock and spaced `DEFAULT_DELAY_SECONDS`
+  apart, including after a failure, since the limit is burst-sensitive. The answer is a `Probe`
+  with purpose **"manual"**, appended to `_progress.json` by `adaptive.append_probe()` (creating
+  a v2 file, or converting a legacy one, as a resume would), so a later resume replays it as
+  evidence. To the engine "manual" is plain evidence: only "coverage" anchors, only "refine"
+  counts toward the thrash cap. These calls do **not** reach the call log.
+- **SampleRequests:** during a live run the run is the only Shazam caller -- two would double the
+  burst and race on the progress file -- so a click is queued, the adaptive driver takes it
+  ahead of `engine.next_probe()` inside its normal pacing, saves it, and only then resolves the
+  waiting HTTP thread (which re-reads the file for its pin). `close()` fails waiters and
+  refuses new asks; the driver closes it when its loop ends.
+- `save_progress_v2()` now writes a sibling `.tmp` and `os.replace`s it: the watch page re-reads
+  that file while the run is writing it.
+
+### `identify --watch` - Live timeline (`web_editor.WatchSession` / `LiveRun`)
+
+- Opens the editor's server in a background thread **before** the run, in live mode. The page
+  follows the run through the progress file alone: `adaptive.live_snapshot()` replays it through a
+  fresh engine -- resume is replay, so that *is* the run's state, and the same `segments()` ->
+  `results_to_tracklist(deduplicate=False)` shaping it finishes with. `LiveRun` caches the
+  replay on the file's (mtime, size); ~0.55s for 339 probes, once per new probe. `/api/probes`
+  adds `live` and `next` (the pulsing "listening here next" pin).
+- **Read-only while live.** `/api/save` answers 409 and the page disables every edit
+  (`setDirty` refuses, `body.live` hides the controls), because `finalize_outputs()` writes the
+  tracklist over anything saved mid-run. Sampling is the exception, routed via `SampleRequests`.
+- **Same tab becomes the editor.** `finish()` fills in the finished tracklist, corrections, audio
+  and sampler, and clears `live` *last*, since that is what flips the handler. The page sees
+  `live: false` on its next 3s poll and reloads. Done during the run sets `ctx.closed`, and
+  `finish()` then returns instead of waiting on a server that is gone. A failed or aborted run
+  calls `stop()`. `--watch` on a set that already has a tracklist just opens `--web-edit`; a
+  `--sequential` run is watched without click-to-sample (nothing can take a question between
+  its samples). Exclusive with `--edit`.
 
 ### `setlist_maker/progress.py` - Live progress panel for the identify run
 

@@ -41,6 +41,7 @@ def _identify_args(**overrides):
         singleton_confidence=SINGLETON_CONFIDENCE_KEEP,
         no_smoothing=False,
         web_edit=False,
+        watch=False,
         cover=None,
         call_log=None,
         no_call_log=False,

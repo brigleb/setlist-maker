@@ -30,7 +30,7 @@ class Probe:
 
     t: float
     window: float
-    purpose: str  # "coverage" | "refine"
+    purpose: str  # "coverage" | "refine" | "manual" (asked for in the editor)
     result: dict | None
     offsets: list[dict] | None = None
 

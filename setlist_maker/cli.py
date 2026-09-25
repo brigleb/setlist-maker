@@ -72,7 +72,7 @@ from setlist_maker.identify import (
     process_single_file,
     tracklist_output_path,
 )
-from setlist_maker.web_editor import run_web_editor
+from setlist_maker.web_editor import WatchSession, run_web_editor
 
 # Sourced from EngineConfig so the flags, their help text and the epilog can
 # never drift from what the engine actually defaults to.
@@ -236,6 +236,9 @@ def cmd_identify(args: argparse.Namespace) -> None:
     if args.edit and args.web_edit:
         print("Error: choose either --edit (terminal) or --web-edit (browser), not both.")
         sys.exit(1)
+    if args.edit and args.watch:
+        print("Error: --watch opens the browser editor; it cannot be combined with --edit.")
+        sys.exit(1)
 
     if args.cover and not args.chapters:
         print("Error: --cover sets the episode cover for chapter embedding; add --chapters.")
@@ -257,7 +260,8 @@ def cmd_identify(args: argparse.Namespace) -> None:
             print("Error: Could not parse tracklist from markdown file.")
             sys.exit(1)
         print(f"Loaded {len(tracklist.tracks)} tracks from {tracklist.source_file}")
-        editor_fn = run_web_editor if args.web_edit else run_editor
+        # --watch on a finished tracklist has no run to watch: it is --web-edit.
+        editor_fn = run_web_editor if (args.web_edit or args.watch) else run_editor
         editor_fn(tracklist, input_path, use_corrections=not args.no_learn)
 
         if args.chapters:
@@ -312,6 +316,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
     # Shazam, unless --reidentify asks for a fresh pass. A file that parses to
     # zero tracks (corrupt/empty) is treated as absent and regenerated.
     tracklist = None
+    watch = None
     if output_path.exists() and not args.reidentify:
         existing, _urls = _load_tracklist_with_artwork_urls(output_path)
         if existing.tracks:
@@ -336,52 +341,46 @@ def cmd_identify(args: argparse.Namespace) -> None:
             smoothing=not args.no_smoothing,
         )
 
-        if args.sequential:
-            result = asyncio.run(
-                process_single_file(
-                    audio_path=audio_path,
-                    output_dir=output_dir,
-                    delay_seconds=args.delay,
-                    resume=not args.no_resume,
-                    corrections_db=corrections_db,
-                    dedup_config=dedup_config,
-                    summary=not args.no_summary,
-                    allow_partial=args.allow_partial,
-                    panel=not args.no_panel,
-                    call_log=_resolve_call_log(args, audio_path, output_dir),
-                )
+        engine_config = EngineConfig(
+            stride=args.stride,
+            precision=args.precision,
+            refine_window=args.refine_window,
+            singleton_confidence_keep=args.singleton_confidence,
+            title_threshold=args.title_threshold,
+            artist_threshold=args.artist_threshold,
+        )
+        # Opened before the run so the page can follow it from the first probe.
+        # A sequential run has no way to take a user's question between its
+        # samples, so it is watched without click-to-sample.
+        watch = (
+            WatchSession(
+                audio_path,
+                output_path,
+                engine_config=None if args.sequential else engine_config,
+                sampling=not args.sequential,
             )
-        else:
-            if args.no_smoothing:
-                print(
-                    "  Note: --no-smoothing applies to --sequential only; "
-                    "adaptive mode adjudicates outliers by re-probing."
-                )
-            engine_config = EngineConfig(
-                stride=args.stride,
-                precision=args.precision,
-                refine_window=args.refine_window,
-                singleton_confidence_keep=args.singleton_confidence,
-                title_threshold=args.title_threshold,
-                artist_threshold=args.artist_threshold,
+            if args.watch
+            else None
+        )
+        try:
+            result = _run_identification(
+                args,
+                audio_path,
+                output_dir,
+                corrections_db,
+                dedup_config,
+                engine_config,
+                budget_seconds,
+                watch,
             )
-            result = asyncio.run(
-                process_single_file_adaptive(
-                    audio_path=audio_path,
-                    output_dir=output_dir,
-                    delay_seconds=args.delay,
-                    engine_config=engine_config,
-                    resume=not args.no_resume,
-                    corrections_db=corrections_db,
-                    summary=not args.no_summary,
-                    allow_partial=args.allow_partial,
-                    panel=not args.no_panel,
-                    budget_seconds=budget_seconds,
-                    call_log=_resolve_call_log(args, audio_path, output_dir),
-                )
-            )
+        except BaseException:
+            if watch is not None:
+                watch.stop()
+            raise
 
         if not result:
+            if watch is not None:
+                watch.stop()
             print(f"\nError: Failed to process {audio_path.name}")
             sys.exit(1)
 
@@ -390,9 +389,15 @@ def cmd_identify(args: argparse.Namespace) -> None:
     print(f"\n{'─' * 40}")
     print(tracklist.to_markdown())
 
-    if args.edit or args.web_edit:
-        editor_fn = run_web_editor if args.web_edit else run_editor
-        kind = "browser" if args.web_edit else "interactive"
+    if watch is not None:
+        # The page that watched the run becomes its editor, in the same tab.
+        watch.finish(
+            tracklist, output_path, use_corrections=not args.no_learn, audio_path=audio_path
+        )
+    elif args.edit or args.web_edit or args.watch:
+        web = args.web_edit or args.watch
+        editor_fn = run_web_editor if web else run_editor
+        kind = "browser" if web else "interactive"
         print(f"\nOpening {kind} editor for: {tracklist.source_file}")
         editor_fn(
             tracklist,
@@ -405,6 +410,55 @@ def cmd_identify(args: argparse.Namespace) -> None:
         _chain_chapters_after_identify(
             output_path, audio_path, fetch_art=not args.no_artwork, cover_image=cover_image
         )
+
+
+def _run_identification(
+    args: argparse.Namespace,
+    audio_path: Path,
+    output_dir: Path | None,
+    corrections_db: CorrectionsDB | None,
+    dedup_config: DedupConfig,
+    engine_config: EngineConfig,
+    budget_seconds: float | None,
+    watch: WatchSession | None,
+) -> tuple[Tracklist, Path] | None:
+    """Run whichever driver the flags select; returns its ``(tracklist, path)`` or None."""
+    if args.sequential:
+        return asyncio.run(
+            process_single_file(
+                audio_path=audio_path,
+                output_dir=output_dir,
+                delay_seconds=args.delay,
+                resume=not args.no_resume,
+                corrections_db=corrections_db,
+                dedup_config=dedup_config,
+                summary=not args.no_summary,
+                allow_partial=args.allow_partial,
+                panel=not args.no_panel,
+                call_log=_resolve_call_log(args, audio_path, output_dir),
+            )
+        )
+    if args.no_smoothing:
+        print(
+            "  Note: --no-smoothing applies to --sequential only; "
+            "adaptive mode adjudicates outliers by re-probing."
+        )
+    return asyncio.run(
+        process_single_file_adaptive(
+            audio_path=audio_path,
+            output_dir=output_dir,
+            delay_seconds=args.delay,
+            engine_config=engine_config,
+            resume=not args.no_resume,
+            corrections_db=corrections_db,
+            summary=not args.no_summary,
+            allow_partial=args.allow_partial,
+            panel=not args.no_panel,
+            budget_seconds=budget_seconds,
+            call_log=_resolve_call_log(args, audio_path, output_dir),
+            requests=watch.requests if watch is not None else None,
+        )
+    )
 
 
 def _load_tracklist_with_artwork_urls(
@@ -662,6 +716,8 @@ Commands
 identify options
   -e, --edit                  Open the editor (on an existing tracklist if found)
   -w, --web-edit              Open the editor in your browser instead of the TUI
+      --watch                 Watch the run on a browser timeline; it becomes the
+                              web editor when the run finishes
   -o, --output-dir DIR        Where to write tracklist files (default: beside input)
   -d, --delay SECONDS         Pause between Shazam calls (default: {d_delay})
       --chapters              Embed chapters + artwork after identifying (and editing)
@@ -764,6 +820,13 @@ Examples:
         dest="web_edit",
         help="Open the editor in your browser instead of the terminal "
         "(cannot be combined with --edit)",
+    )
+
+    identify_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Follow the run on a timeline in your browser -- click it to ask Shazam "
+        "about any moment -- and edit there when it finishes (implies --web-edit)",
     )
 
     identify_parser.add_argument(
