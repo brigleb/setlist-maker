@@ -773,6 +773,12 @@
       case "ArrowRight": e.preventDefault(); skip(SKIP_SECONDS); break;
       case "ArrowUp":    e.preventDefault(); prevTrack(); break;
       case "ArrowDown":  e.preventDefault(); nextTrack(); break;
+      case "i": case "I": {
+        if (!canSample || liveMode) break;
+        e.preventDefault();
+        identifyAt(keptTrackAt(audio.currentTime || 0), audio.currentTime || 0);
+        break;
+      }
       case "s": case "S": {
         const t = keptTrackAt(audio.currentTime || 0);
         if (t && splitAt(t, audio.currentTime || 0)) e.preventDefault();
@@ -1161,7 +1167,7 @@
       nextProbe = data.next || null;
       document.getElementById("tl-hint").textContent =
         "click a track to inspect · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard"
-        + (canSample ? " · click the pin lane to ask Shazam about any moment" : "");
+        + (canSample ? " · I names the track at the playhead · click the pin lane to ask Shazam about any moment" : "");
       if (wasLive && !data.live) {
         // The run finished and this server is now its editor. Everything on
         // the page was a live guess; start over from the saved tracklist.
@@ -1338,9 +1344,11 @@
     // "Split at playhead" is only meaningful while the playhead is inside the
     // selected track, which changes as it plays.
     const split = document.querySelector("#insp .in-split");
-    if (split && selectedTrack) {
+    const ident = document.querySelector("#insp .in-identify");
+    if (selectedTrack && (split || ident)) {
       const w = splitWindow(selectedTrack);
-      split.disabled = !(t > w.start + 1 && t < w.end - 1);
+      if (split) split.disabled = !(t > w.start + 1 && t < w.end - 1);
+      if (ident) ident.disabled = !canSample || !(t >= w.start && t < w.end);
     }
   }
 
@@ -1614,12 +1622,19 @@
     split.disabled = !(now > w.start + 1 && now < w.end - 1);
     split.title = split.disabled ? "Play inside this track, then split where the next one starts" : "Start a new track at " + TL.fmt(now);
     split.onclick = splitAtPlayhead;
+    const ident = el("button", "tbtn in-identify", "Identify at playhead");
+    ident.disabled = !canSample || !(now >= w.start && now < w.end);
+    ident.title = !canSample ? "Sampling needs the set's audio"
+      : ident.disabled ? "Play inside this track, then ask Shazam what is playing (I)"
+      : "Ask Shazam what is playing at " + TL.fmt(now) + " and name this track (I)";
+    ident.onclick = () => identifyAt(t, audio.currentTime || 0);
+    ident.hidden = !!t.rejected;  // a merged row is not in the output to be named
     const merge = el("button", "tbtn", t.rejected ? "Unmerge" : (i === 0 ? "Reject" : "Merge into previous"));
     merge.onclick = () => toggleMerge(t);
     const add = el("button", "tbtn", "＋ Add below");
     add.onclick = () => addBelow(i);
     btns.append(play);
-    if (!liveMode) btns.append(split, merge, add);
+    if (!liveMode) btns.append(ident, split, merge, add);
     if (canArt && !liveMode) {
       const artBtn = el("button", "tbtn", "Artwork…");
       artBtn.onclick = () => showArtwork(t);
@@ -1634,7 +1649,9 @@
   // Ask Shazam about one moment. The pin shows as pending while the server
   // waits its turn (it paces lookups like an identify run) and then lands as
   // a real probe, already saved to the run's progress file.
-  async function sampleAt(t) {
+  async function sampleAt(t, opts) {
+    const quiet = opts && opts.quiet;
+    let got = null;
     pendingSamples.push(t);
     renderTimeline();
     try {
@@ -1642,8 +1659,8 @@
       const res = await r.json();
       if (res.ok) {
         probes.push(res.probe);
-        const p = res.probe;
-        toast(TL.fmt(t) + " — " + (p.artist || p.title ? (p.artist || "?") + " — " + (p.title || "?") : "Shazam heard nothing it knew"));
+        const p = got = res.probe;
+        if (!quiet) toast(TL.fmt(t) + " — " + (p.artist || p.title ? (p.artist || "?") + " — " + (p.title || "?") : "Shazam heard nothing it knew"));
       } else {
         toast("Sample failed: " + (res.error || r.status));
       }
@@ -1652,6 +1669,39 @@
     } finally {
       pendingSamples.splice(pendingSamples.indexOf(t), 1);
       renderTimeline();
+    }
+    return got;
+  }
+
+  // Ask Shazam what is playing at `seconds` and name `t` with the answer: a
+  // sample centred on the moment (so the fingerprinted ten seconds are the
+  // ones around the playhead), then an ordinary edit -- undoable, unsaved until
+  // Save. The track is captured now, by reference, because the answer can take
+  // a pacing interval to arrive. An unidentified track is filled in outright;
+  // a named one is only replaced after a confirm, since Shazam is often wrong
+  // mid-mix and the name may be the user's own correction.
+  async function identifyAt(t, seconds) {
+    if (!canSample) { toast("Sampling needs the set's audio"); return; }
+    if (!t) return;
+    const at = Math.round(seconds);
+    toast("Asking Shazam about " + TL.fmt(at) + "…");
+    const p = await sampleAt(at, { quiet: true });
+    if (!p) return;  // sampleAt already said why
+    const heard = (p.artist || "?") + " — " + (p.title || "?");
+    if (!p.artist && !p.title) { toast(TL.fmt(at) + " — Shazam heard nothing it knew"); return; }
+    if (liveMode || !tracks.includes(t) || t.rejected) { toast(TL.fmt(at) + " — " + heard); return; }
+    if (TL.identity(p.artist, p.title) === TL.identity(t.artist, t.title)) {
+      toast("Shazam agrees: " + heard);
+      return;
+    }
+    if ((t.artist || t.title)
+        && !confirm("Shazam heard “" + heard + "” at " + TL.fmt(at) + ".\n\nReplace “" + trackName(t) + "”?")) {
+      return;  // still in "Shazam heard", with a Use button
+    }
+    if (setNames(t, p.artist || "", p.title || "")) {
+      selectedTrack = t;
+      render();
+      toast("Named: " + heard + " — ⌘Z to undo");
     }
   }
 
