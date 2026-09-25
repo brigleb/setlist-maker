@@ -173,6 +173,9 @@ playhead or merge it into the one before. Under the panel, **Needs a look**
 lists what seems wrong, with a one-click fix where there is one: a track
 broken up by a few seconds of something else (merge), unidentified stretches,
 titles still carrying "(2009 Remaster)" (tidy), stretches nothing listened to.
+A merged track becomes one block, with a thin seam where each folded-in row
+began; its side panel lists those rows, each with an **Unmerge**. Every change can be undone with **Undo** / ⌘Z (and
+redone with **Redo** / ⇧⌘Z) until you save.
 
 Click the pin lane under the tracks to ask Shazam about any moment. The answer
 lands as a purple pin and is saved to the run's `_progress.json`, so a later

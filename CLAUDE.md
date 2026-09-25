@@ -577,8 +577,15 @@ CLI application with the following modules:
   existing mutations (`rejected`, an inserted `_new` row, `_edited` artist/title), so the save
   payload, `apply_track_edit()`'s correction learning and the list all work unchanged.
   "Merge into previous" **is** reject: `to_markdown()` drops rejected rows, so the span goes to
-  the kept track before it (`Timeline.keptWindows`), and the grid paints a merged block in that
-  track's hue.
+  the kept track before it (`Timeline.keptWindows`). A kept track owns its kept window
+  *everywhere* -- the grid draws one block per kept window (a merged row survives only as a
+  seam, deliberately not a click target: merged blips sit seconds apart, a pixel or two at the
+  grid's scale, so the kept track's inspector lists them instead, each with an Unmerge), the
+  inspector reports that span, and
+  `joinProbes` pools the merged rows' probes into it. Drawing per-row windows instead left a
+  merge looking undone. Evidence heard inside a merged *different* track's span is not then
+  flagged as a rival name: the merge settled it (on the real set, Parov Stelar twice at 0.99
+  inside Computer Love's blips would otherwise appear the moment the blips were merged).
 - **Pure, and tested under Node.** `web_timeline.js` holds every derivation (`identity`,
   `cleanTitle`, `joinProbes`, `variants`, `unheard`, `findIssues`) with no DOM, served at
   `/timeline.js` and `require`d by `tests/test_web_timeline.py`, which skips when `node` is
@@ -592,6 +599,15 @@ CLI application with the following modules:
   deliberately no "heard only once" rule: 0.66 is ordinary Shazam confidence on these sets.
 - `cleanTitle` strips reissue bookkeeping only; "(Vocal)" and "(Maxi Version)" name a different
   recording and must survive.
+- **Undo/redo** (header buttons, ⌘Z / ⇧⌘Z) is recorded in `setDirty(true)`, the one call every edit
+  path already ends in, so a new mutation cannot forget it. A step is the list's order plus a
+  copy of each track's fields, restored onto the **same objects** so the `selectedTrack` /
+  `playingTrack` / `artTrack` references stay valid. It is taken in a microtask, which makes
+  one user action one step (a Tidy retitling eight tracks, a commit that renames and
+  re-sorts), and a step that changed no track is dropped, which keeps description typing out
+  of it -- the textarea has its own undo, and the shortcut sits past the input guard so ⌘Z
+  in a field stays the field's. Saving clears the history: inserted rows get real indices
+  then, and undoing past that would re-send one as new.
 - Selection is an object reference (`selectedTrack`), like `playingTrack`/`artTrack`. Choosing
   to play a track selects it; automatic advance does not. During a replay the inspector is not
   rebuilt, or a tick would take the focus out of a field being typed in.

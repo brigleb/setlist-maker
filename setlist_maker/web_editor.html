@@ -48,6 +48,9 @@
   .actions button { font:inherit; font-weight:600; font-size:13px; border-radius:7px; padding:7px 16px; cursor:pointer; border:1px solid transparent; margin-left:8px; }
   #save { background:var(--accent); color:#fff; }
   #save:disabled { opacity:.5; cursor:default; }
+  .histbtn { background:var(--btn-bg); color:var(--btn-text); border-color:var(--btn-border) !important; padding-left:12px !important; padding-right:12px !important; }
+  .histbtn:disabled { opacity:.45; cursor:default; }
+  body.live .histbtn { display:none; }
   #done { background:var(--btn-bg); color:var(--btn-text); border-color:var(--btn-border); }
   .summary { display:block; width:100%; max-width:760px; margin:0 auto; padding:14px 20px; font:inherit; font-size:16px; line-height:1.5; color:var(--text-soft); background:var(--card); border:none; border-bottom:1px solid var(--summary-line); resize:none; overflow:hidden; }
   .summary:focus { outline:none; background:var(--focus-bg); box-shadow:inset 0 0 0 2px var(--accent); }
@@ -148,7 +151,8 @@
   .tl-blocks { position:relative; height:26px; border-radius:4px; overflow:hidden; background:var(--hairline); cursor:pointer; }
   .tl-seg { position:absolute; top:0; bottom:0; border-right:1px solid var(--card); background:hsl(var(--h) 45% var(--block-l)); overflow:hidden; }
   .tl-seg.none { background:repeating-linear-gradient(45deg, var(--hatch) 0 5px, transparent 5px 10px); }
-  .tl-seg.merged { opacity:.5; background-image:repeating-linear-gradient(-45deg, var(--hatch) 0 3px, transparent 3px 7px); border-left:1px dashed var(--card); }
+  .tl-seam { position:absolute; top:3px; bottom:3px; width:0; border-left:1px dashed var(--card); z-index:2; pointer-events:none; }
+  .tl-seam.sel { top:0; bottom:0; border-left:2px solid var(--accent); }
   .tl-seg.sel { box-shadow:inset 0 0 0 2px var(--accent); z-index:2; }
   .tl-seg span { position:absolute; left:5px; top:6px; right:3px; font-size:10.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.45); pointer-events:none; }
   .tl-seg.none span { color:var(--muted); text-shadow:none; font-style:italic; }
@@ -228,6 +232,8 @@
       <div class="counts" id="counts"></div>
     </div>
     <div class="actions">
+      <button id="undo" class="histbtn" disabled title="Undo (⌘Z)">Undo</button>
+      <button id="redo" class="histbtn" disabled title="Redo (⇧⌘Z)">Redo</button>
       <button id="save" disabled>Save</button>
       <button id="done">Done</button>
     </div>
@@ -379,7 +385,80 @@
   function setDirty(v) {
     if (v && liveMode) return;  // nothing on a live page may be saved over by the run
     dirty = v; document.getElementById("save").disabled = !v;
+    if (v) recordChange();
   }
+
+  // ---- undo ----
+  // Every edit already ends in setDirty(true), so that is where history is
+  // recorded -- a new edit path cannot forget it. A snapshot is the list's order
+  // plus a copy of each track's fields, restored onto the *same* objects, so the
+  // references held for the selection, the playing track and the artwork panel
+  // stay valid. One user action is one step: the snapshot is taken in a
+  // microtask, after everything the action changes synchronously (a Tidy that
+  // retitles eight tracks, a commit that renames and re-sorts). A step that
+  // changed no track -- typing in the description, which has its own native
+  // undo -- is dropped. Saving clears the history: an inserted row gets its real
+  // index from the server then, and undoing past that would re-send it as new.
+  let steps = [], stepAt = 0, savedAt = 0, recordQueued = false, savedSummary = "";
+
+  function snapshot() {
+    return { order: tracks.slice(), fields: tracks.map(t => Object.assign({}, t)) };
+  }
+
+  function sameSnapshot(a, b) {
+    return a.order.length === b.order.length && a.order.every((t, i) => t === b.order[i])
+      && JSON.stringify(a.fields) === JSON.stringify(b.fields);
+  }
+
+  function resetHistory() {
+    steps = [snapshot()];
+    stepAt = savedAt = 0;
+    savedSummary = summaryEl.value;
+    syncHistoryButtons();
+  }
+
+  function recordChange() {
+    if (recordQueued) return;
+    recordQueued = true;
+    queueMicrotask(() => {
+      recordQueued = false;
+      const snap = snapshot();
+      if (steps.length && sameSnapshot(snap, steps[stepAt])) return;
+      steps.length = stepAt + 1;  // a new edit forgets what was undone
+      steps.push(snap);
+      if (steps.length > 200) { steps.shift(); savedAt--; }  // -1: the saved state is gone
+      stepAt = steps.length - 1;
+      syncHistoryButtons();
+    });
+  }
+
+  function restore(to) {
+    if (liveMode || to < 0 || to >= steps.length) return;
+    stepAt = to;
+    const snap = steps[to];
+    tracks = snap.order.slice();
+    tracks.forEach((t, i) => {
+      for (const k of Object.keys(t)) if (!(k in snap.fields[i])) delete t[k];
+      Object.assign(t, snap.fields[i]);
+    });
+    reindexPlayingTrack();
+    if (selectedTrack && !tracks.includes(selectedTrack)) selectedTrack = null;
+    if (overlay.classList.contains("open")) closeArtwork();  // it may show a pick being undone
+    dirty = stepAt !== savedAt || summaryEl.value !== savedSummary;
+    document.getElementById("save").disabled = !dirty;
+    syncHistoryButtons();
+    render();
+  }
+
+  function syncHistoryButtons() {
+    document.getElementById("undo").disabled = stepAt === 0;
+    document.getElementById("redo").disabled = stepAt >= steps.length - 1;
+  }
+
+  const undo = () => { if (stepAt > 0) { restore(stepAt - 1); toast("Undone"); } };
+  const redo = () => { if (stepAt < steps.length - 1) { restore(stepAt + 1); toast("Redone"); } };
+  document.getElementById("undo").onclick = undo;
+  document.getElementById("redo").onclick = redo;
   function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); }
 
   async function load() {
@@ -393,6 +472,7 @@
     if (was) selectedTrack = tracks.find(t => t.timestamp === was.timestamp && t.artist === was.artist) || null;
     summaryEl.value = data.summary || "";
     autosizeSummary();
+    resetHistory();
     render();
     loadProbes();
   }
@@ -674,6 +754,12 @@
     // Space and the arrows will be eaten while they type.
     const el = document.activeElement;
     if (el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && el.type !== "range"))) return;
+    // Past the guard above, so ⌘Z inside a text field stays the field's own undo.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      if (e.shiftKey) redo(); else undo();
+      return;
+    }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (playerEl.classList.contains("disabled")) return;
     switch (e.key) {
@@ -1014,7 +1100,7 @@
         if (overlay.classList.contains("open")) closeArtwork();
         if (hasNew) await load();  // inserted rows also need real indices
         else render();
-        setDirty(false); toast("Saved");
+        setDirty(false); resetHistory(); toast("Saved");
       } else { toast("Save failed: " + (res.error || "")); }
     } catch (e) { toast("Save failed"); }
   };
@@ -1099,18 +1185,15 @@
     return (t.artist || "Unknown artist") + (t.title ? " — " + t.title : "");
   }
 
-  // The hue a block is painted: its own identity's, or -- for a track merged
-  // away -- the kept track it now belongs to, so a merge reads as one colour.
   function blockHue(i) {
-    let k = i;
-    while (k > 0 && tracks[k].rejected) k--;
-    return TL.hue(TL.identity(tracks[k].artist, tracks[k].title) || "?");
+    return TL.hue(TL.identity(tracks[i].artist, tracks[i].title) || "?");
   }
 
   function renderTimeline() {
     if (!TL) return;
     const D = setDuration();
     const W = TL.windows(tracks, D);
+    const kept = TL.keptWindows(tracks, D);
     const rows = document.getElementById("tl-rows");
     rows.innerHTML = "";
     const shown = replayShown === null ? probes : probes.slice(0, replayShown);
@@ -1135,19 +1218,24 @@
 
       const art = el("div", "tl-art");
       const blocks = el("div", "tl-blocks");
-      tracks.forEach((t, i) => {
-        const w = W[i];
-        if (w.end <= a || w.start >= b) return;
+      // One block per track that will be written, spanning its kept window: a
+      // merge reads as one block because it is one track. Each merged row stays
+      // only as a seam. Seams are not click targets -- merged blips sit seconds
+      // apart, a pixel or two at this scale -- so a click lands on the kept block,
+      // whose inspector lists what was merged into it, each with an Unmerge.
+      for (const w of kept) {
+        if (w.end <= a || w.start >= b) continue;
+        const i = w.index, t = tracks[i];
         const x = Math.max(w.start, a), y = Math.min(w.end, b);
-        const seg = el("div", "tl-seg" + (!t.artist && !t.title ? " none" : "") + (t.rejected ? " merged" : "") + (t === selectedTrack ? " sel" : ""));
+        const seg = el("div", "tl-seg" + (!t.artist && !t.title ? " none" : "") + (t === selectedTrack ? " sel" : ""));
         seg.style.setProperty("--h", blockHue(i));
         seg.style.left = at(x);
         seg.style.width = span(y - x);
         seg.dataset.i = i;
-        seg.title = trackName(t) + " · " + TL.fmt(w.start) + (t.rejected ? " · merged into the previous track" : "");
-        if (!t.rejected && y - x > 240) seg.appendChild(el("span", null, TL.cleanTitle(t.title) || t.artist || "Unidentified"));
+        seg.title = trackName(t) + " · " + TL.fmt(w.start) + "–" + TL.fmt(w.end);
+        if (y - x > 240) seg.appendChild(el("span", null, TL.cleanTitle(t.title) || t.artist || "Unidentified"));
         blocks.appendChild(seg);
-        if (!t.rejected && (t.artist || t.title) && w.start >= a && w.start < b) {
+        if ((t.artist || t.title) && w.start >= a && w.start < b) {
           const th = el("div", "tl-thumb" + (t === selectedTrack ? " sel" : ""));
           th.style.left = at(w.start);
           th.dataset.i = i;
@@ -1156,6 +1244,13 @@
           else th.style.backgroundImage = GRADS[i % GRADS.length];
           art.appendChild(th);
         }
+      }
+      tracks.forEach((t, i) => {
+        if (!t.rejected || W[i].start < a || W[i].start >= b) return;
+        const seam = el("div", "tl-seam" + (t === selectedTrack ? " sel" : ""));
+        seam.style.left = at(W[i].start);
+        seam.dataset.i = i;
+        blocks.appendChild(seam);
       });
       for (const [x0, y0] of gaps) {
         if (y0 <= a || x0 >= b) continue;
@@ -1238,7 +1333,7 @@
     // selected track, which changes as it plays.
     const split = document.querySelector("#insp .in-split");
     if (split && selectedTrack) {
-      const w = windowFor(tracks.indexOf(selectedTrack));
+      const w = splitWindow(selectedTrack);
       split.disabled = !(t > w.start + 1 && t < w.end - 1);
     }
   }
@@ -1262,7 +1357,7 @@
     const listRow = document.getElementById("list").children[i];
     if (listRow) listRow.classList.add("selected");
     if (opts && opts.reveal) {
-      const block = document.querySelector('#tl-rows .tl-seg[data-i="' + i + '"]');
+      const block = document.querySelector('#tl-rows .tl-blocks [data-i="' + i + '"]');
       if (block) block.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
     renderInspector();
@@ -1340,14 +1435,26 @@
 
   // Cut the selected track at the playhead: the new row starts where the user
   // is listening, blank, and is selected so it can be named straight away.
+  // The span "Split at playhead" may cut: the track's kept window (so a merged
+  // track can be split anywhere it now covers), or a merged row's own span.
+  function splitWindow(t) {
+    const i = tracks.indexOf(t);
+    if (i === -1) return null;
+    const D = setDuration();
+    return TL.keptWindows(tracks, D).find(x => x.index === i) || TL.windows(tracks, D)[i];
+  }
+
   function splitAtPlayhead() {
     const t = selectedTrack;
     const i = tracks.indexOf(t);
     const at = Math.floor(audio.currentTime);
-    const w = windowFor(i);
-    if (i === -1 || !(at > w.start && at < w.end)) return;
+    const w = splitWindow(t);
+    if (i === -1 || !w || !(at > w.start && at < w.end)) return;
     const row = { artist: "", title: "", timestamp: at, time: fmt(at), rejected: false, _new: true };
-    tracks.splice(i + 1, 0, row);
+    // In timestamp order: a merged track's span runs over the rows merged into it.
+    let j = i + 1;
+    while (j < tracks.length && tracks[j].timestamp <= at) j++;
+    tracks.splice(j, 0, row);
     reindexPlayingTrack();
     setDirty(true);
     selectedTrack = row;
@@ -1368,7 +1475,11 @@
       return;
     }
     const D = setDuration();
-    const w = TL.windows(tracks, D)[i];
+    // A kept track owns everything merged into it, so its span and its samples
+    // are the kept window's; a merged row shows its own old span.
+    const kept = TL.keptWindows(tracks, D);
+    const k = kept.findIndex(x => x.index === i);
+    const w = k === -1 ? TL.windows(tracks, D)[i] : kept[k];
     const joined = TL.joinProbes(tracks, probes, D)[i];
 
     const hero = el("div", "in-hero");
@@ -1412,8 +1523,6 @@
 
     // Every name Shazam gave the audio in this window. The neighbours' names are
     // left out: a probe at the edge hearing the next track is not a candidate.
-    const kept = TL.keptWindows(tracks, D);
-    const k = kept.findIndex(x => x.index === i);
     const neighbours = k === -1 ? [] : [kept[k - 1], kept[k + 1]].filter(Boolean).map(x => tracks[x.index]);
     const names = TL.variants(joined, neighbours);
     if (names.length) {
@@ -1446,6 +1555,25 @@
         list.appendChild(b);
       }
       box.appendChild(list);
+    }
+
+    // What was merged into this track, one Unmerge each: the grid shows these
+    // only as seams too close together to click.
+    if (k !== -1) {
+      const end = kept[k + 1] ? kept[k + 1].index : tracks.length;
+      const folded = tracks.slice(i + 1, end);
+      if (folded.length) {
+        box.appendChild(el("div", "in-lbl", "Merged into this track"));
+        for (const m of folded) {
+          const line = el("div", "in-variant");
+          line.appendChild(el("div", "nm", TL.fmt(m.timestamp) + " " + trackName(m))).title = trackName(m);
+          const un = el("button", "tbtn", "Unmerge");
+          un.disabled = liveMode;
+          un.onclick = () => toggleMerge(m);
+          line.appendChild(un);
+          box.appendChild(line);
+        }
+      }
     }
 
     const btns = el("div", "in-btns");
@@ -1538,7 +1666,7 @@
         fix.onclick = e => {
           e.stopPropagation();
           applyFix(x.fix);
-          if (!x.fix.sample) toast(x.fix.label + " — Save to write it");
+          if (!x.fix.sample) toast(x.fix.label + " — ⌘Z undoes it, Save writes it");
         };
         row.appendChild(fix);
       }
@@ -1581,6 +1709,7 @@
     const data = await (await fetch("/api/tracklist")).json();
     if (!liveMode || !data.live) return;  // the run finished meanwhile; load() owns the page now
     tracks = data.tracks;
+    resetHistory();
     if (focus !== null) {
       const W = TL.windows(tracks, setDuration());
       const k = W.findIndex(w => focus >= w.start && focus < w.end);

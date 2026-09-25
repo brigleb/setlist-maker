@@ -193,3 +193,35 @@ def test_a_tidied_title_is_not_a_rival_of_shazams_spelling():
     probes = [probe(350 + 60 * k, "Kraftwerk", "Computer Love (2009 Remaster)") for k in range(3)]
     issues = js("T.findIssues(tracks, probes, 900)", tracks=tracks, probes=probes)
     assert not [i for i in issues if i["kind"] == "variants"]
+
+
+def test_a_merge_pools_the_merged_rows_probes_into_the_kept_track():
+    tracks = [track(0, "A", "a"), track(100, "X", "x", rejected=True), track(300, "B", "b")]
+    got = js(
+        "T.joinProbes(tracks, probes, 500).map(l => l.map(p => p.t))",
+        tracks=tracks,
+        probes=[probe(20, "A", "a"), probe(150, "X", "x"), probe(350, "B", "b")],
+    )
+    # A owns 0-300 now; the merged row still lists what was heard in its old span.
+    assert got == [[20, 150], [150], [350]]
+
+
+def test_what_was_heard_inside_a_merged_stretch_is_not_a_rival():
+    # The real set: Parov Stelar was heard twice at 0.99 inside the blips the
+    # merge folded into Computer Love. Merging that stretch settled it, so the
+    # merge must not immediately raise a new "Heard under 2 names".
+    merged = [dict(t, rejected=i in (1, 2, 3, 4, 5)) for i, t in enumerate(KRAFTWERK)]
+    probes = [
+        probe(1100, "Kraftwerk", "Computer Love (2009 Remaster)"),
+        probe(1245, "Parov Stelar", "All Night"),
+        probe(1251, "Parov Stelar", "All Night", window=12.0),
+        probe(1250, "David Guetta", "Titanium (Alesso Remix) [feat. Sia]", window=12.0),
+        probe(1300, "Kraftwerk", "Computer Love (2009 Remaster)"),
+    ]
+    issues = js("T.findIssues(tracks, probes, 1600)", tracks=merged, probes=probes)
+    assert not [i for i in issues if i["kind"] == "variants"]
+    # ...whereas heard in Computer Love's own span -- including the span of a
+    # merged repeat of it, which was never in dispute -- it is still a question.
+    probes += [probe(1100, "Parov Stelar", "All Night"), probe(1400, "Parov Stelar", "All Night")]
+    issues = js("T.findIssues(tracks, probes, 1600)", tracks=merged, probes=probes)
+    assert [i["index"] for i in issues if i["kind"] == "variants"] == [0]

@@ -79,16 +79,25 @@
   }
 
   // Attach each probe to the track whose window holds its midpoint. Probes
-  // before the first track's timestamp belong to the first track.
+  // before the first track's timestamp belong to the first track. A kept track
+  // owns its *kept* window, so merging pools the merged rows' evidence into it;
+  // a merged row still lists the probes in its own old span, which is what its
+  // inspector shows while the user decides whether to unmerge it.
   function joinProbes(tracks, probes, duration) {
-    const w = windows(tracks, duration);
     const out = tracks.map(() => []);
     if (!tracks.length) return out;
+    const kept = keptWindows(tracks, duration);
+    const raw = windows(tracks, duration);
+    const home = (ws, mid) => {
+      let k = 0;
+      while (k + 1 < ws.length && mid >= ws[k + 1].start) k++;
+      return k;
+    };
     for (const p of probes || []) {
       const mid = p.t + p.window / 2;
-      let i = 0;
-      while (i + 1 < w.length && mid >= w[i + 1].start) i++;
-      out[i].push(p);
+      if (kept.length) out[kept[home(kept, mid)].index].push(p);
+      const r = home(raw, mid);
+      if (tracks[r].rejected) out[r].push(p);
     }
     for (const list of out) list.sort((a, b) => a.t - b.t);
     return out;
@@ -208,7 +217,16 @@
       // another title (Trio's "Da Da Da" in German and in English), or a second
       // name Shazam gave more than once. A lone stray from another artist is the
       // noise any long track collects; the inspector still lists it.
-      const names = variants(byIndex[i], neighbours);
+      // A different track the user merged away was a decision, not a question:
+      // what was heard inside its span is pooled into this track's evidence (the
+      // inspector lists it) but is not a rival worth flagging. A merged *repeat*
+      // of this track settles nothing -- that span was never in dispute.
+      const settled = new Set();
+      const end = kept[k + 1] ? kept[k + 1].index : tracks.length;
+      for (let r = i + 1; r < end; r++) {
+        if (idOf(r) !== idOf(i)) byIndex[r].forEach(p => settled.add(p));
+      }
+      const names = variants(byIndex[i].filter(p => !settled.has(p)), neighbours);
       const own = identity(t.artist, "").split("\u0000")[0];
       // Compared by identity, not spelling: once a title is tidied, Shazam's
       // "(2009 Remaster)" spelling of it is the same name, not a rival.
