@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import signal
 import sys
@@ -21,7 +22,7 @@ from pathlib import Path
 from shazamio import Shazam
 
 from setlist_maker.audio import extract_window, format_timestamp, load_audio
-from setlist_maker.boundary import BoundaryEngine, EngineConfig, Probe
+from setlist_maker.boundary import BoundaryEngine, EngineConfig, Probe, ProbePlan
 from setlist_maker.call_log import CallLog, CallRecorder, describe_error
 from setlist_maker.editor import CorrectionsDB, Tracklist
 from setlist_maker.identify import (
@@ -31,6 +32,7 @@ from setlist_maker.identify import (
     tracklist_output_path,
 )
 from setlist_maker.progress import AdaptiveRunState, live_display, render_adaptive_panel
+from setlist_maker.sampler import SAMPLE_WINDOW, SampleRequests, sample_window_start
 from setlist_maker.shazam_client import MAX_RETRIES, identify_sample_with_retry
 
 PROGRESS_VERSION = 2
@@ -52,8 +54,25 @@ def save_progress_v2(duration: float, probes: list[Probe], filepath: Path) -> No
             for p in probes
         ],
     }
-    with open(filepath, "w") as f:
+    # Written beside and swapped in, never truncated in place: the web editor
+    # re-reads this file while a run is still writing it, and a reader that
+    # lands mid-write would otherwise see half a probe list.
+    tmp = filepath.with_name(filepath.name + ".tmp")
+    with open(tmp, "w") as f:
         json.dump(payload, f, indent=2)
+    os.replace(tmp, filepath)
+
+
+def append_probe(filepath: Path, probe: Probe, duration: float | None) -> None:
+    """Add one probe to a saved run, creating the file if the set has none.
+
+    For probes taken outside a run -- the editor's click-to-sample. Resume is
+    replay, so anything appended here is evidence the next `identify` resume
+    folds in like any probe it took itself. A legacy sequential file converts
+    to v2 on the way through, exactly as a resume would convert it.
+    """
+    probes, saved_duration = load_probes(filepath) if filepath.exists() else ([], None)
+    save_progress_v2(saved_duration or duration or 0.0, [*probes, probe], filepath)
 
 
 def load_probes(filepath: Path) -> tuple[list[Probe], float | None]:
@@ -88,6 +107,34 @@ def load_probes(filepath: Path) -> tuple[list[Probe], float | None]:
     )
 
 
+def live_snapshot(
+    progress_path: Path,
+    source_file: str,
+    engine_config: EngineConfig | None = None,
+    corrections_db: CorrectionsDB | None = None,
+    duration_hint: float | None = None,
+) -> tuple[Tracklist, ProbePlan | None, list[Probe], float | None]:
+    """What a run in progress would write if it stopped now, and where it looks next.
+
+    Resume is replay, so replaying the saved probes into a fresh engine is not
+    an approximation of the running one -- it *is* its state, and this is the
+    same fold and the same tracklist shaping the run finishes with. That is what
+    lets the watch page follow a run through the progress file alone, with no
+    channel into the running process beyond the file it already writes.
+    """
+    probes, duration = load_probes(progress_path) if progress_path.exists() else ([], None)
+    duration = duration or duration_hint
+    if not probes or not duration:
+        return results_to_tracklist([], source_file, deduplicate=False), None, probes, duration
+    engine = BoundaryEngine(duration, engine_config)
+    for probe in probes:
+        engine.add_probe(probe)
+    segs, _drops = engine.segments()
+    raw = [(int(round(s.start)), s.info) for s in segs]
+    tracklist = results_to_tracklist(raw, source_file, corrections_db, deduplicate=False)
+    return tracklist, engine.next_probe(), probes, duration
+
+
 _ANSI_GREEN = "\033[32m"
 _ANSI_DIM = "\033[2m"
 _ANSI_RESET = "\033[0m"
@@ -102,7 +149,11 @@ def format_probe_line(
     counter (there is no fixed total), a purpose glyph instead ("·" coverage,
     "»" refine).
     """
-    glyphs = {"coverage": "·", "refine": "»"} if color else {"coverage": ".", "refine": ">"}
+    glyphs = (
+        {"coverage": "·", "refine": "»", "manual": "◆"}
+        if color
+        else {"coverage": ".", "refine": ">", "manual": "*"}
+    )
     tag = glyphs.get(purpose, " ")
     time_col = f"{format_timestamp(int(t)):>7}"
     found, miss, ellipsis = ("✓", "·", "…") if color else ("+", "-", "...")
@@ -173,6 +224,20 @@ def _sigint_flag():
         signal.signal(signal.SIGINT, previous)
 
 
+@contextmanager
+def _abandon_on_abort(requests: SampleRequests | None, inflight: list):
+    """On an abort (second Ctrl-C, a crash), fail the user's questions rather
+    than leave the page waiting on a run that will never answer them."""
+    try:
+        yield
+    except BaseException:
+        for request in inflight:
+            SampleRequests.abandon(request)
+        if requests is not None:
+            requests.close("identification stopped")
+        raise
+
+
 async def process_single_file_adaptive(
     audio_path: Path,
     output_dir: Path | None,
@@ -185,10 +250,16 @@ async def process_single_file_adaptive(
     panel: bool = True,
     budget_seconds: float | None = None,
     call_log: Path | None = None,
+    requests: SampleRequests | None = None,
 ) -> tuple[Tracklist, Path] | None:
     """Adaptive sibling of identify.process_single_file: same inputs and
     outputs, different sampling strategy. Anytime: every stopping rule
     (converged, budget, Ctrl-C) funnels through the same finalization.
+
+    ``requests`` carries moments the user asked about on the live timeline
+    (``identify --watch``). Each is probed ahead of the engine's own next
+    choice, inside the same pacing, and recorded as an ordinary probe with
+    purpose "manual" -- so it is evidence the fold uses from then on.
     """
     print(f"\n{'=' * 60}")
     print(f"Processing (adaptive): {audio_path.name}")
@@ -253,10 +324,12 @@ async def process_single_file_adaptive(
             resumed_from=len(probes),
         )
 
+    inflight: list = []  # a user's question taken off the queue and not yet answered
     with (
         tempfile.TemporaryDirectory() as temp_dir,
         EventLog(events_path) as events,
         _sigint_flag() as flag,
+        _abandon_on_abort(requests, inflight),
         live_display(state, live, render=render_adaptive_panel) as display,
     ):
 
@@ -280,7 +353,15 @@ async def process_single_file_adaptive(
                 events.write({"type": "budget_exhausted", "after_probes": len(probes)})
                 stop_reason = "budget"
                 break
-            plan = engine.next_probe()
+            # The user's question first: they are watching and waiting on it,
+            # and the engine loses nothing -- the answer is evidence it folds in.
+            request = requests.pop() if requests is not None else None
+            inflight[:] = [request] if request is not None else []
+            plan = (
+                ProbePlan(t=sample_window_start(request.t), window=SAMPLE_WINDOW, purpose="manual")
+                if request is not None
+                else engine.next_probe()
+            )
             if plan is None:
                 break
 
@@ -328,11 +409,16 @@ async def process_single_file_adaptive(
             # Enter the cooldown phase *before* logging and the progress write,
             # so the panel never claims to still be asking about a probe it has
             # already recorded.
-            more = engine.next_probe() is not None and not flag.stop
+            waiting = requests is not None and requests.pending()
+            more = (engine.next_probe() is not None or waiting) and not flag.stop
             if more:
                 state.begin_cooldown(delay_seconds)
 
             save_progress_v2(duration, probes, progress_path)
+            if request is not None:
+                # Only now: the asker re-reads the progress file for its pin.
+                requests.resolve(request, probe)
+                inflight.clear()
             display.log(
                 format_probe_line(plan.t, plan.purpose, info, width=term_width, color=color)
             )
@@ -341,6 +427,8 @@ async def process_single_file_adaptive(
                 await asyncio.sleep(delay_seconds)
 
         state.finish()
+        if requests is not None:
+            requests.close()  # nothing will serve a question asked from here on
         segs, drops = engine.segments()
         for d in drops:
             events.write(d)

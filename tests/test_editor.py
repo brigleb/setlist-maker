@@ -14,6 +14,7 @@ from setlist_maker.editor import (
     _unescape_summary_line,
     apply_track_edit,
     parse_markdown_tracklist,
+    strip_reissue_tag,
 )
 
 
@@ -35,6 +36,29 @@ class TestApplyTrackEdit:
         assert track.artist == "Justice"
         assert track.title == "Genesis"
         assert track.coverart_url is None
+
+    @pytest.mark.parametrize(
+        "tagged",
+        ["Computer Love (2009 Remaster)", "Danger [Remastered]", "Mirror - 2012 Remaster"],
+    )
+    def test_tidying_a_remaster_tag_keeps_the_cover(self, tagged):
+        """Same recording, same art: the timeline's Tidy must not send every tagged
+        track back through a search that can find another edition, or nothing."""
+        url = "https://is1-ssl.mzstatic.com/right.jpg"
+        track = Track(timestamp=0, artist="Kraftwerk", title=tagged, coverart_url=url)
+        clean = tagged.split(" (")[0].split(" [")[0].split(" - ")[0]
+        assert apply_track_edit(track, "Kraftwerk", clean) is True
+        assert track.coverart_url == url
+
+    def test_a_different_title_is_still_a_correction_of_the_art(self):
+        url = "https://is1-ssl.mzstatic.com/wrong.jpg"
+        track = Track(timestamp=0, artist="Trio", title="Da Da Da (Remastered)", coverart_url=url)
+        apply_track_edit(track, "Trio", "Anna")
+        assert track.coverart_url is None
+
+    def test_strip_reissue_tag_leaves_other_parentheticals(self):
+        assert strip_reissue_tag("Things Fall Apart (Vocal)") == "Things Fall Apart (Vocal)"
+        assert strip_reissue_tag("Tress-Cun-Deo-La (Remastered 2025)") == "Tress-Cun-Deo-La"
 
     def test_unchanged_edit_keeps_artwork_and_reports_no_change(self):
         """Re-sending an identical row must not discard artwork that is still right."""

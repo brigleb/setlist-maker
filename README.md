@@ -163,6 +163,39 @@ anywhere a browser does). **Save** writes the same `.md` + `.json` outputs;
 **Done** closes the server and returns to the CLI (so `--web-edit --chapters`
 still chains). `--edit` and `--web-edit` cannot be combined.
 
+Above the list sits a **timeline** of the whole set: one row per hour, a
+thumbnail at each track's start, and a pin for every sample Shazam took (dark
+for the 30-second sweep, blue for the short samples that narrow a boundary).
+Click a track to open it in the side panel, which lists every name Shazam gave
+that stretch of audio (pick one with **Use**) and every sample (click one to
+hear exactly what Shazam heard). From there you can split the track at the
+playhead or merge it into the one before. Under the panel, **Needs a look**
+lists what seems wrong, with a one-click fix where there is one: a track
+broken up by a few seconds of something else (merge), unidentified stretches,
+titles still carrying "(2009 Remaster)" (tidy), stretches nothing listened to.
+A merged track becomes one block, with a thin seam where each folded-in row
+began; its side panel lists those rows, each with an **Unmerge**. Every change can be undone with **Undo** / ⌘Z (and
+redone with **Redo** / ⇧⌘Z) until you save.
+
+Click the pin lane under the tracks to ask Shazam about any moment. The answer
+lands as a purple pin and is saved to the run's `_progress.json`, so a later
+resume counts it as evidence too. Lookups are spaced like an identify run's
+(`-d`, 15 seconds), so a burst of clicks queues instead of tripping Shazam's
+rate limit.
+
+To watch a run as it happens, use `--watch`:
+
+```bash
+setlist-maker recording.mp3 --watch
+```
+
+The timeline opens before the first sample and fills in as the run jumps
+around the set. The pulsing red pin is where it listens next. The page is
+read-only while the run is going, because the run writes the tracklist when
+it finishes and would overwrite any edits. You can still click to ask about
+any moment, and the run takes your question ahead of its own next sample.
+When the run finishes, the same tab becomes the editor.
+
 The player is scoped to whichever track is playing: the scrubber spans that
 track's window rather than the whole recording, so positioning inside a track
 is precise even on a four-hour set. Transport controls give you ±15 seconds and

@@ -182,7 +182,63 @@ CLI application with the following modules:
   evidence on both sides into under `phantom_min` **and** its own sample confidence is below
   `singleton_confidence_keep` (the sample's, not its cluster's — the #7 lesson). A lone claim
   with an open flank might genuinely span it, so the rule refuses to drop it until refinement
-  squeezes it.
+  squeezes it. A gap between two runs of **one** identity is judged at `precision_none` (30s)
+  rather than `phantom_min`, because that is where `_target` stops refining a None-adjacent
+  interval: a dropout retiring in (20, 30] could never be narrowed by any later probe, and the
+  real set reported one track (The J.B.'s) as three rows around a permanent 22.5s hole. This
+  restores the parity with `_smooth_sequence`'s unconditional `A None A` that the spec claimed
+  and the first implementation did not have.
+- **Contradiction collapse (`_collapsed`).** Probing hardest at a transition means the fold now
+  *sees* Shazam changing its mind there, and reported every flip as a track: measured on a real
+  4-hour set, Boz Scaggs → Grant Green folded into four segments over 36s alternating with Us3
+  (who sample Blue Note, which Grant Green *is*), and a 16s Notorious B.I.G. sat in the cut onto
+  Herb Alpert's *Rise*, which it samples. Three gates, none of them removable:
+  - **Pinned and measured.** Both neighbours identified — `None` is the absence of an answer,
+    not a competing claim, which is what spares the real set's two 12.7s runs beside
+    unidentified stretches — and both boundaries pinned within
+    `min(target, fingerprint_segment / 2)`. The floor is *not* the plain target: `--precision`
+    buys fewer probes, and borrowing its value would let relaxing it silently buy deletions.
+  - **Too small to be a track:** under `phantom_min`, or under `stride` inside an alternation
+    zone. `_alternation_zones` implements the spec's own never-built rule (*"A, then B, then A
+    again"*): a **return** is one identity's consecutive pair separated by an excursion under
+    the stride — the span the coverage guarantee says cannot hide a track — and a **zone** needs
+    two *overlapping* returns of different identities, i.e. A-B-A-B. One return is A-B-A, which
+    stays with `singleton_confidence_keep`. Returns are collected in run order and merged by
+    index overlap, and the winner is `max(probes, extent, -first run)`, so the fold stays the
+    deterministic replay `test_replay_equality` requires.
+  - **Convicted by its own offsets (`_misattributed`).** This is the gate the rule cannot ship
+    without. Geometry alone convicts all three real phantoms *and* deletes genuine short tracks:
+    measured against the oracle, 100% of real 12–18s tracks and ~60% of real 20s ones, every one
+    of which the code before this shipped correctly. Two readings, both measured: **incoherent**
+    (the run's own probes disagree about the start by more than the run is long — the second Us3
+    run spreads 49.0s across 5.6s of audio; the bound is the run's own extent because 10 of the
+    file's 51 multi-probe runs legitimately spread past 4s, one by 455s) and **collide** (the
+    run's implied start sits within `offset_tolerance` of a *better-supported* neighbouring
+    run's — *Hypnotize* and *Rise* both imply 3973.3, to 0.1s). Support is what makes collide
+    one-directional: the phantom collides with the real track exactly as much as the reverse.
+    A run with no offsets is never collapsed; the rule needs evidence, and absence of it is not.
+    Measured on the oracle's rewind geometry (a DJ pulling a record back, a genuine A-B-A-B):
+    the veto acquits 40 of 40, where geometry alone deletes a real 162s record.
+  The zone's own best-supported identity is exempt whatever its extent — on the real file the
+  *correct* track clears `phantom_min` by 2.8s, less than the engine's own p90 boundary error,
+  so it needs protecting by name rather than by arithmetic. Drops are appended to `segments()`'s
+  second return value as `contradiction_collapsed` beside `phantom_dropped`, so `adaptive.py`
+  writes them to `<base>_events.jsonl` with no wiring. The rule is deliberately **not** monotone
+  in track *presence*: it is refinement that licenses it, so a phantom can appear at one prefix
+  and be collapsed at a later one. Measured across all 317 real prefixes, exactly two titles do
+  that and both are the phantoms; nothing flickers.
+- **The oracle grew a `misid_rate` for this.** Every answer `tests/boundary_oracle.py` gave
+  named a track actually present in the excerpt, so no seed could produce a misidentification
+  and the property gates were green on `_collapsed` vacuously (measured: 80 extra seeds fire
+  zero collapses). `misid_rate` gives each track a stable impostor whose offset describes the
+  **real** track's position — that being the audio actually fingerprinted — which is what makes
+  the two implied starts collide and so what the veto reads.
+  `test_misidentified_phantoms_collapse_without_taking_a_real_track` counts "real tracks found"
+  from the *probe results*, not from the oracle: at a 12% rate a track thin enough to get one
+  probe sometimes has that one probe stolen, and the fold cannot report what it was never told.
+  Its efficacy bound is deliberately loose (43 of 89 impostors survive, correctly — a
+  per-probe contaminant mostly lands alone inside a long track, where the flanks stay coarse and
+  A-B-A belongs to `singleton_confidence_keep`); efficacy is pinned by `tests/fixtures/*.json`.
 - Identity clustering is `identify.py`'s `_assign_cluster` / `_normalized_key` reused as-is, so
   the same track under two labels never manufactures a boundary. Note the corollary for
   fixtures: names like `Artist 1` / `Artist 11` score 0.94 and legitimately merge — see
@@ -409,8 +465,9 @@ CLI application with the following modules:
   state, not the page's live fields, so the preview always reflects what would be
   embedded), `GET /api/artwork/options?index=N` (the picker's candidate list — see
   **Artwork curation** below), `POST /api/done` (graceful shutdown → returns control
-  to the CLI). Both artwork endpoints resolve `index` through the shared
-  `_track_for_query()`, so they answer for exactly the same set of tracks and 404 alike.
+  to the CLI), `GET /api/probes` + `GET /timeline.js` (the timeline -- see below), and
+  `POST /api/sample` (click-to-sample, see `sampler.py`). Both artwork endpoints resolve
+  `index` through the shared `_track_for_query()`, so they answer for exactly the same set of tracks and 404 alike.
 - **Host-header guard:** `_reject_foreign_host()` runs at the top of both `do_GET`
   and `do_POST` — a single gate, so a new endpoint cannot forget it. Requires the
   loopback name (`127.0.0.1`/`localhost`, case-insensitive) **and** this server's
@@ -509,6 +566,89 @@ CLI application with the following modules:
   Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, all suppressed while focus is in an
   input/textarea — except `#seek`, a range input that's deliberately exempted
   so the arrows still seek when the scrubber has focus.
+
+### `setlist_maker/web_timeline.js` + the editor's timeline
+
+- **The tracklist is the truth; probes are evidence laid over it.** The grid's blocks come from
+  `tracks[]` (each track's window is the player's own `windowFor()` rule, via `Timeline.windows`)
+  and each probe from `GET /api/probes` is joined to whichever window holds its *midpoint*. It
+  never draws from the engine's `segments()` in edit mode: the first merge or split would make
+  the two disagree, and the `.md` is what gets saved. Merge, split and "Use this name" are the
+  existing mutations (`rejected`, an inserted `_new` row, `_edited` artist/title), so the save
+  payload, `apply_track_edit()`'s correction learning and the list all work unchanged.
+  "Merge into previous" **is** reject: `to_markdown()` drops rejected rows, so the span goes to
+  the kept track before it (`Timeline.keptWindows`). A kept track owns its kept window
+  *everywhere* -- the grid draws one block per kept window (a merged row survives only as a
+  seam, deliberately not a click target: merged blips sit seconds apart, a pixel or two at the
+  grid's scale, so the kept track's inspector lists them instead, each with an Unmerge), the
+  inspector reports that span, and
+  `joinProbes` pools the merged rows' probes into it. Drawing per-row windows instead left a
+  merge looking undone. Evidence heard inside a merged *different* track's span is not then
+  flagged as a rival name: the merge settled it (on the real set, Parov Stelar twice at 0.99
+  inside Computer Love's blips would otherwise appear the moment the blips were merged).
+- **Pure, and tested under Node.** `web_timeline.js` holds every derivation (`identity`,
+  `cleanTitle`, `joinProbes`, `variants`, `unheard`, `findIssues`) with no DOM, served at
+  `/timeline.js` and `require`d by `tests/test_web_timeline.py`, which skips when `node` is
+  missing. Issue rules: an **A x y A** run where every interloper is under `BLIP_SECONDS` is one
+  merge (the real 09-23 set's *Computer Love* split by 11s/3s/8s blips); a lone track under
+  `SHORT_SECONDS`; unidentified stretches; remaster tags as one batched "Tidy"; stretches over
+  `UNHEARD_SECONDS` no probe heard; and **name variants**, which count only a rival heard twice
+  or under the *same artist* (Trio's German/English *Da Da Da*), compared by `identity()` so a
+  tidied title is not a rival of Shazam's "(2009 Remaster)" spelling. A lone stray from another
+  artist is noise every long track collects -- the inspector still lists it. There is
+  deliberately no "heard only once" rule: 0.66 is ordinary Shazam confidence on these sets.
+- `cleanTitle` strips reissue bookkeeping only; "(Vocal)" and "(Maxi Version)" name a different
+  recording and must survive.
+- **Undo/redo** (header buttons, ⌘Z / ⇧⌘Z) is recorded in `setDirty(true)`, the one call every edit
+  path already ends in, so a new mutation cannot forget it. A step is the list's order plus a
+  copy of each track's fields, restored onto the **same objects** so the `selectedTrack` /
+  `playingTrack` / `artTrack` references stay valid. It is taken in a microtask, which makes
+  one user action one step (a Tidy retitling eight tracks, a commit that renames and
+  re-sorts), and a step that changed no track is dropped, which keeps description typing out
+  of it -- the textarea has its own undo, and the shortcut sits past the input guard so ⌘Z
+  in a field stays the field's. Saving clears the history: inserted rows get real indices
+  then, and undoing past that would re-send one as new.
+- Selection is an object reference (`selectedTrack`), like `playingTrack`/`artTrack`. Choosing
+  to play a track selects it; automatic advance does not. During a replay the inspector is not
+  rebuilt, or a tick would take the focus out of a field being typed in.
+
+### `setlist_maker/sampler.py` - Click-to-sample
+
+- **ShazamSampler:** one lookup at a moment the user picked. The window is *centred* on the click
+  (`sample_window_start`), because shazamio fingerprints the middle 10s of what it is handed.
+  Slices with pydub's `start_second`/`duration` so ffmpeg seeks: never `load_audio()` in the
+  editor, four hours of PCM is ~2.5GB. Serialized on a lock and spaced `DEFAULT_DELAY_SECONDS`
+  apart, including after a failure, since the limit is burst-sensitive. The answer is a `Probe`
+  with purpose **"manual"**, appended to `_progress.json` by `adaptive.append_probe()` (creating
+  a v2 file, or converting a legacy one, as a resume would), so a later resume replays it as
+  evidence. To the engine "manual" is plain evidence: only "coverage" anchors, only "refine"
+  counts toward the thrash cap. These calls do **not** reach the call log.
+- **SampleRequests:** during a live run the run is the only Shazam caller -- two would double the
+  burst and race on the progress file -- so a click is queued, the adaptive driver takes it
+  ahead of `engine.next_probe()` inside its normal pacing, saves it, and only then resolves the
+  waiting HTTP thread (which re-reads the file for its pin). `close()` fails waiters and
+  refuses new asks; the driver closes it when its loop ends.
+- `save_progress_v2()` now writes a sibling `.tmp` and `os.replace`s it: the watch page re-reads
+  that file while the run is writing it.
+
+### `identify --watch` - Live timeline (`web_editor.WatchSession` / `LiveRun`)
+
+- Opens the editor's server in a background thread **before** the run, in live mode. The page
+  follows the run through the progress file alone: `adaptive.live_snapshot()` replays it through a
+  fresh engine -- resume is replay, so that *is* the run's state, and the same `segments()` ->
+  `results_to_tracklist(deduplicate=False)` shaping it finishes with. `LiveRun` caches the
+  replay on the file's (mtime, size); ~0.55s for 339 probes, once per new probe. `/api/probes`
+  adds `live` and `next` (the pulsing "listening here next" pin).
+- **Read-only while live.** `/api/save` answers 409 and the page disables every edit
+  (`setDirty` refuses, `body.live` hides the controls), because `finalize_outputs()` writes the
+  tracklist over anything saved mid-run. Sampling is the exception, routed via `SampleRequests`.
+- **Same tab becomes the editor.** `finish()` fills in the finished tracklist, corrections, audio
+  and sampler, and clears `live` *last*, since that is what flips the handler. The page sees
+  `live: false` on its next 3s poll and reloads. Done during the run sets `ctx.closed`, and
+  `finish()` then returns instead of waiting on a server that is gone. A failed or aborted run
+  calls `stop()`. `--watch` on a set that already has a tracklist just opens `--web-edit`; a
+  `--sequential` run is watched without click-to-sample (nothing can take a question between
+  its samples). Exclusive with `--edit`.
 
 ### `setlist_maker/progress.py` - Live progress panel for the identify run
 

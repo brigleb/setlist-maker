@@ -459,3 +459,113 @@ implementation plan routed it only through `process_single_file`; since adaptive
 default, that would have left the log — which is on by default so that a throttling question
 has data waiting — empty for every ordinary run. `total` is the engine's live estimate of
 probes, there being no fixed count.
+### Contradiction collapse (2026-08-28)
+
+**G. The spec's contradiction rule was never implemented, and the first design for it was
+wrong.** "Bisection fallback" promised that contradictory answers inside a shrinking interval
+(A, then B, then A again) would retire as one low-confidence boundary. Nothing did that, and
+adaptive sampling made the omission *visible*: the scheduler probes hardest exactly where two
+tracks meet, so the fold sees Shazam flip-flopping and reports each flip as a track. Measured
+on `2026-08-26-Keys-Lounge.mp3` (317 probes):
+
+| zone | folded as | truth |
+|---|---|---|
+| 3:44 | Us3 7.1s / Grant Green 22.8s / Us3 5.6s / Grant Green 611.9s | one cut, Boz Scaggs → Grant Green |
+| 1:06 | Roy Ayers / **B.I.G. 16.3s** / Herb Alpert 334.7s | one cut, Roy Ayers → Herb Alpert |
+
+Both are **semantic**, not noise: Us3 sample Blue Note records and Grant Green is Blue Note;
+"Hypnotize" samples "Rise". Expect sampled/sampling pairs. Note also that 1:06 is *not* an
+alternation — three distinct identities in a row — so the spec's A-B-A-B rule alone could
+never have reached it.
+
+**H. Geometry alone is a track-length guillotine.** The obvious rule — drop a pinned run whose
+*measured* extent is under `phantom_min` — convicts all three real phantoms, and is a strict
+regression. Swept against the oracle (30 seeds per cell, engine run to convergence, short
+track placed uniformly between two long ones):
+
+| real track length | deleted, clean | deleted, noisy | kept by the code before this |
+|---|---|---|---|
+| 12s | 19/19 | 23/24 | all |
+| 15s | 21/21 | 24/25 | all |
+| 18s | 19/21 | 17/25 | all |
+| 20s | 12/21 | 15/25 | all |
+| 25s | 0/21 | 2/24 | all |
+
+It also takes `test_confident_single_probe_track_survives`' own fixture once that recording is
+probed to convergence rather than by four hand-placed probes: the flanks turn `resolved`, and
+the rule deletes the very short track lesson #7 exists to protect. Geometry may only *open* the
+question.
+
+**I. Offsets answer it, and the two readings that work are both relative.** `_misattributed`
+convicts a run when its own probes' implied starts (per **run**, never `_trusted_start` of the
+cluster — that would average a phantom together with real sightings of the same title elsewhere)
+either:
+
+- **spread further than the run is long** (+ `offset_tolerance`). The second Us3 run spreads
+  49.0s across 5.6s of audio: two probes 2.8s apart cannot imply starts 49s apart. The bound
+  must be the run's own extent, not a constant — 10 of the file's 51 multi-probe runs
+  legitimately spread past 4s, *Girl You Need a Change of Mind* by 455s over a 462s track, so
+  any fixed tolerance either misses the phantom or convicts a sixth of the set; or
+- **collide with a better-supported neighbouring run's**, within `offset_tolerance`. Two
+  identities cannot both begin at the same instant. Measured: "Hypnotize" implies 3973.3 and
+  "Rise" implies 3973.3 — the same number to 0.1s — and the first Us3 run lands 1.4s off Grant
+  Green's. Comparing `(probes, extent)` is what makes the test one-directional; without it the
+  phantom and the real track convict each other symmetrically.
+
+Measured effect of the veto: on the real file it convicts **exactly** the three phantoms and
+nothing else, at every collide tolerance from 1.5s to 5s and every spread rule tried. Against
+the oracle it cuts false deletions of genuine 12–20s tracks from 34/161 to 5/161, and from
+5/29 to **0/29** in the A-C-A geometry above. Absolute spread (4s) instead of relative gives
+31/161 — the relative bound is doing most of the work.
+
+**J. The alternation rule needs the veto more than the sliver rule does.** `_alternation_zones`
+detects the spec's shape — two *overlapping* returns of different identities, i.e. A-B-A-B,
+where a return is one identity's consecutive pair separated by an excursion under the `stride`
+— and raises the extent ceiling to the stride inside such a zone. On geometry alone that
+deletes a real record in the **rewind/reload**: a DJ pulls a record back, both stretches are
+genuine, both are under 90s, and 162 seconds of a real track is re-attributed to the winner.
+With the veto the oracle acquits **40 of 40** rewinds. Two further guards: the zone's own
+best-supported identity is never collapsed (on the real file the *correct* track clears
+`phantom_min` by 2.8s, less than the measured p90 boundary error of 3.88s), and nothing at or
+above the stride is ever dropped.
+
+**K. The flank test cannot borrow `--precision`.** A run is only collapsible when both bounding
+boundaries are pinned within `min(_target(...), fingerprint_segment / 2)`. Reading the plain
+target would mean `--precision 30` — a knob whose purpose is to spend *fewer* probes — silently
+widened the rule's blast radius sixfold. `fingerprint_segment / 2` is the physical floor from
+Errata 6: a probe cannot localise a boundary better than ±5s at any window size.
+
+**L. `A None A` was a regression against the path this replaced.** `_smooth_sequence` absorbs a
+lone `None` between identical neighbours unconditionally; the adaptive rule dropped a `None` run
+only under `phantom_min` (20s) while `_target` stops refining a `None`-adjacent interval at
+`precision_none` (30s) — so a dropout retiring in (20, 30] was permanently unabsorbable. The
+real file reported The J.B.'s as three rows around a 22.5s hole no further probe could narrow.
+A gap between two runs of **one** identity is now judged at `precision_none`; `_needs_coverage`
+still splits everything wider than the stride, so the ≥ 2-minute guarantee is untouched.
+
+**Measured result** on the real file: 61 segments / 55 identified rows → **55 / 50**. The five
+rows are 3 phantom rows dropped (*Hypnotize*, *Tukka Yoot's Riddim* ×2 — the only two titles
+that disappear from the set) plus 2 duplicate rows *merged* (Grant Green and The J.B.'s each
+reported twice around a phantom). Every remaining sub-60s row is deliberate: *Wings* (37.3s,
+real) and two 12.7s runs flanked by unidentified audio, which the `None` gate spares. Across
+all 317 prefixes exactly two titles appear and later vanish — both phantoms — and none
+flickers: the collapse is not monotone in track presence, because refinement is what licenses
+it, but it is stable.
+
+**M. The oracle could not generate this failure mode, so it grew one.** Every answer
+`tests/boundary_oracle.py` gave named a track actually present in the excerpt, so no seed
+produced a misidentification and every property gate was green on `_collapsed` *vacuously* —
+measured: 80 extra seeds at 4-hour and 2-hour scale fire zero collapses. `misid_rate` now gives
+each track a stable impostor (one record has one sampler) whose offset describes the **real**
+track's position, because that is the audio being fingerprinted — which is what makes the two
+implied starts collide, and so what the veto reads.
+`test_misidentified_phantoms_collapse_without_taking_a_real_track` is the gate. Two details are
+load-bearing: "real tracks found" is counted from the *probe results*, not the oracle, because
+at a 12% rate a track thin enough to get one probe sometimes has that one probe stolen and the
+fold cannot report what it was never told (measured: exactly the two apparent losses this
+fixture produces, both the set's first track, both with zero probes naming them); and the
+efficacy bound is loose because this contaminant fires independently per probe, so most
+impostors land alone inside a long track where the flanks stay coarse and the A-B-A shape
+belongs to `singleton_confidence_keep` by design. 43 of 89 survive, correctly. Efficacy is
+pinned by `tests/fixtures/*.json` — two verbatim slices of the real run — not by this gate,
+which exists to stop the rule going inert or turning on real tracks.

@@ -722,6 +722,8 @@ def _request(base, path, host=None, method="GET", body=None):
         ("/api/audio", "GET", None),
         ("/api/artwork?index=0", "GET", None),
         ("/api/artwork/options?index=0", "GET", None),
+        ("/api/probes", "GET", None),
+        ("/timeline.js", "GET", None),
         ("/api/save", "POST", b'{"tracks": []}'),
         ("/api/done", "POST", b"{}"),
     ],
@@ -1132,3 +1134,129 @@ def test_page_panel_survives_an_unsaved_pick_and_sends_it():
     assert "episode_cover: !!t.episode_cover" in html
     # The picker searches the live text, not the saved identification.
     assert "&artist=" in html and "&title=" in html
+
+
+# ---- timeline: the run's probes as evidence -------------------------------
+
+
+def _write_progress(path, probes, duration=900.0):
+    path.write_text(json.dumps({"version": 2, "audio_duration": duration, "probes": probes}))
+
+
+def test_probes_to_api_flattens_results_and_keeps_asking_order():
+    from setlist_maker.boundary import Probe
+    from setlist_maker.web_editor import probes_to_api
+
+    probes = [
+        Probe(
+            t=450.0,
+            window=30.0,
+            purpose="coverage",
+            result={
+                "artist": "A",
+                "title": "a",
+                "confidence": 0.66,
+                "coverart_url": "https://x/a.jpg",
+            },
+        ),
+        Probe(t=100.0, window=12.0, purpose="refine", result=None),
+    ]
+    api = probes_to_api(probes, 900.0)
+    assert api["duration"] == 900.0
+    # Not sorted: the order the engine asked in is what a replay shows.
+    assert [p["t"] for p in api["probes"]] == [450.0, 100.0]
+    assert api["probes"][0] == {
+        "t": 450.0,
+        "window": 30.0,
+        "purpose": "coverage",
+        "artist": "A",
+        "title": "a",
+        "confidence": 0.66,
+        "coverart_url": "https://x/a.jpg",
+    }
+    assert api["probes"][1]["artist"] is None
+
+
+@pytest.mark.parametrize(
+    "md_name,audio,expected",
+    [
+        ("2026-09-23-Keys-Lounge_tracklist.md", None, "2026-09-23-Keys-Lounge_progress.json"),
+        ("renamed.md", "set.mp3", "set_progress.json"),
+        ("renamed.md", None, "renamed_progress.json"),
+    ],
+)
+def test_progress_path_sits_beside_the_tracklist(tmp_path, md_name, audio, expected):
+    from setlist_maker.web_editor import progress_path_for
+
+    audio_path = tmp_path / audio if audio else None
+    assert progress_path_for(tmp_path / md_name, audio_path) == tmp_path / expected
+
+
+def test_get_probes_serves_the_progress_file(sample_tracklist, tmp_path):
+    progress = tmp_path / "set_progress.json"
+    _write_progress(
+        progress,
+        [
+            {
+                "t": 10.0,
+                "window": 30.0,
+                "purpose": "coverage",
+                "result": {"artist": "Daft Punk", "title": "Around the World"},
+            }
+        ],
+    )
+    ctx = _ctx(sample_tracklist, tmp_path)
+    ctx.progress_path = progress
+    with running_server(ctx) as base:
+        with urllib.request.urlopen(base + "/api/probes") as r:
+            data = json.loads(r.read())
+    assert data["duration"] == 900.0
+    assert data["probes"][0]["artist"] == "Daft Punk"
+
+
+def test_get_probes_rereads_the_file_so_a_live_run_shows_up(sample_tracklist, tmp_path):
+    progress = tmp_path / "set_progress.json"
+    _write_progress(progress, [])
+    ctx = _ctx(sample_tracklist, tmp_path)
+    ctx.progress_path = progress
+    with running_server(ctx) as base:
+        with urllib.request.urlopen(base + "/api/probes") as r:
+            assert json.loads(r.read())["probes"] == []
+        _write_progress(
+            progress, [{"t": 0.0, "window": 30.0, "purpose": "coverage", "result": None}]
+        )
+        with urllib.request.urlopen(base + "/api/probes") as r:
+            assert len(json.loads(r.read())["probes"]) == 1
+
+
+@pytest.mark.parametrize("content", [None, "{not json", '{"version": 2, "probes": [{}]}'])
+def test_get_probes_degrades_to_none_without_a_usable_file(sample_tracklist, tmp_path, content):
+    """A set identified before adaptive sampling has no probes to draw; that is
+    not an error, and neither is a file the page cannot use."""
+    progress = tmp_path / "set_progress.json"
+    if content is not None:
+        progress.write_text(content)
+    ctx = _ctx(sample_tracklist, tmp_path)
+    ctx.progress_path = progress
+    with running_server(ctx) as base:
+        with urllib.request.urlopen(base + "/api/probes") as r:
+            assert json.loads(r.read()) == {
+                "duration": None,
+                "probes": [],
+                "live": False,
+                "can_sample": False,
+            }
+
+
+def test_timeline_script_is_served(sample_tracklist, tmp_path):
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(base + "/timeline.js") as r:
+            assert r.headers["Content-Type"].startswith("text/javascript")
+            assert "findIssues" in r.read().decode()
+
+
+def test_page_loads_the_timeline():
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    assert '<script src="/timeline.js"></script>' in html
+    assert "/api/probes" in html
+    assert 'id="timeline"' in html
