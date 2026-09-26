@@ -262,6 +262,14 @@ tracklist, and replaces a starred track (starring one later replaces it back).
 chapter markers, chapter artwork and the episode cover — without leaving the
 page, saving your edits first.
 
+The same strip holds the episode's **title** and **artist**, which Embed writes
+into the MP3's own tags (the title as both title and album). A set whose name
+starts with a date — `2026-09-23-Keys-Lounge.mp3` — gets "September 23, 2026" as
+its title, and the artist defaults to the last one you saved, so you type your
+name once. On Save they go in `<set>_episode.json` beside the tracklist, and the
+`chapters` command reads them from there too. Clear a field to leave that tag
+as the file already has it.
+
 ### Chapter Markers & Artwork (`chapters`)
 
 After identifying and editing a tracklist, embed it as navigable chapter markers in the MP3 — with per-chapter artwork fetched automatically:

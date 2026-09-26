@@ -32,6 +32,7 @@ from setlist_maker.editor import (
     resolve_audio_path,
     save_tracklist,
 )
+from setlist_maker.episode import episode_tags, save_episode_tags
 from setlist_maker.sampler import SampleRequests, SampleRequestsClosed, ShazamSampler
 from setlist_maker.uploads import (
     MAX_UPLOAD_BYTES,
@@ -427,6 +428,9 @@ class _Handler(BaseHTTPRequestHandler):
             data = json.loads(raw)
             edits = data.get("tracks", [])
             cover = data.get("cover", _UNSET)
+            episode = data.get("episode", _UNSET)
+            if episode is not _UNSET and not isinstance(episode, dict):
+                raise ValueError("episode must be an object with a title and an artist")
             if cover not in (_UNSET, None):
                 # Checked before anything is applied, so a bad cover saves nothing.
                 if not is_upload_ref(cover):
@@ -446,6 +450,8 @@ class _Handler(BaseHTTPRequestHandler):
             save_tracklist(ctx.tracklist, ctx.output_path, ctx.corrections_db)
             if cover is not _UNSET:
                 set_episode_cover(ctx.output_path, cover)
+            if episode is not _UNSET:
+                save_episode_tags(ctx.output_path, episode.get("title"), episode.get("artist"))
         except Exception as exc:  # surface to the page; keep state intact
             self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -496,6 +502,8 @@ class _Handler(BaseHTTPRequestHandler):
             api["cover"] = cover_path_for(self._ctx.output_path).stat().st_mtime_ns // 1_000_000
         except OSError:
             api["cover"] = None
+        # The title and artist Embed will write: saved for this set, else defaults.
+        api["episode"] = episode_tags(self._ctx.output_path)
         audio = self._ctx.audio_path
         api["can_embed"] = bool(audio and audio.suffix.lower() == ".mp3" and audio.exists())
         self._send_json(api)

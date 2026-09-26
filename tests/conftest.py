@@ -24,6 +24,16 @@ class NetworkAccessBlocked(BaseException):
 
 
 @pytest.fixture(autouse=True)
+def isolated_user_config(monkeypatch, tmp_path_factory):
+    """Point ~/.config/setlist-maker/config.json somewhere disposable.
+
+    Saving an episode remembers its artist there, and a test that saved one
+    would otherwise rewrite the real user's default artist.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("config")))
+
+
+@pytest.fixture(autouse=True)
 def block_outbound_network(monkeypatch):
     """Fail any test that tries to reach a real host.
 

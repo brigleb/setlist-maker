@@ -98,11 +98,17 @@
   #episode { display:flex; align-items:center; gap:12px; max-width:760px; margin:0 auto; padding:10px 20px 12px; background:var(--card); border-bottom:1px solid var(--summary-line); }
   #ep-thumb { width:56px; height:56px; border-radius:8px; flex:none; background-size:cover; background-position:center; background-color:var(--player-thumb); }
   #ep-thumb.empty { background-image:linear-gradient(135deg, var(--hairline), var(--line)); }
-  .ep-text { min-width:0; }
+  .ep-text { min-width:0; flex:0 1 340px; display:flex; flex-direction:column; }
+  .ep-field { font:inherit; color:var(--text); background:transparent; border:none; border-radius:4px; padding:1px 4px; margin-left:-4px; min-width:0; }
+  .ep-field:hover { background:var(--focus-bg); }
+  .ep-field:focus { outline:none; background:var(--focus-bg); box-shadow:inset 0 0 0 2px var(--accent); }
+  .ep-field::placeholder { color:var(--muted); font-style:italic; }
   .ep-title { font-weight:600; font-size:14px; }
+  .ep-artist { font-size:13px; color:var(--text-soft); }
   .ep-note { color:var(--muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .ep-spacer { flex:1; }
   body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
+  @media (max-width:560px) { #episode { flex-wrap:wrap; } .ep-text { flex:1 1 calc(100% - 68px); } .ep-spacer { display:none; } }
   .star { color:var(--warn); font-size:13px; flex:none; }
   .meta { flex:1; min-width:0; cursor:text; }
   .artist { font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -268,14 +274,15 @@
   <section id="episode" aria-label="Podcast episode">
     <div id="ep-thumb" class="empty" title="Episode cover — drop an image here"></div>
     <div class="ep-text">
-      <div class="ep-title">Episode cover</div>
+      <input id="ep-title" class="ep-field ep-title" type="text" maxlength="200" aria-label="Episode title" placeholder="Episode title" spellcheck="false">
+      <input id="ep-artist" class="ep-field ep-artist" type="text" maxlength="200" aria-label="Episode artist" placeholder="Artist" spellcheck="false">
       <div id="ep-note" class="ep-note"></div>
     </div>
     <button id="ep-upload" class="artbtn" type="button">Upload…</button>
     <button id="ep-remove" class="artbtn" type="button" hidden>Remove</button>
     <input id="ep-file" type="file" accept="image/*" hidden>
     <div class="ep-spacer"></div>
-    <button id="embed" class="artbtn" type="button" hidden title="Write chapter markers, chapter artwork and the episode cover into the MP3 (saves first)">Embed chapters in MP3</button>
+    <button id="embed" class="artbtn" type="button" hidden title="Write the title, artist, chapter markers, chapter artwork and episode cover into the MP3 (saves first)">Embed chapters in MP3</button>
   </section>
   <main id="list"></main>
   <div id="player" class="disabled">
@@ -346,6 +353,8 @@
   const playerEl = document.getElementById("player");
   const pplayEl = document.getElementById("pplay");
   const summaryEl = document.getElementById("summary");
+  const epTitle = document.getElementById("ep-title");
+  const epArtist = document.getElementById("ep-artist");
   function autosizeSummary() { summaryEl.style.height = "auto"; summaryEl.style.height = summaryEl.scrollHeight + "px"; }
   summaryEl.addEventListener("input", () => { setDirty(true); autosizeSummary(); });
 
@@ -427,7 +436,10 @@
   // changed no track -- typing in the description, which has its own native
   // undo -- is dropped. Saving clears the history: an inserted row gets its real
   // index from the server then, and undoing past that would re-send it as new.
-  let steps = [], stepAt = 0, savedAt = 0, recordQueued = false, savedSummary = "";
+  let steps = [], stepAt = 0, savedAt = 0, recordQueued = false, savedText = "";
+  // The description and the episode title/artist are text fields with their
+  // own native undo, so they stay out of the steps and are compared instead.
+  const textState = () => JSON.stringify([summaryEl.value, epTitle.value, epArtist.value]);
 
   function snapshot() {
     return { order: tracks.slice(), fields: tracks.map(t => Object.assign({}, t)), cover: coverChoice };
@@ -441,7 +453,7 @@
   function resetHistory() {
     steps = [snapshot()];
     stepAt = savedAt = 0;
-    savedSummary = summaryEl.value;
+    savedText = textState();
     syncHistoryButtons();
   }
 
@@ -473,7 +485,7 @@
     reindexPlayingTrack();
     if (selectedTrack && !tracks.includes(selectedTrack)) selectedTrack = null;
     if (overlay.classList.contains("open")) closeArtwork();  // it may show a pick being undone
-    dirty = stepAt !== savedAt || summaryEl.value !== savedSummary;
+    dirty = stepAt !== savedAt || textState() !== savedText;
     document.getElementById("save").disabled = !dirty;
     syncHistoryButtons();
     render();
@@ -501,6 +513,8 @@
     if (was) selectedTrack = tracks.find(t => t.timestamp === was.timestamp && t.artist === was.artist) || null;
     summaryEl.value = data.summary || "";
     autosizeSummary();
+    epTitle.value = (data.episode && data.episode.title) || "";
+    epArtist.value = (data.episode && data.episode.artist) || "";
     coverVersion = data.cover === undefined ? null : data.cover;
     coverChoice = undefined;
     canEmbed = !!data.can_embed;
@@ -799,6 +813,11 @@
   let coverVersion = null;
   let coverChoice;
   let canEmbed = false;
+  // The MP3's own title (also written as its album) and artist.
+  for (const el of [epTitle, epArtist]) {
+    el.addEventListener("input", () => setDirty(true));
+    el.addEventListener("keydown", e => { if (e.key === "Enter") el.blur(); });
+  }
 
   function hasUploadedCover() {
     return typeof coverChoice === "string" || (coverChoice === undefined && coverVersion !== null);
@@ -814,8 +833,8 @@
     document.getElementById("embed").hidden = !canEmbed;
     const star = tracks.find(t => t.episode_cover && !t.rejected);
     document.getElementById("ep-note").textContent = src
-      ? (typeof coverChoice === "string" ? "Uploaded — Save to keep it" : "Uploaded")
-      : star ? "From ★ " + trackName(star) : "Automatic — the first track with artwork";
+      ? (typeof coverChoice === "string" ? "Cover uploaded — Save to keep it" : "Cover uploaded")
+      : star ? "Cover from ★ " + trackName(star) : "Cover: the first track with artwork";
   }
 
   async function uploadCover(file) {
@@ -1263,7 +1282,9 @@
     // Existing rows map back by their stable server index (NOT array position,
     // which inserted rows shift); new rows carry a timestamp and no index.
     const hasNew = tracks.some(t => t._new);
-    const payload = { summary: summaryEl.value, tracks: tracks.map(t => {
+    const payload = { summary: summaryEl.value,
+                      episode: { title: epTitle.value, artist: epArtist.value },
+                      tracks: tracks.map(t => {
       if (t._new) return { artist: t.artist, title: t.title, timestamp: t.timestamp, rejected: !!t.rejected };
       const edit = { index: t.index, artist: t.artist, title: t.title,
                      rejected: !!t.rejected, episode_cover: !!t.episode_cover };
@@ -1954,6 +1975,7 @@
     liveMode = on;
     document.body.classList.toggle("live", on);
     summaryEl.readOnly = on;
+    epTitle.readOnly = epArtist.readOnly = on;
     if (on && !livePoll) livePoll = setInterval(pollLive, 3000);
     if (!on && livePoll) { clearInterval(livePoll); livePoll = null; }
   }

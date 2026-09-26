@@ -62,6 +62,7 @@ from setlist_maker.editor import (
     parse_markdown_tracklist,
     run_editor,
 )
+from setlist_maker.episode import episode_tags
 from setlist_maker.help_format import ColorHelpParser
 from setlist_maker.identify import (
     ARTIST_SIMILARITY_THRESHOLD,
@@ -586,6 +587,9 @@ def embed_chapters_for_tracklist(
     must pass it: without it an uploaded image is simply not found, and the
     chapter gets the gradient card with nothing said.
 
+    It also supplies the episode's title and artist (``episode.py``): what the
+    editor saved for the set, else the defaults.
+
     Returns ``(chapters, chapter images, whether an episode cover was embedded)``.
     """
     # Get all non-rejected tracks (including unidentified) for chapter timing
@@ -632,9 +636,13 @@ def embed_chapters_for_tracklist(
         if episode_image is None:
             episode_image = _episode_cover_image(tracklist, chapter_tracks, uploads_dir)
 
+    tags = episode_tags(tracklist_path) if tracklist_path else {"title": "", "artist": ""}
+
     # Embed chapters into MP3
     print(f"\n{'─' * 60}")
     print("Embedding chapter markers...")
+    if tags["title"] or tags["artist"]:
+        print(f"  Episode: {' - '.join(v for v in (tags['artist'], tags['title']) if v)}")
 
     embed_chapters(
         audio_path=audio_path,
@@ -642,6 +650,8 @@ def embed_chapters_for_tracklist(
         chapter_images=chapter_images if fetch_art else None,
         # Not gated on fetch_art: --cover --no-artwork embeds just the cover
         episode_image=episode_image,
+        title=tags["title"],
+        artist=tags["artist"],
     )
 
     print(f"\n  Embedded {len(chapter_tracks)} chapter(s) into {audio_path.name}")
