@@ -12,7 +12,7 @@ ID3v2 Chapter Frame Addendum v1.0 specification.
 import struct
 from pathlib import Path
 
-from mutagen.id3 import APIC, CHAP, CTOC, TIT2, CTOCFlags, Encoding, PictureType
+from mutagen.id3 import APIC, CHAP, CTOC, TALB, TIT2, TPE1, CTOCFlags, Encoding, PictureType
 from mutagen.mp3 import MP3
 
 from setlist_maker.editor import Track
@@ -24,6 +24,8 @@ def embed_chapters(
     chapter_images: dict[int, bytes] | None = None,
     episode_image: bytes | None = None,
     audio_duration_ms: int | None = None,
+    title: str | None = None,
+    artist: str | None = None,
 ) -> Path:
     """
     Embed chapter markers and artwork into an MP3 file.
@@ -40,6 +42,9 @@ def embed_chapters(
         episode_image: Optional JPEG bytes for the episode-level cover.
         audio_duration_ms: Total audio duration in milliseconds. If not
             provided, it is read from the file.
+        title: The episode title, written as both title (TIT2) and album
+            (TALB). Blank or None leaves whatever the file already has.
+        artist: The episode artist (TPE1), likewise.
 
     Returns:
         The audio_path (for convenience).
@@ -80,6 +85,15 @@ def embed_chapters(
                 data=episode_image,
             )
         )
+
+    # Episode-level text. setall replaces only the top-level frame; a chapter's
+    # TIT2 is a sub-frame of its CHAP and is not touched. A blank value leaves
+    # the file's own tag, since the recorder may already have written one.
+    if title and title.strip():
+        audio.tags.setall("TIT2", [TIT2(encoding=Encoding.UTF8, text=[title.strip()])])
+        audio.tags.setall("TALB", [TALB(encoding=Encoding.UTF8, text=[title.strip()])])
+    if artist and artist.strip():
+        audio.tags.setall("TPE1", [TPE1(encoding=Encoding.UTF8, text=[artist.strip()])])
 
     # Build chapter element IDs
     chapter_ids = [f"chp{i:03d}" for i in range(len(tracks))]

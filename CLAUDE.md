@@ -599,10 +599,29 @@ CLI application with the following modules:
   is not choosing: the page pins the reference with an ordinary edit (undoable, saved on Save).
   `GET /api/upload/<hash>.jpg` is `immutable`; `GET /api/cover` is `no-store`. The save
   payload's `cover` key is a reference, `null` (remove) or absent (unchanged), validated before
-  anything is applied. `POST /api/chapters` runs `embed_chapters_for_tracklist` on the *saved*
+  anything is applied; so is its `episode` object (see `episode.py`). `POST /api/chapters` runs `embed_chapters_for_tracklist` on the *saved*
   tracklist (the page saves first), one at a time, never while live; the page pauses the
   `<audio>` around it and reloads it after, because mutagen rewrites the file it streams from.
   The endpoint imports `cli` lazily -- `cli` imports this module.
+
+### `setlist_maker/episode.py` - The episode's title and artist
+
+- Written by `embed_chapters(title=, artist=)` as top-level `TIT2` **and** `TALB` (title) and
+  `TPE1` (artist), via `setall`, which replaces only top-level frames -- each chapter's title is
+  a `TIT2` *sub-frame* of its `CHAP` and is untouched. A blank value writes nothing, leaving
+  whatever the recorder tagged. `test_ffprobe_reads_the_tags_and_the_chapters_in_order` guards
+  that the extra frames don't disturb `_order_chap_frames_chronologically`.
+- Stored per set in `<set>_episode.json` beside the tracklist (a sibling file, like the cover,
+  because the sidecar stays a bare list). Missing keys fall back to defaults independently; a
+  saved `""` stays blank. Defaults: the title is the set name's leading `YYYY-MM-DD` as
+  "September 23, 2026", and the artist is the last one saved from the editor, remembered as
+  `episode_artist` in `$XDG_CONFIG_HOME/setlist-maker/config.json` (else `~/.config/...`).
+  `tests/conftest.py`'s autouse `isolated_user_config` points that at a temp dir, or a test
+  that saves an episode would rewrite the user's real default.
+- `embed_chapters_for_tracklist(tracklist_path=)` reads them, so the `chapters` command and
+  the editor's Embed agree. The page gets `episode` from `/api/tracklist` and always sends it
+  back on Save; the fields are plain text inputs, like the description, so they are compared
+  for dirtiness (`textState`) rather than recorded as undo steps, and ⌘Z in them is native.
 
 ### `setlist_maker/web_timeline.js` + the editor's timeline
 
