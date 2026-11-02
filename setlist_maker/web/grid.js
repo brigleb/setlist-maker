@@ -146,6 +146,7 @@ function drawWave(c, start, span, top, height) {
 // waveform under it. Redrawn when the tracks or the theme change; the view
 // box moves on its own in paintView().
 export function paintMini() {
+  if (!TL) return;
   const c = prep(miniWave);
   if (!c) return;
   const D = setDuration();

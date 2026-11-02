@@ -91,12 +91,18 @@ export function nextTrack() {
 // so defining it after would leave a temporal-dead-zone trap for any future
 // caller that runs earlier than these listeners.
 export let seekDragging = false;
+// The scrubber's waveform strip (drawSeekWave, below); declared here for the
+// same reason.
+const seekWave = document.getElementById("seek-wave");
 
 // Reflect audio state into the bar. Called on timeupdate and after any seek.
 export function syncPlayerUI() {
   const seek = document.getElementById("seek");
   document.getElementById("ptime").textContent =
     fmt(audio.currentTime) + " / " + fmt(audio.duration);
+  // The strip keeps its height from the moment there is a waveform, so the
+  // bar does not grow when playback first starts.
+  seekWave.hidden = !S.peaks || !TL;
   const p = playingIndex();
   if (p === null) return;
   const w = windowFor(p);
@@ -111,9 +117,7 @@ export function syncPlayerUI() {
 // played part in the accent colour, and a tick at each boundary. A canvas
 // above the native range input rather than a restyled track, which would
 // lose the input's system look.
-const seekWave = document.getElementById("seek-wave");
 function drawSeekWave(w, frac) {
-  seekWave.hidden = !S.peaks || !TL;
   if (seekWave.hidden) return;
   const dpr = window.devicePixelRatio || 1;
   const cw = Math.round(seekWave.clientWidth * dpr), ch = Math.round(seekWave.clientHeight * dpr);

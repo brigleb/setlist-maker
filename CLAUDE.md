@@ -586,7 +586,8 @@ CLI application with the following modules:
   `render()` also calls `syncPlayerBar()` so the player bar's label, count and
   artwork stay correct after an edit or insert.
   Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, [ / ] nudge the selected track's start by 1s
-  (⇧ for 5s, which arrives as { / }), all suppressed while focus is in an
+  (⇧ for 5s, which arrives as { / }), Z / 0 / = / - zoom the timeline, all suppressed while
+  focus is in an
   input/textarea — except `#seek`, a range input that's deliberately exempted
   so the arrows still seek when the scrubber has focus.
 
