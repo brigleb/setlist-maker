@@ -338,9 +338,77 @@
     return out;
   }
 
+  // ---- the zoomable view (#57) ----
+  // A view is { start, span } in seconds across a pane `width` px wide. The
+  // deepest zoom is MIN_SPP seconds a pixel; the widest is the whole set.
+  const MIN_SPP = 0.05;
+  function clampView(v, duration, width) {
+    const D = Math.max(duration || 0, 1);
+    const span = Math.min(D, Math.max(MIN_SPP * Math.max(width || 1, 1), v.span || D));
+    const start = Math.min(Math.max(0, v.start || 0), D - span);
+    return { start, span };
+  }
+
+  // Zoom by `factor` (above 1 zooms out) keeping the moment under `frac` (0-1
+  // across the pane) where it is.
+  function zoomAt(v, factor, frac, duration, width) {
+    const at = v.start + frac * v.span;
+    const span = clampView({ start: 0, span: v.span * factor }, duration, width).span;
+    return clampView({ start: at - frac * span, span }, duration, width);
+  }
+
+  // Seconds between ruler ticks: the smallest round step at least `minPx` apart.
+  const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+  function tickStep(span, width, minPx) {
+    const per = span / Math.max(width, 1);
+    for (const s of STEPS) if (s / per >= (minPx || 70)) return s;
+    return STEPS[STEPS.length - 1];
+  }
+
+  // Peaks are int8 (min, max) pairs at a fixed rate. Each level halves the
+  // one before, so drawing any view reads about one pair per pixel.
+  function peakLevels(pairs) {
+    const levels = [pairs];
+    let cur = pairs;
+    while (cur.length > 4) {
+      const m = cur.length >> 1, n = (m + 1) >> 1;  // pairs here, pairs in the next level
+      const next = new Int8Array(n * 2);
+      for (let k = 0; k < n; k++) {
+        const two = 2 * k + 1 < m;  // an odd count's last pair has no partner
+        next[2 * k] = two ? Math.min(cur[4 * k], cur[4 * k + 2]) : cur[4 * k];
+        next[2 * k + 1] = two ? Math.max(cur[4 * k + 1], cur[4 * k + 3]) : cur[4 * k + 1];
+      }
+      levels.push(next);
+      cur = next;
+    }
+    return levels;
+  }
+
+  // One (min, max) per column for `cols` columns covering [start, start+span).
+  // Columns past the audio stay 0.
+  function peakColumns(levels, rate, start, span, cols) {
+    const out = new Int8Array(cols * 2);
+    const perCol = span * rate / cols;  // level-0 pairs per column
+    const k = Math.max(0, Math.min(levels.length - 1, Math.floor(Math.log2(Math.max(perCol, 1)))));
+    const lv = levels[k], r = rate / (1 << k), n = lv.length >> 1;
+    for (let c = 0; c < cols; c++) {
+      let a = Math.floor((start + c * span / cols) * r);
+      // Rounded up: a coarse bin the column only partly covers still counts.
+      let b = Math.max(a + 1, Math.ceil((start + (c + 1) * span / cols) * r));
+      a = Math.max(0, a); b = Math.min(n, b);
+      let lo = 0, hi = 0;
+      for (let j = a; j < b; j++) {
+        if (lv[2 * j] < lo) lo = lv[2 * j];
+        if (lv[2 * j + 1] > hi) hi = lv[2 * j + 1];
+      }
+      out[2 * c] = lo; out[2 * c + 1] = hi;
+    }
+    return out;
+  }
+
   return {
     BLIP_SECONDS, SHORT_SECONDS, UNHEARD_SECONDS, HOUR,
     fmt, quarters, cleanTitle, identity, hue, windows, keptWindows, owners, startIndex, joinProbes, variants, unheard, findIssues,
-    snapPoints,
+    snapPoints, MIN_SPP, clampView, zoomAt, tickStep, peakLevels, peakColumns,
   };
 });

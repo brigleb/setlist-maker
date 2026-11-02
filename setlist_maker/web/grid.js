@@ -4,7 +4,7 @@ import { GRADS, S, TL } from "./state.js";
 import { audio, el, toast } from "./dom.js";
 import { trackName } from "./util.js";
 import { clampStart, setDuration, splitWindow, trackIndexAt } from "./model.js";
-import { playAt } from "./player.js";
+import { playAt, syncPlayerUI } from "./player.js";
 import { renderList, revealSelected } from "./list.js";
 import { moveStart, previewStart, splitAt } from "./edits.js";
 import { renderInspector, sampleAt } from "./inspector.js";
@@ -29,7 +29,7 @@ export async function loadProbes() {
     S.canSample = !!data.can_sample;
     nextProbe = data.next || null;
     document.getElementById("tl-hint").textContent =
-      "click a track to inspect · drag its left edge to move its start · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard"
+      "⌘-scroll or pinch to zoom · scroll to pan · Z fits the selected track, 0 the whole set · click a track to inspect · drag its left edge to move its start · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard"
       + (S.canSample ? " · I names the track at the playhead · click the pin lane to ask Shazam about any moment" : "");
     if (wasLive && !data.live) {
       // The run finished and this server is now its editor. Everything on
@@ -51,50 +51,174 @@ export function blockHue(i) {
   return TL.hue(TL.identity(S.tracks[i].artist, S.tracks[i].title) || "?");
 }
 
-// One hour of the grid: ruler, artwork thumbs, track blocks, merge seams,
-// never-sampled stretches, the run's pins, and the playhead.
-function Hour({ h, W, kept, shown, gaps }) {
-  const a = h * TL.HOUR, b = a + TL.HOUR;
-  const at = t => ((t - a) / TL.HOUR * 100) + "%";
-  const span = d => (d / TL.HOUR * 100) + "%";
+// ---- the view (#57) ----
+// One zoomable, pannable row over the whole set. `view` is the stretch on
+// screen, { start, span } in seconds; every position on the page -- blocks,
+// pins, the playhead, the cursor, a click, a drag -- goes through xOf()/tAt()
+// against it. ⌘-scroll or a pinch zooms around the pointer, scrolling pans, Z
+// fits the selected track and 0 the whole set. The overview strip above shows
+// the whole set with the view as a box that can be dragged.
+const viewEl = document.getElementById("tl-view");
+const rulerEl = document.getElementById("tl-ruler");
+const bandEl = document.getElementById("tl-band");
+const blocksEl = document.getElementById("tl-blocks");
+const pinsEl = document.getElementById("tl-pins");
+const waveEl = document.getElementById("tl-wave");
+const miniEl = document.getElementById("tl-mini");
+const miniWave = document.getElementById("tl-mini-wave");
+const miniBox = document.getElementById("tl-mini-box");
+const headEl = viewEl.querySelector(".tl-playhead");
+
+export let view = { start: 0, span: 0 };
+let fitAll = true;  // follow the set's length (the audio's duration arrives late)
+let paneW = 1, bandH = 0;
+
+const fitView = v => TL.clampView(v, setDuration(), paneW);
+function setView(v) {
+  view = fitView(v);
+  fitAll = view.span >= setDuration() - 0.5;
+  requestPaint();
+}
+export function zoomAll() { setView({ start: 0, span: setDuration() }); }
+export function zoomBy(factor, frac = 0.5) { setView(TL.zoomAt(view, factor, frac, setDuration(), paneW)); }
+// Z: the selected track's kept window with a little either side.
+export function zoomToTrack(t) {
+  const i = S.tracks.indexOf(t);
+  if (i === -1) return false;
+  const D = setDuration();
+  const w = TL.keptWindows(S.tracks, D).find(x => x.index === i) || TL.windows(S.tracks, D)[i];
+  const pad = Math.max(5, (w.end - w.start) * 0.08);
+  setView({ start: w.start - pad, span: w.end - w.start + 2 * pad });
+  return true;
+}
+// Bring a track into view if none of it is showing, keeping the zoom.
+function revealInView(t) {
+  const i = S.tracks.indexOf(t);
+  if (i === -1) return;
+  const D = setDuration();
+  const w = TL.keptWindows(S.tracks, D).find(x => x.index === i) || TL.windows(S.tracks, D)[i];
+  if (w.end > view.start && w.start < view.start + view.span) return;
+  setView({ start: w.start - view.span * 0.1, span: view.span });
+}
+
+const xPct = t => ((t - view.start) / view.span * 100) + "%";
+const wPct = d => (d / view.span * 100) + "%";
+// Seconds at a client x, from the view pane.
+function tAtX(clientX) {
+  const r = viewEl.getBoundingClientRect();
+  const f = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+  return Math.min(setDuration(), view.start + f * view.span);
+}
+
+// Colours come from the theme's tokens, so the canvases follow dark mode.
+let palette = null;
+const colours = () => palette || (palette = (() => {
+  const cs = getComputedStyle(document.documentElement);
+  return { wave: cs.getPropertyValue("--wave").trim() || "#888", blockL: cs.getPropertyValue("--block-l").trim() || "60%" };
+})());
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { palette = null; paintMini(); requestPaint(); });
+
+// A canvas sized to its box in device pixels, cleared; null while hidden.
+function prep(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (!w || !h) return null;
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+  const g = canvas.getContext("2d");
+  g.clearRect(0, 0, w, h);
+  return { g, w, h };
+}
+
+function drawWave(c, start, span, top, height) {
+  if (!S.peaks || !c) return;
+  const cols = TL.peakColumns(S.peaks.levels, S.peaks.rate, start, span, c.w);
+  const mid = top + height / 2, k = height / 2 / 128;
+  c.g.fillStyle = colours().wave;
+  for (let x = 0; x < c.w; x++) {
+    const lo = cols[2 * x], hi = cols[2 * x + 1];
+    if (hi === 0 && lo === 0) continue;
+    c.g.fillRect(x, mid - hi * k, 1, Math.max(1, (hi - lo) * k));
+  }
+}
+
+// The overview: every kept track's colour along the top, the whole set's
+// waveform under it. Redrawn when the tracks or the theme change; the view
+// box moves on its own in paintView().
+export function paintMini() {
+  const c = prep(miniWave);
+  if (!c) return;
+  const D = setDuration();
+  const stripe = Math.round(5 * (window.devicePixelRatio || 1));
+  for (const w of TL.keptWindows(S.tracks, D)) {
+    const t = S.tracks[w.index];
+    c.g.fillStyle = !t.artist && !t.title ? colours().wave : "hsl(" + blockHue(w.index) + " 45% " + colours().blockL + ")";
+    c.g.fillRect(Math.floor(w.start / D * c.w), 0, Math.max(1, Math.ceil((w.end - w.start) / D * c.w)), stripe);
+  }
+  drawWave(c, 0, D, stripe + 1, c.h - stripe - 1);
+}
+
+let paintQueued = 0;
+export function requestPaint() {
+  if (paintQueued) return;
+  paintQueued = requestAnimationFrame(() => { paintQueued = 0; paintView(); });
+}
+
+// Everything that moves with the view: blocks, pins, ruler, waveform, the
+// overview box, the playhead. Cheap enough for every frame of a pan; the
+// inspector and the queue are left to renderTimeline(), which a model change
+// calls.
+export function paintView() {
+  if (!TL) return;
+  if (paintQueued) { cancelAnimationFrame(paintQueued); paintQueued = 0; }
+  const D = setDuration();
+  if (fitAll || !view.span) view = fitView({ start: 0, span: D }); else view = fitView(view);
+  const a = view.start, b = a + view.span;
+  const px = d => d / view.span * paneW;
+  const W = TL.windows(S.tracks, D);
+  const kept = TL.keptWindows(S.tracks, D);
+  const shown = replayShown === null ? S.probes : S.probes.slice(0, replayShown);
+  const gaps = TL.unheard(S.probes, S.probeDuration || 0);
   const sel = t => (t === S.selectedTrack ? " sel" : "");
 
   // One block per track that will be written, spanning its kept window: a
   // merge reads as one block because it is one track. Each merged row stays
   // only as a seam. Seams are not click targets -- merged blips sit seconds
-  // apart, a pixel or two at this scale -- so a click lands on the kept block,
-  // whose inspector lists what was merged into it, each with an Unmerge.
-  const segs = [], thumbs = [], edges = [];
+  // apart -- so a click lands on the kept block, whose inspector lists what
+  // was merged into it, each with an Unmerge. A block wide enough carries its
+  // name, and wider still its artwork.
+  const segs = [], edges = [];
+  const thumbSide = Math.min(bandH - 6, 56);
   for (const w of kept) {
     if (w.end <= a || w.start >= b) continue;
     const i = w.index, t = S.tracks[i];
     const x = Math.max(w.start, a), y = Math.min(w.end, b);
+    const wide = px(y - x);
+    const named = !!(t.artist || t.title);
+    const art = named && thumbSide >= 24 && wide >= thumbSide + 40 && w.start >= a;
+    const bg = !art ? null : t.coverart_url
+      ? "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
     segs.push(html`
-      <div key=${keyOf(t)} class=${"tl-seg" + (!t.artist && !t.title ? " none" : "") + sel(t)} data-i=${i}
-        style=${{ "--h": blockHue(i), left: at(x), width: span(y - x) }}
+      <div key=${keyOf(t)} class=${"tl-seg" + (named ? "" : " none") + sel(t)} data-i=${i}
+        style=${{ "--h": blockHue(i), left: xPct(x), width: wPct(y - x) }}
         title=${trackName(t) + " · " + TL.fmt(w.start) + "–" + TL.fmt(w.end)}>
-        ${y - x > 240 && html`<span>${TL.cleanTitle(t.title) || t.artist || "Unidentified"}</span>`}
+        ${art && html`<i class="tl-sthumb" style=${{ backgroundImage: bg, width: thumbSide + "px", height: thumbSide + "px" }} />`}
+        ${wide > 36 && html`<span style=${art ? { left: (thumbSide + 9) + "px" } : null}>${TL.cleanTitle(t.title) || t.artist || "Unidentified"}</span>`}
       </div>`);
     // The drag handle on the block's left edge moves this track's start (#55).
     if (!S.liveMode && w.start >= a && w.start < b) {
       edges.push(html`<div key=${"edge" + keyOf(t)} class=${"tl-edge" + sel(t)} data-i=${i}
-        style=${{ left: at(w.start) }} title=${"Drag to move the start of " + trackName(t) + " · ⌥ for no snapping"} />`);
-    }
-    if ((t.artist || t.title) && w.start >= a && w.start < b) {
-      const bg = t.coverart_url
-        ? "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
-      thumbs.push(html`<div key=${keyOf(t)} class=${"tl-thumb" + sel(t)} data-i=${i}
-        style=${{ left: at(w.start), backgroundImage: bg }} title=${trackName(t) + " · " + TL.fmt(w.start)} />`);
+        style=${{ left: xPct(w.start) }} title=${"Drag to move the start of " + trackName(t) + " · ⌥ for no snapping"} />`);
     }
   }
   // A row merged into the next track starts that track's block (#56): its
   // seam would sit on the block's own edge, so it has none.
   const starts = new Set(kept.map(w => w.start));
   const seams = S.tracks.map((t, i) => (!t.rejected || starts.has(W[i].start) || W[i].start < a || W[i].start >= b) ? null
-    : html`<div key=${"seam" + keyOf(t)} class=${"tl-seam" + sel(t)} data-i=${i} style=${{ left: at(W[i].start) }} />`);
+    : html`<div key=${"seam" + keyOf(t)} class=${"tl-seam" + sel(t)} data-i=${i} style=${{ left: xPct(W[i].start) }} />`);
   const unheard = gaps.map(([x0, y0], n) => (y0 <= a || x0 >= b) ? null
     : html`<div key=${"gap" + n} class="tl-unheard" title=${"Never sampled: " + TL.fmt(x0) + "–" + TL.fmt(y0)}
-        style=${{ left: at(Math.max(x0, a)), width: span(Math.min(y0, b) - Math.max(x0, a)) }} />`);
+        style=${{ left: xPct(Math.max(x0, a)), width: wPct(Math.min(y0, b) - Math.max(x0, a)) }} />`);
 
   const pins = shown.map((p, n) => {
     const mid = p.t + p.window / 2;
@@ -106,38 +230,82 @@ function Hour({ h, W, kept, shown, gaps }) {
       || (S.liveMode && replayShown === null && n >= seenProbes && seenProbes);
     const cls = "tl-pin" + (p.purpose === "refine" ? " refine" : "") + (p.purpose === "manual" ? " manual" : "")
       + (hit ? "" : " miss") + (drop ? " drop" : "");
-    return html`<div key=${n} class=${cls} data-t=${p.t} style=${{ left: at(mid) }}
+    return html`<div key=${n} class=${cls} data-t=${p.t} style=${{ left: xPct(mid) }}
       title=${TL.fmt(p.t) + " · " + p.window + "s " + p.purpose + " · "
         + (hit ? (p.artist || "?") + " — " + (p.title || "?") + (p.confidence ? " (" + p.confidence + ")" : "") : "no match")} />`;
   });
   if (S.liveMode && nextProbe && replayShown === null) {
     const mid = nextProbe.t + nextProbe.window / 2;
     if (mid >= a && mid < b) {
-      pins.push(html`<div key="next" class="tl-pin next" style=${{ left: at(mid) }}
+      pins.push(html`<div key="next" class="tl-pin next" style=${{ left: xPct(mid) }}
         title=${"Listening here next (" + nextProbe.purpose + ")"} />`);
     }
   }
   for (const t of pendingSamples) {
     if (t < a || t >= b) continue;
-    pins.push(html`<div key=${"ask" + t} class="tl-pin pending" style=${{ left: at(t) }}
+    pins.push(html`<div key=${"ask" + t} class="tl-pin pending" style=${{ left: xPct(t) }}
       title=${"Asking Shazam about " + TL.fmt(t) + "…"} />`);
   }
 
-  // The playhead carries no `hidden` or `style` here on purpose: updatePlayhead()
-  // moves it on every timeupdate, and a prop Preact owned would be put back.
-  return html`
-    <div class="tl-hour">
-      <div class="tl-hl">${h + "h"}</div>
-      <div class="tl-lanes" data-hour=${h}>
-        <div class="tl-ruler">
-          ${[10, 20, 30, 40, 50].map(m => html`<span key=${m} style=${{ left: (m / 60 * 100) + "%" }}>${":" + m}</span>`)}
-        </div>
-        <div class="tl-art">${thumbs}</div>
-        <div class="tl-blocks">${segs}${seams}${unheard}${edges}</div>
-        <div class=${"tl-pins" + (S.canSample ? " can-sample" : "")}>${pins}</div>
-        <div class="tl-playhead"></div>
-      </div>
-    </div>`;
+  const step = TL.tickStep(view.span, paneW, 70);
+  const ticks = [];
+  for (let t = Math.ceil(a / step) * step; t < b; t += step) {
+    ticks.push(html`<span key=${t} style=${{ left: xPct(t) }}>${TL.fmt(t)}</span>`);
+  }
+
+  paint(ticks, rulerEl);
+  paint([...segs, ...seams, ...unheard, ...edges], blocksEl);
+  paint(pins, pinsEl);
+  pinsEl.classList.toggle("can-sample", !!S.canSample);
+  const c = prep(waveEl);
+  if (c) drawWave(c, a, view.span, 2, c.h - 4);
+  miniBox.style.left = (a / D * 100) + "%";
+  miniBox.style.width = (view.span / D * 100) + "%";
+  miniBox.hidden = fitAll;
+  updatePlayhead();
+}
+
+new ResizeObserver(() => {
+  paneW = viewEl.clientWidth || 1;
+  bandH = bandEl.clientHeight;
+  paintMini();
+  paintView();
+}).observe(viewEl);
+
+// The waveform, fetched once a page (peaks.py). The page draws without it
+// meanwhile, and a set with no audio simply has none.
+let peaksAsked = false;
+export async function loadPeaks() {
+  if (peaksAsked) return;
+  peaksAsked = true;
+  S.peaksPending = true;
+  renderStats();
+  try {
+    const r = await fetch("/api/peaks");
+    if (!r.ok) throw new Error(r.status);
+    const buf = await r.arrayBuffer();
+    const head = new DataView(buf, 0, 24);
+    const magic = String.fromCharCode(...new Uint8Array(buf, 0, 4));
+    if (magic !== "SMPK") throw new Error("not peaks");
+    const rate = head.getUint32(8, true), count = head.getUint32(12, true);
+    S.peaks = { rate, levels: TL.peakLevels(new Int8Array(buf, 24, Math.min(count * 2, buf.byteLength - 24))) };
+  } catch (e) {
+    S.peaks = null;
+  }
+  S.peaksPending = false;
+  renderStats();
+  paintMini();
+  requestPaint();
+  syncPlayerUI();
+}
+
+function renderStats() {
+  const D = setDuration();
+  const identified = S.tracks.filter(t => !t.rejected && (t.artist || t.title)).length;
+  document.getElementById("tl-stats").textContent =
+    TL.fmt(D) + " · " + S.tracks.filter(t => !t.rejected).length + " tracks (" + identified + " identified)"
+    + (S.probes.length ? " · " + S.probes.length + " samples" : " · no samples saved for this set")
+    + (S.peaksPending ? " · reading the waveform…" : "");
 }
 
 // The tracklist is the truth about which tracks exist; the run's probes are
@@ -146,20 +314,10 @@ function Hour({ h, W, kept, shown, gaps }) {
 // reject, insert, save, reload -- keeps the grid current with no second path.
 export function renderTimeline() {
   if (!TL) return;
-  const D = setDuration();
-  const W = TL.windows(S.tracks, D);
-  const kept = TL.keptWindows(S.tracks, D);
-  const shown = replayShown === null ? S.probes : S.probes.slice(0, replayShown);
-  const gaps = TL.unheard(S.probes, S.probeDuration || 0);
-  const hours = Math.max(1, Math.ceil(D / TL.HOUR));
-  paint(Array.from({ length: hours }, (_, h) =>
-    html`<${Hour} key=${h} h=${h} W=${W} kept=${kept} shown=${shown} gaps=${gaps} />`), tlRows);
-  const identified = S.tracks.filter(t => !t.rejected && (t.artist || t.title)).length;
-  document.getElementById("tl-stats").textContent =
-    TL.fmt(D) + " · " + S.tracks.filter(t => !t.rejected).length + " tracks (" + identified + " identified)"
-    + (S.probes.length ? " · " + S.probes.length + " samples" : " · no samples saved for this set");
+  paintView();
+  paintMini();
+  renderStats();
   document.getElementById("tl-replay").hidden = !S.probes.length;
-  updatePlayhead();
   // A replay redraws every few dozen milliseconds; the inspector and the queue
   // describe all the samples, not the replay's subset, so they sit it out.
   if (replayShown === null) {
@@ -168,16 +326,22 @@ export function renderTimeline() {
   }
 }
 
+// The playhead, and the view following it: when playback runs off the right
+// edge of a view it was inside, the view pages on. A view somewhere else is
+// left alone, so looking at one part of the set while another plays is fine.
+let headWasIn = false;
 export function updatePlayhead() {
   const t = audio.currentTime || 0;
   const show = !audio.paused || t > 0;
-  document.querySelectorAll("#tl-rows .tl-lanes").forEach(lanes => {
-    const a = +lanes.dataset.hour * TL.HOUR;
-    const head = lanes.querySelector(".tl-playhead");
-    const inside = show && t >= a && t < a + TL.HOUR;
-    head.hidden = !inside;
-    if (inside) head.style.left = ((t - a) / TL.HOUR * 100) + "%";
-  });
+  let inside = show && t >= view.start && t < view.start + view.span;
+  if (show && !inside && headWasIn && !audio.paused && !drag && t >= view.start + view.span && !fitAll) {
+    view = fitView({ start: t - view.span * 0.05, span: view.span });
+    requestPaint();
+    inside = true;
+  }
+  headWasIn = inside;
+  headEl.hidden = !inside;
+  if (inside) headEl.style.left = xPct(t);
   // "Split at playhead" is only meaningful while the playhead is inside the
   // selected track, which changes as it plays.
   const split = document.querySelector("#insp .in-split");
@@ -189,14 +353,55 @@ export function updatePlayhead() {
   }
 }
 
-// Seconds under the pointer, from an event inside one hour's lanes.
+// Seconds under the pointer, from an event inside the view.
 export function timeAt(e) {
-  const lanes = e.target.closest(".tl-lanes");
-  if (!lanes) return null;
-  const r = lanes.getBoundingClientRect();
-  const f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-  return Math.min(setDuration(), +lanes.dataset.hour * TL.HOUR + f * TL.HOUR);
+  if (!e.target.closest("#tl-view")) return null;
+  return tAtX(e.clientX);
 }
+
+// ---- wheel: ⌘-scroll or pinch zooms around the pointer, scrolling pans ----
+document.getElementById("tl-rows").addEventListener("wheel", e => {
+  e.preventDefault();
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? paneW : 1;
+  const dx = e.deltaX * unit, dy = e.deltaY * unit;
+  const r = viewEl.getBoundingClientRect();
+  if (e.ctrlKey || e.metaKey) {
+    // A pinch arrives as ctrl+wheel in small steps; a mouse wheel's notch is
+    // ~100, capped so one notch is about 1.6x.
+    const d = Math.max(-50, Math.min(50, dy));
+    zoomBy(Math.exp(d * 0.01), Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
+  } else {
+    const d = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+    if (d) setView({ start: view.start + d * view.span / paneW, span: view.span });
+  }
+}, { passive: false });
+
+// ---- the overview strip: drag the box, or press anywhere to jump there ----
+miniEl.addEventListener("pointerdown", e => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const D = setDuration();
+  const r = miniEl.getBoundingClientRect();
+  const at = ev => Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * D;
+  const t0 = at(e);
+  const inBox = !fitAll && t0 >= view.start && t0 <= view.start + view.span;
+  // Grabbed where it was pressed inside the box; anywhere else centres it.
+  const grab = inBox ? t0 - view.start : view.span / 2;
+  if (!inBox) setView({ start: t0 - grab, span: view.span });
+  miniEl.setPointerCapture(e.pointerId);
+  miniEl.classList.add("dragging");
+  const move = ev => setView({ start: at(ev) - grab, span: view.span });
+  const up = () => {
+    miniEl.classList.remove("dragging");
+    miniEl.removeEventListener("pointermove", move);
+    miniEl.removeEventListener("pointerup", up);
+    miniEl.removeEventListener("pointercancel", up);
+  };
+  miniEl.addEventListener("pointermove", move);
+  miniEl.addEventListener("pointerup", up);
+  miniEl.addEventListener("pointercancel", up);
+});
+miniEl.addEventListener("dblclick", zoomAll);
 
 // Choosing a track shows it in the inspector's Track tab -- except from the
 // "Needs a look" tab (`keepTab`), where the list and the timeline already
@@ -212,11 +417,8 @@ export function selectTrack(t, opts) {
   // ("nearest": a row already in view stays put, so a click in the list
   // doesn't jump it).
   revealSelected();
-  if (opts && opts.reveal) {
-    const i = S.tracks.indexOf(t);
-    const block = tlRows.querySelector('.tl-blocks [data-i="' + i + '"]');
-    if (block) block.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }
+  // The timeline pans to it when none of it is in view, at the same zoom.
+  revealInView(t);
 }
 
 export const tlRows = document.getElementById("tl-rows");
@@ -251,8 +453,8 @@ tlRows.addEventListener("dblclick", e => {
 });
 tlRows.addEventListener("mousemove", e => {
   if (drag) return;  // the drag draws its own readout
-  const lanes = e.target.closest(".tl-lanes");
-  let cur = tlRows.querySelector(".tl-cursor");
+  const lanes = e.target.closest("#tl-view");
+  let cur = viewEl.querySelector(".tl-cursor");
   if (e.target.closest(".tl-edge")) { if (cur) cur.remove(); return; }
   const onPins = S.canSample && e.target.closest(".tl-pins") && !e.target.closest(".tl-pin");
   if (!lanes || !(e.target.closest(".tl-blocks") || onPins)) { if (cur) cur.remove(); return; }
@@ -260,7 +462,7 @@ tlRows.addEventListener("mousemove", e => {
   const t = timeAt(e);
   const r = lanes.getBoundingClientRect();
   cur.style.left = (e.clientX - r.left) + "px";
-  cur.style.top = onPins ? "58px" : "28px";
+  cur.style.top = ((onPins ? pinsEl : bandEl).offsetTop - 18) + "px";
   const splitting = e.altKey && !onPins && !S.liveMode;
   cur.textContent = (onPins ? "Ask Shazam about " : splitting ? "Split here at " : "") + TL.fmt(t);
   cur.classList.toggle("split", splitting);
@@ -280,13 +482,10 @@ const SNAP_PX = 6;
 const AUDITION_LEAD = 5;
 export let drag = null;
 
-// The time under the pointer: whichever hour's lanes it is over (a drag may
-// cross hours), else extrapolated from the hour it started in.
-function timeAtPoint(x, y, home) {
-  const hit = document.elementFromPoint(x, y);
-  const lanes = (hit && hit.closest(".tl-lanes")) || home;
-  const r = lanes.getBoundingClientRect();
-  return { t: +lanes.dataset.hour * TL.HOUR + (x - r.left) / r.width * TL.HOUR, pxPerSec: r.width / TL.HOUR, lanes };
+// The time under the pointer, from the one view. A start beyond the view is
+// reached by zooming out first.
+function timeAtPoint(x) {
+  return { t: tAtX(x), pxPerSec: paneW / view.span, lanes: viewEl };
 }
 
 function dragReadout(t, x, lanes) {
@@ -331,12 +530,12 @@ tlRows.addEventListener("pointerdown", e => {
   // The row whose timestamp is the block's start: the track's own, or the
   // first row merged into it from before (#56).
   const t = S.tracks[TL.startIndex(S.tracks, +edge.dataset.i)];
-  // Captured on the container, not the handle: Preact replaces the handle
-  // when the boundary crosses into another hour, and capture would go with it.
+  // Captured on the container, not the handle: Preact drops the handle when
+  // the boundary leaves the view, and capture would go with it.
   tlRows.setPointerCapture(e.pointerId);
   const tip = el("div", "tl-cursor tl-dragtip");
   document.body.appendChild(tip);
-  drag = { t, owner, from: t.timestamp, home: edge.closest(".tl-lanes"), snaps: TL.snapPoints(S.probes),
+  drag = { t, owner, from: t.timestamp, home: viewEl, snaps: TL.snapPoints(S.probes),
            tip, pointerId: e.pointerId, snapped: false, frame: 0 };
   document.body.classList.add("tl-dragging");
   document.addEventListener("keydown", onDragKey, true);
@@ -346,12 +545,12 @@ tlRows.addEventListener("pointerdown", e => {
 
 tlRows.addEventListener("pointermove", e => {
   if (!drag || e.pointerId !== drag.pointerId) return;
-  const { x, y, alt } = { x: e.clientX, y: e.clientY, alt: e.altKey };
+  const { x, alt } = { x: e.clientX, alt: e.altKey };
   if (drag.frame) return;  // one preview per frame, however fast the pointer
   drag.frame = requestAnimationFrame(() => {
     if (!drag) return;
     drag.frame = 0;
-    const { t: raw, pxPerSec, lanes } = timeAtPoint(x, y, drag.home);
+    const { t: raw, pxPerSec, lanes } = timeAtPoint(x);
     let at = raw;
     drag.snapped = false;
     if (!alt) {

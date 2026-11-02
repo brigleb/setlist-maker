@@ -331,3 +331,51 @@ def test_a_short_track_leaning_on_the_previous_one_keeps_merge_up_first():
     probes = [probe(195, "A", "a", window=12), probe(100, "X", "x"), probe(300, "X", "x")]
     [short] = short_fix(tracks, probes)
     assert short["fix"]["label"] == "Merge up"
+
+
+# ---- the zoomable view (#57) ----
+
+
+def test_a_view_is_kept_inside_the_set_and_the_zoom_limits():
+    # 0.05 s/px is the deepest zoom: 1000px can show no less than 50s.
+    assert js("T.clampView({start: -5, span: 10}, 100, 1000)") == {"start": 0, "span": 50}
+    assert js("T.clampView({start: 90, span: 500}, 100, 1000)") == {"start": 0, "span": 100}
+    assert js("T.clampView({start: 3000, span: 600}, 3600, 1000)") == {"start": 3000, "span": 600}
+    assert js("T.clampView({start: 3500, span: 600}, 3600, 1000)") == {"start": 3000, "span": 600}
+
+
+def test_zooming_keeps_the_moment_under_the_pointer_in_place():
+    v = js("T.zoomAt({start: 1000, span: 400}, 0.5, 0.25, 3600, 1000)")
+    assert v == {"start": 1050, "span": 200}  # 1100s stays a quarter of the way across
+    # Zooming out past the whole set fits it.
+    assert js("T.zoomAt({start: 1000, span: 400}, 100, 0.5, 3600, 1000)") == {
+        "start": 0,
+        "span": 3600,
+    }
+
+
+def test_ruler_ticks_are_round_steps_at_least_70px_apart():
+    assert js("T.tickStep(14430, 1400, 70)") == 900  # a 4-hour set: every 15 minutes
+    assert js("T.tickStep(70, 1400, 70)") == 5  # the deepest zoom
+    assert js("T.tickStep(600, 1400, 70)") == 30
+
+
+def test_peak_levels_halve_and_columns_take_the_extremes():
+    pairs = [-1, 1, -2, 2, -3, 3, -4, 4, -5, 5]
+    levels = js("T.peakLevels(new Int8Array(p)).map(l => Array.from(l))", p=pairs)
+    assert levels == [pairs, [-2, 2, -4, 4, -5, 5], [-4, 4, -5, 5]]
+    # One column per pair, then all five in one column.
+    expr = "Array.from(T.peakColumns(T.peakLevels(new Int8Array(p)), 1, 0, 5, c))"
+    assert js(expr, p=pairs, c=5) == pairs
+    assert js(expr, p=pairs, c=1) == [-5, 5]
+    # Columns past the end of the audio stay silent.
+    assert js("Array.from(T.peakColumns(T.peakLevels(new Int8Array(p)), 1, 3, 4, 4))", p=pairs) == [
+        -4,
+        4,
+        -5,
+        5,
+        0,
+        0,
+        0,
+        0,
+    ]

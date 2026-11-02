@@ -24,6 +24,9 @@ export const S = {
   probes: [],
   probeDuration: null,
   canSample: false,  // the server has the audio and a sampler
+  // The waveform (#57): { rate, levels } from /api/peaks, null until it arrives.
+  peaks: null,
+  peaksPending: false,
   liveMode: false,   // `identify --watch` and the run has not finished
   livePoll: null,
   artVersion: 0,  // bumped on save so re-requested thumbs bypass the decoded-image cache

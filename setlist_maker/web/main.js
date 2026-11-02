@@ -6,7 +6,7 @@ import { playingIndex, setDuration, trackIndexAt, windowFor } from "./model.js";
 import { resetHistory, setDirty } from "./history.js";
 import { renderList } from "./list.js";
 import { syncPlayerBar } from "./player.js";
-import { loadProbes, renderTimeline } from "./grid.js";
+import { loadPeaks, loadProbes, renderTimeline } from "./grid.js";
 import { closeArtwork, overlay, renderCover } from "./artwork.js";
 import "./util.js";
 import "./edits.js";
@@ -42,6 +42,7 @@ export async function load() {
   resetHistory();
   render();
   loadProbes();
+  loadPeaks();  // once a page; slow the first time a set is opened (peaks.py)
 }
 
 export function updateCounts() {

@@ -9,6 +9,7 @@ small JSON + audio API bound to loopback (``127.0.0.1``).
 import json
 import math
 import re
+import subprocess
 import threading
 import time
 import webbrowser
@@ -34,6 +35,7 @@ from setlist_maker.editor import (
     save_tracklist,
 )
 from setlist_maker.episode import episode_tags, save_episode_tags
+from setlist_maker.peaks import peaks_for
 from setlist_maker.sampler import SampleRequests, SampleRequestsClosed, ShazamSampler
 from setlist_maker.uploads import (
     MAX_UPLOAD_BYTES,
@@ -558,6 +560,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_probes()
         elif path == "/api/audio":
             self._send_audio()
+        elif path == "/api/peaks":
+            self._send_peaks()
         elif path == "/api/artwork":
             self._send_artwork()
         elif path == "/api/artwork/options":
@@ -942,6 +946,24 @@ class _Handler(BaseHTTPRequestHandler):
         finally:
             _EMBED_LOCK.release()
         self._send_json({"ok": True, "chapters": chapters, "images": images, "cover": cover})
+
+    def _send_peaks(self) -> None:
+        """The waveform (#57): int8 min/max pairs, computed once per file (peaks.py)."""
+        audio_path = self._ctx.audio_path
+        if audio_path is None or not audio_path.exists():
+            self.send_error(HTTPStatus.NOT_FOUND, "audio not found")
+            return
+        try:
+            body = peaks_for(audio_path, probe_duration_seconds(audio_path))
+        except (OSError, subprocess.CalledProcessError):
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "could not read the audio")
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_audio(self) -> None:
         audio_path = self._ctx.audio_path
