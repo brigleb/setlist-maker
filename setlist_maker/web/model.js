@@ -28,9 +28,10 @@ export function windowFor(i) {
 // leaving that row impossible to select at all.
 export function trackIndexAt(seconds) {
   if (!S.tracks.length) return null;
-  if (S.playingIndex !== null && S.tracks[S.playingIndex]) {
-    const w = windowFor(S.playingIndex);
-    if (seconds >= w.start && seconds < w.end) return S.playingIndex;
+  const p = playingIndex();
+  if (p !== null) {
+    const w = windowFor(p);
+    if (seconds >= w.start && seconds < w.end) return p;
   }
   for (let i = S.tracks.length - 1; i >= 0; i--) {
     if (seconds >= S.tracks[i].timestamp) return i;
@@ -45,17 +46,12 @@ export function fmtWindowTimes(i, seconds) {
   return { into: fmt(into) + " in", left: fmt(w.length - into) + " left" };
 }
 
-// Re-derive playingIndex from playingTrack after a mutation that can move
-// array positions (splice, sort). Called at those two mutation sites, not
-// generally -- reload via load() replaces every track object wholesale, and
-// deliberately leaves playingIndex as a bare number: the reload preserves
-// ordering, so the number is still correct, and the next setPlayingIndex()
-// call (from render()) re-resolves playingTrack against the fresh objects.
-export function reindexPlayingTrack() {
-  if (!S.playingTrack) return;
-  const idx = S.tracks.indexOf(S.playingTrack);
-  S.playingIndex = idx === -1 ? null : idx;
-  if (idx === -1) S.playingTrack = null;
+// The playing track's position, or null. Derived from the object reference
+// every time, so a splice or a re-sort can never leave it pointing at another
+// track. A track that is no longer in the list (undone, reloaded) plays nothing.
+export function playingIndex() {
+  const i = S.playingTrack ? S.tracks.indexOf(S.playingTrack) : -1;
+  return i === -1 ? null : i;
 }
 
 export function setDuration() {

@@ -2,12 +2,12 @@
 
 import { S, TL } from "./state.js";
 import { audio, autosizeSummary, epArtist, epTitle, summaryEl, toast } from "./dom.js";
-import { setDuration, trackIndexAt, windowFor } from "./model.js";
+import { playingIndex, setDuration, trackIndexAt, windowFor } from "./model.js";
 import { resetHistory, setDirty } from "./history.js";
-import { rowEl } from "./list.js";
-import { setPlayingIndex } from "./player.js";
+import { renderList } from "./list.js";
+import { syncPlayerBar } from "./player.js";
 import { loadProbes, renderTimeline } from "./grid.js";
-import { artObserver, closeArtwork, overlay, renderCover } from "./artwork.js";
+import { closeArtwork, overlay, renderCover } from "./artwork.js";
 import "./util.js";
 import "./edits.js";
 import "./inspector.js";
@@ -21,8 +21,12 @@ export async function load() {
   // A reload replaces every track object, so the selection is carried over
   // by what it pointed at rather than by reference.
   const was = S.selectedTrack;
+  // ...and the player by position: a reload keeps the order.
+  const playing = playingIndex();
   setLive(!!data.live);
   S.tracks = data.tracks;
+  S.playingTrack = playing === null ? null : S.tracks[playing] || null;
+  S.editing = null;
   // Sent back with every save: the server refuses one made against an older
   // revision, whose indices would land on other tracks.
   revision = data.revision === undefined ? null : data.revision;
@@ -48,20 +52,12 @@ export function updateCounts() {
   document.getElementById("counts").textContent = parts.join(" · ");
 }
 
+// Every edit ends here. Each pane is a Preact render, so this updates the
+// rows, blocks and fields that changed rather than rebuilding the page.
 export function render() {
-  // Drop the previous generation's registrations first. A thumb that never
-  // scrolled into view is never unobserved by the callback, so without this
-  // every edit/reject/add leaks one stale registration per off-screen row.
-  artObserver.disconnect();
-  const list = document.getElementById("list");
-  list.innerHTML = "";
-  S.tracks.forEach((t, i) => list.appendChild(rowEl(t, i)));
+  renderList();
   updateCounts();
-  // Not just the highlight: an edit to the playing track's artist/title, or
-  // an insert that shifts its position, must also refresh the player bar's
-  // label/count/artwork. setPlayingIndex() no-ops safely when playingIndex
-  // is null and cannot recurse back into render().
-  setPlayingIndex(S.playingIndex, { scroll: false });
+  syncPlayerBar();
   renderTimeline();
   renderCover();
 }
@@ -166,11 +162,10 @@ export async function refreshLiveTracks() {
     const k = W.findIndex(w => focus >= w.start && focus < w.end);
     S.selectedTrack = k === -1 ? null : S.tracks[k];
   }
-  if (S.playingIndex !== null) {
-    S.playingIndex = null;
+  if (S.playingTrack) {
     S.playingTrack = null;
     const k = trackIndexAt(audio.currentTime);
-    if (k !== null && !audio.paused) S.playingIndex = k;
+    if (k !== null && !audio.paused) S.playingTrack = S.tracks[k];
   }
   render();
 }

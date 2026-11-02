@@ -5,18 +5,14 @@ import { audio, el, toast } from "./dom.js";
 import { trackName } from "./util.js";
 import { setDuration, splitWindow, trackIndexAt } from "./model.js";
 import { playAt } from "./player.js";
+import { renderList } from "./list.js";
 import { splitAt } from "./edits.js";
 import { renderInspector, sampleAt } from "./inspector.js";
 import { renderIssues } from "./issues.js";
 import { artSrc } from "./artwork.js";
+import { html, keyOf, render as paint } from "./ui.js";
 import { load, refreshLiveTracks, setLive } from "./main.js";
 
-// ---- timeline -------------------------------------------------------------
-// The tracklist is the truth about which tracks exist; the run's probes are
-// evidence drawn over it (see web_timeline.js). Everything here is redrawn
-// from `tracks` by renderTimeline(), which render() calls, so every existing
-// mutation -- edit, reject, insert, save, reload -- keeps the grid current
-// without a second update path.
 export let replayShown = null;  // during a replay, how many probes are visible
 export let nextProbe = null;    // where the live run will listen next
 export let seenProbes = 0;      // pins already drawn, so only new ones drop in
@@ -53,132 +49,111 @@ export function blockHue(i) {
   return TL.hue(TL.identity(S.tracks[i].artist, S.tracks[i].title) || "?");
 }
 
+// One hour of the grid: ruler, artwork thumbs, track blocks, merge seams,
+// never-sampled stretches, the run's pins, and the playhead.
+function Hour({ h, W, kept, shown, gaps }) {
+  const a = h * TL.HOUR, b = a + TL.HOUR;
+  const at = t => ((t - a) / TL.HOUR * 100) + "%";
+  const span = d => (d / TL.HOUR * 100) + "%";
+  const sel = t => (t === S.selectedTrack ? " sel" : "");
+
+  // One block per track that will be written, spanning its kept window: a
+  // merge reads as one block because it is one track. Each merged row stays
+  // only as a seam. Seams are not click targets -- merged blips sit seconds
+  // apart, a pixel or two at this scale -- so a click lands on the kept block,
+  // whose inspector lists what was merged into it, each with an Unmerge.
+  const segs = [], thumbs = [];
+  for (const w of kept) {
+    if (w.end <= a || w.start >= b) continue;
+    const i = w.index, t = S.tracks[i];
+    const x = Math.max(w.start, a), y = Math.min(w.end, b);
+    segs.push(html`
+      <div key=${keyOf(t)} class=${"tl-seg" + (!t.artist && !t.title ? " none" : "") + sel(t)} data-i=${i}
+        style=${{ "--h": blockHue(i), left: at(x), width: span(y - x) }}
+        title=${trackName(t) + " · " + TL.fmt(w.start) + "–" + TL.fmt(w.end)}>
+        ${y - x > 240 && html`<span>${TL.cleanTitle(t.title) || t.artist || "Unidentified"}</span>`}
+      </div>`);
+    if ((t.artist || t.title) && w.start >= a && w.start < b) {
+      const bg = t.coverart_url
+        ? "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
+      thumbs.push(html`<div key=${keyOf(t)} class=${"tl-thumb" + sel(t)} data-i=${i}
+        style=${{ left: at(w.start), backgroundImage: bg }} title=${trackName(t) + " · " + TL.fmt(w.start)} />`);
+    }
+  }
+  const seams = S.tracks.map((t, i) => (!t.rejected || W[i].start < a || W[i].start >= b) ? null
+    : html`<div key=${"seam" + keyOf(t)} class=${"tl-seam" + sel(t)} data-i=${i} style=${{ left: at(W[i].start) }} />`);
+  const unheard = gaps.map(([x0, y0], n) => (y0 <= a || x0 >= b) ? null
+    : html`<div key=${"gap" + n} class="tl-unheard" title=${"Never sampled: " + TL.fmt(x0) + "–" + TL.fmt(y0)}
+        style=${{ left: at(Math.max(x0, a)), width: span(Math.min(y0, b) - Math.max(x0, a)) }} />`);
+
+  const pins = shown.map((p, n) => {
+    const mid = p.t + p.window / 2;
+    if (mid < a || mid >= b) return null;
+    const hit = p.artist || p.title;
+    // `drop` animates a pin in: the newest one during a replay, and the ones a
+    // live poll just brought.
+    const drop = (replayShown !== null && n === replayShown - 1)
+      || (S.liveMode && replayShown === null && n >= seenProbes && seenProbes);
+    const cls = "tl-pin" + (p.purpose === "refine" ? " refine" : "") + (p.purpose === "manual" ? " manual" : "")
+      + (hit ? "" : " miss") + (drop ? " drop" : "");
+    return html`<div key=${n} class=${cls} data-t=${p.t} style=${{ left: at(mid) }}
+      title=${TL.fmt(p.t) + " · " + p.window + "s " + p.purpose + " · "
+        + (hit ? (p.artist || "?") + " — " + (p.title || "?") + (p.confidence ? " (" + p.confidence + ")" : "") : "no match")} />`;
+  });
+  if (S.liveMode && nextProbe && replayShown === null) {
+    const mid = nextProbe.t + nextProbe.window / 2;
+    if (mid >= a && mid < b) {
+      pins.push(html`<div key="next" class="tl-pin next" style=${{ left: at(mid) }}
+        title=${"Listening here next (" + nextProbe.purpose + ")"} />`);
+    }
+  }
+  for (const t of pendingSamples) {
+    if (t < a || t >= b) continue;
+    pins.push(html`<div key=${"ask" + t} class="tl-pin pending" style=${{ left: at(t) }}
+      title=${"Asking Shazam about " + TL.fmt(t) + "…"} />`);
+  }
+
+  // The playhead carries no `hidden` or `style` here on purpose: updatePlayhead()
+  // moves it on every timeupdate, and a prop Preact owned would be put back.
+  return html`
+    <div class="tl-hour">
+      <div class="tl-hl">${h + "h"}</div>
+      <div class="tl-lanes" data-hour=${h}>
+        <div class="tl-ruler">
+          ${[10, 20, 30, 40, 50].map(m => html`<span key=${m} style=${{ left: (m / 60 * 100) + "%" }}>${":" + m}</span>`)}
+        </div>
+        <div class="tl-art">${thumbs}</div>
+        <div class="tl-blocks">${segs}${seams}${unheard}</div>
+        <div class=${"tl-pins" + (S.canSample ? " can-sample" : "")}>${pins}</div>
+        <div class="tl-playhead"></div>
+      </div>
+    </div>`;
+}
+
+// The tracklist is the truth about which tracks exist; the run's probes are
+// evidence drawn over it (see web_timeline.js). Everything here is derived
+// from S.tracks on each call, which render() makes, so every mutation -- edit,
+// reject, insert, save, reload -- keeps the grid current with no second path.
 export function renderTimeline() {
   if (!TL) return;
   const D = setDuration();
   const W = TL.windows(S.tracks, D);
   const kept = TL.keptWindows(S.tracks, D);
-  const rows = document.getElementById("tl-rows");
-  rows.innerHTML = "";
   const shown = replayShown === null ? S.probes : S.probes.slice(0, replayShown);
   const gaps = TL.unheard(S.probes, S.probeDuration || 0);
   const hours = Math.max(1, Math.ceil(D / TL.HOUR));
-  for (let h = 0; h < hours; h++) {
-    const a = h * TL.HOUR, b = a + TL.HOUR;
-    const at = t => ((t - a) / TL.HOUR * 100) + "%";
-    const span = d => (d / TL.HOUR * 100) + "%";
-    const row = el("div", "tl-hour");
-    row.appendChild(el("div", "tl-hl", h + "h"));
-    const lanes = el("div", "tl-lanes");
-    lanes.dataset.hour = h;
-
-    const ruler = el("div", "tl-ruler");
-    for (let m = 10; m < 60; m += 10) {
-      const tick = el("span", null, ":" + m);
-      tick.style.left = (m / 60 * 100) + "%";
-      ruler.appendChild(tick);
-    }
-    lanes.appendChild(ruler);
-
-    const art = el("div", "tl-art");
-    const blocks = el("div", "tl-blocks");
-    // One block per track that will be written, spanning its kept window: a
-    // merge reads as one block because it is one track. Each merged row stays
-    // only as a seam. Seams are not click targets -- merged blips sit seconds
-    // apart, a pixel or two at this scale -- so a click lands on the kept block,
-    // whose inspector lists what was merged into it, each with an Unmerge.
-    for (const w of kept) {
-      if (w.end <= a || w.start >= b) continue;
-      const i = w.index, t = S.tracks[i];
-      const x = Math.max(w.start, a), y = Math.min(w.end, b);
-      const seg = el("div", "tl-seg" + (!t.artist && !t.title ? " none" : "") + (t === S.selectedTrack ? " sel" : ""));
-      seg.style.setProperty("--h", blockHue(i));
-      seg.style.left = at(x);
-      seg.style.width = span(y - x);
-      seg.dataset.i = i;
-      seg.title = trackName(t) + " · " + TL.fmt(w.start) + "–" + TL.fmt(w.end);
-      if (y - x > 240) seg.appendChild(el("span", null, TL.cleanTitle(t.title) || t.artist || "Unidentified"));
-      blocks.appendChild(seg);
-      if ((t.artist || t.title) && w.start >= a && w.start < b) {
-        const th = el("div", "tl-thumb" + (t === S.selectedTrack ? " sel" : ""));
-        th.style.left = at(w.start);
-        th.dataset.i = i;
-        th.title = trackName(t) + " · " + TL.fmt(w.start);
-        if (t.coverart_url) th.style.backgroundImage = "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')";
-        else th.style.backgroundImage = GRADS[i % GRADS.length];
-        art.appendChild(th);
-      }
-    }
-    S.tracks.forEach((t, i) => {
-      if (!t.rejected || W[i].start < a || W[i].start >= b) return;
-      const seam = el("div", "tl-seam" + (t === S.selectedTrack ? " sel" : ""));
-      seam.style.left = at(W[i].start);
-      seam.dataset.i = i;
-      blocks.appendChild(seam);
-    });
-    for (const [x0, y0] of gaps) {
-      if (y0 <= a || x0 >= b) continue;
-      const g = el("div", "tl-unheard");
-      g.style.left = at(Math.max(x0, a));
-      g.style.width = span(Math.min(y0, b) - Math.max(x0, a));
-      g.title = "Never sampled: " + TL.fmt(x0) + "–" + TL.fmt(y0);
-      blocks.appendChild(g);
-    }
-    lanes.appendChild(art);
-    lanes.appendChild(blocks);
-
-    const pins = el("div", "tl-pins" + (S.canSample ? " can-sample" : ""));
-    shown.forEach((p, n) => {
-      const mid = p.t + p.window / 2;
-      if (mid < a || mid >= b) return;
-      const hit = p.artist || p.title;
-      const pin = el("div", "tl-pin" + (p.purpose === "refine" ? " refine" : "") + (p.purpose === "manual" ? " manual" : "") + (hit ? "" : " miss")
-        + ((replayShown !== null && n === replayShown - 1) || (S.liveMode && replayShown === null && n >= seenProbes && seenProbes) ? " drop" : ""));
-      pin.style.left = at(mid);
-      pin.dataset.t = p.t;
-      pin.title = TL.fmt(p.t) + " · " + p.window + "s " + p.purpose + " · "
-        + (hit ? (p.artist || "?") + " — " + (p.title || "?") + (p.confidence ? " (" + p.confidence + ")" : "") : "no match");
-      pins.appendChild(pin);
-    });
-    if (S.liveMode && nextProbe && replayShown === null) {
-      const mid = nextProbe.t + nextProbe.window / 2;
-      if (mid >= a && mid < b) {
-        const pin = el("div", "tl-pin next");
-        pin.style.left = at(mid);
-        pin.title = "Listening here next (" + nextProbe.purpose + ")";
-        pins.appendChild(pin);
-      }
-    }
-    for (const t of pendingSamples) {
-      if (t < a || t >= b) continue;
-      const pin = el("div", "tl-pin pending");
-      pin.style.left = at(t);
-      pin.title = "Asking Shazam about " + TL.fmt(t) + "…";
-      pins.appendChild(pin);
-    }
-    lanes.appendChild(pins);
-
-    const head = el("div", "tl-playhead");
-    head.hidden = true;
-    lanes.appendChild(head);
-    row.appendChild(lanes);
-    rows.appendChild(row);
-  }
+  paint(Array.from({ length: hours }, (_, h) =>
+    html`<${Hour} key=${h} h=${h} W=${W} kept=${kept} shown=${shown} gaps=${gaps} />`), tlRows);
   const identified = S.tracks.filter(t => !t.rejected && (t.artist || t.title)).length;
   document.getElementById("tl-stats").textContent =
     TL.fmt(D) + " · " + S.tracks.filter(t => !t.rejected).length + " tracks (" + identified + " identified)"
     + (S.probes.length ? " · " + S.probes.length + " samples" : " · no samples saved for this set");
   document.getElementById("tl-replay").hidden = !S.probes.length;
   updatePlayhead();
-  // A replay redraws every few dozen milliseconds; rebuilding the inspector
-  // that often would take the focus out of a field the user is typing in.
+  // A replay redraws every few dozen milliseconds; the inspector and the queue
+  // describe all the samples, not the replay's subset, so they sit it out.
   if (replayShown === null) {
-    // Nor when a sample lands or the audio loads while a name is half typed:
-    // a rebuilt input never fires `change`, so the typing would vanish.
-    // Only the text inputs: clicking one of the panel's buttons focuses it
-    // too, and those clicks are exactly what must rebuild the panel.
-    const ae = document.activeElement;
-    if (!(ae && ae.tagName === "INPUT" && document.getElementById("insp").contains(ae))) renderInspector();
+    renderInspector();
     renderIssues();
   }
 }
@@ -216,17 +191,14 @@ export function timeAt(e) {
 export function selectTrack(t, opts) {
   if (!t) return;
   S.selectedTrack = t;
-  document.querySelectorAll("#tl-rows .sel").forEach(n => n.classList.remove("sel"));
-  const i = S.tracks.indexOf(t);
-  document.querySelectorAll('#tl-rows [data-i="' + i + '"]').forEach(n => n.classList.add("sel"));
-  document.querySelectorAll("#list .row.selected").forEach(n => n.classList.remove("selected"));
-  const listRow = document.getElementById("list").children[i];
-  if (listRow) listRow.classList.add("selected");
+  renderList();
+  renderTimeline();
+  if (replayShown !== null) renderInspector();  // renderTimeline() skips it mid-replay
   if (opts && opts.reveal) {
-    const block = document.querySelector('#tl-rows .tl-blocks [data-i="' + i + '"]');
+    const i = S.tracks.indexOf(t);
+    const block = tlRows.querySelector('.tl-blocks [data-i="' + i + '"]');
     if (block) block.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
-  renderInspector();
 }
 
 export const tlRows = document.getElementById("tl-rows");

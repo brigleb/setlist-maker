@@ -1,7 +1,7 @@
 // The selected track's inspector, and asking Shazam about a moment.
 
 import { GRADS, S, TL } from "./state.js";
-import { audio, el, toast } from "./dom.js";
+import { audio, toast } from "./dom.js";
 import { trackName } from "./util.js";
 import { setDuration } from "./model.js";
 import { addBelow } from "./list.js";
@@ -10,18 +10,38 @@ import { pendingSamples, renderTimeline } from "./grid.js";
 import { setNames, splitAtPlayhead, toggleMerge } from "./edits.js";
 import { artSrc, showArtwork } from "./artwork.js";
 import { render } from "./main.js";
+import { html, keyOf, render as paint, useEffect, useState } from "./ui.js";
 
-export function renderInspector() {
-  const box = document.getElementById("insp");
-  box.innerHTML = "";
-  const t = S.selectedTrack;
-  const i = t ? S.tracks.indexOf(t) : -1;
-  if (i === -1) {
-    S.selectedTrack = null;
-    box.appendChild(el("h3", null, "Track"));
-    box.appendChild(el("div", "empty", "Click a track on the timeline — or anything in “Needs a look” — to see what Shazam heard there and fix it."));
-    return;
-  }
+// A name field. The typed text is component state, so the panel can re-render
+// underneath it (a sample landing, the playhead crossing into another track)
+// without losing it -- what the old "don't rebuild while an input has focus"
+// guard used to protect. It follows the track's own value when that changes
+// from elsewhere (Use, undo, a Tidy). Commits on change, i.e. Enter or blur.
+function NameField({ t, field, label }) {
+  const [draft, setDraft] = useState(t[field]);
+  useEffect(() => setDraft(t[field]), [t[field]]);
+  const commit = e => {
+    const v = e.target.value;
+    const artist = field === "artist" ? v : t.artist, title = field === "title" ? v : t.title;
+    if (setNames(t, artist, title)) render();
+  };
+  const onKeyDown = ev => {
+    if (ev.key === "Enter") { ev.preventDefault(); ev.target.blur(); }
+    if (ev.key === "Escape") {
+      // The DOM value first: the blur fires `change` before the state lands.
+      ev.target.value = t[field];
+      setDraft(t[field]);
+      ev.target.blur();
+    }
+  };
+  return html`
+    <div class="in-lbl">${label}</div>
+    <input class=${"in-" + field} value=${draft} placeholder=${label} aria-label=${label}
+      readOnly=${S.liveMode} onInput=${e => setDraft(e.target.value)} onChange=${commit}
+      onKeyDown=${onKeyDown} />`;
+}
+
+function Inspector({ t, i }) {
   const D = setDuration();
   // A kept track owns everything merged into it, so its span and its samples
   // are the kept window's; a merged row shows its own old span.
@@ -29,130 +49,104 @@ export function renderInspector() {
   const k = kept.findIndex(x => x.index === i);
   const w = k === -1 ? TL.windows(S.tracks, D)[i] : kept[k];
   const joined = TL.joinProbes(S.tracks, S.probes, D)[i];
-
-  const hero = el("div", "in-hero");
-  const thumb = el("div", "thumb");
-  thumb.style.backgroundImage = t.coverart_url
-    ? "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
   const canArt = (t.artist || t.title) && t.index !== undefined && t.index !== null;
-  if (canArt) { thumb.title = "Artwork and episode cover"; thumb.onclick = () => showArtwork(t); }
-  else thumb.style.cursor = "default";
-  hero.appendChild(thumb);
-  const who = el("div");
-  who.style.minWidth = "0";
-  who.appendChild(el("div", "in-when", TL.fmt(w.start) + " – " + TL.fmt(w.end) + " · " + TL.fmt(w.end - w.start)));
-  who.appendChild(el("div", "in-when", "track " + (i + 1) + " of " + S.tracks.length));
-  const badges = el("div", "in-badges");
-  if (t.rejected) badges.appendChild(el("span", "badge warn", "merged into previous"));
-  if (t._new) badges.appendChild(el("span", "badge", "new — unsaved"));
-  if (t.episode_cover) badges.appendChild(el("span", "badge", "★ episode cover"));
-  badges.appendChild(el("span", "badge", joined.length + " sample" + (joined.length === 1 ? "" : "s")));
-  who.appendChild(badges);
-  hero.appendChild(who);
-  box.appendChild(hero);
-
-  const artistIn = el("input", "in-artist");
-  artistIn.value = t.artist; artistIn.placeholder = "Artist"; artistIn.setAttribute("aria-label", "Artist");
-  const titleIn = el("input", "in-title");
-  titleIn.value = t.title; titleIn.placeholder = "Title"; titleIn.setAttribute("aria-label", "Title");
-  const commit = () => { if (setNames(t, artistIn.value, titleIn.value)) render(); };
-  artistIn.readOnly = titleIn.readOnly = S.liveMode;
-  for (const input of [artistIn, titleIn]) {
-    input.addEventListener("change", commit);
-    input.addEventListener("keydown", ev => {
-      if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
-      if (ev.key === "Escape") { input.value = input === artistIn ? t.artist : t.title; input.blur(); }
-    });
-  }
-  box.appendChild(el("div", "in-lbl", "Artist"));
-  box.appendChild(artistIn);
-  box.appendChild(el("div", "in-lbl", "Title"));
-  box.appendChild(titleIn);
+  const thumbBg = t.coverart_url
+    ? "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
 
   // Every name Shazam gave the audio in this window. The neighbours' names are
   // left out: a probe at the edge hearing the next track is not a candidate.
   const neighbours = k === -1 ? [] : [kept[k - 1], kept[k + 1]].filter(Boolean).map(x => S.tracks[x.index]);
   const names = TL.variants(joined, neighbours);
-  if (names.length) {
-    box.appendChild(el("div", "in-lbl", "Shazam heard"));
-    for (const v of names) {
-      const line = el("div", "in-variant");
-      line.appendChild(el("div", "nm", v.artist + " — " + v.title)).title = v.artist + " — " + v.title;
-      line.appendChild(el("span", "ct", "×" + v.count));
-      const current = v.artist === t.artist && v.title === t.title;
-      const use = el("button", "tbtn", current ? "in use" : "Use");
-      use.disabled = current || S.liveMode;
-      use.onclick = () => { if (setNames(t, v.artist, v.title)) render(); };
-      line.appendChild(use);
-      box.appendChild(line);
-    }
-  }
-
-  if (joined.length) {
-    box.appendChild(el("div", "in-lbl", "Samples — click to hear one"));
-    const list = el("div", "in-samples");
-    for (const p of joined) {
-      const b = el("button");
-      b.type = "button";
-      b.appendChild(el("span", null, TL.fmt(p.t)));
-      const hit = p.artist || p.title;
-      b.appendChild(el("span", "nm" + (hit ? "" : " miss"), hit ? (p.artist || "?") + " — " + (p.title || "?") : "no match"));
-      b.appendChild(el("span", null, p.purpose === "refine" ? "12s" : p.window + "s"));
-      b.title = p.purpose + (p.confidence ? " · confidence " + p.confidence : "");
-      b.onclick = () => playAt(p.t);
-      list.appendChild(b);
-    }
-    box.appendChild(list);
-  }
-
   // What was merged into this track, one Unmerge each: the grid shows these
   // only as seams too close together to click.
-  if (k !== -1) {
-    const end = kept[k + 1] ? kept[k + 1].index : S.tracks.length;
-    const folded = S.tracks.slice(i + 1, end);
-    if (folded.length) {
-      box.appendChild(el("div", "in-lbl", "Merged into this track"));
-      for (const m of folded) {
-        const line = el("div", "in-variant");
-        line.appendChild(el("div", "nm", TL.fmt(m.timestamp) + " " + trackName(m))).title = trackName(m);
-        const un = el("button", "tbtn", "Unmerge");
-        un.disabled = S.liveMode;
-        un.onclick = () => toggleMerge(m);
-        line.appendChild(un);
-        box.appendChild(line);
-      }
-    }
-  }
+  const folded = k === -1 ? [] : S.tracks.slice(i + 1, kept[k + 1] ? kept[k + 1].index : S.tracks.length);
 
-  const btns = el("div", "in-btns");
-  const play = el("button", "tbtn primary", "▶ Play");
-  play.onclick = () => playFrom(i, { scroll: false });
-  const split = el("button", "tbtn in-split", "Split at playhead");
+  // The split and identify buttons also follow the playhead between renders:
+  // grid.updatePlayhead() keeps their `disabled` current as it moves.
   const now = audio.currentTime || 0;
-  split.disabled = !(now > w.start + 1 && now < w.end - 1);
-  split.title = split.disabled ? "Play inside this track, then split where the next one starts" : "Start a new track at " + TL.fmt(now);
-  split.onclick = splitAtPlayhead;
-  const ident = el("button", "tbtn in-identify", "Identify at playhead");
-  ident.disabled = !S.canSample || !(now >= w.start && now < w.end);
-  ident.title = !S.canSample ? "Sampling needs the set's audio"
-    : ident.disabled ? "Play inside this track, then ask Shazam what is playing (I)"
+  const cantSplit = !(now > w.start + 1 && now < w.end - 1);
+  const cantIdentify = !S.canSample || !(now >= w.start && now < w.end);
+  const identTitle = !S.canSample ? "Sampling needs the set's audio"
+    : cantIdentify ? "Play inside this track, then ask Shazam what is playing (I)"
     : "Ask Shazam what is playing at " + TL.fmt(now) + " and name this track (I)";
-  ident.onclick = () => identifyAt(t, audio.currentTime || 0);
-  ident.hidden = !!t.rejected;  // a merged row is not in the output to be named
-  const merge = el("button", "tbtn", t.rejected ? "Unmerge" : (i === 0 ? "Reject" : "Merge into previous"));
-  merge.onclick = () => toggleMerge(t);
-  const add = el("button", "tbtn", "＋ Add below");
-  add.onclick = () => addBelow(i);
-  btns.append(play);
-  if (!S.liveMode) btns.append(ident, split, merge, add);
-  if (canArt && !S.liveMode) {
-    const artBtn = el("button", "tbtn", "Artwork…");
-    artBtn.onclick = () => showArtwork(t);
-    btns.appendChild(artBtn);
+  const sample = p => {
+    const hit = p.artist || p.title;
+    return html`
+      <button type="button" title=${p.purpose + (p.confidence ? " · confidence " + p.confidence : "")}
+        onClick=${() => playAt(p.t)}>
+        <span>${TL.fmt(p.t)}</span>
+        <span class=${"nm" + (hit ? "" : " miss")}>${hit ? (p.artist || "?") + " — " + (p.title || "?") : "no match"}</span>
+        <span>${p.purpose === "refine" ? "12s" : p.window + "s"}</span>
+      </button>`;
+  };
+
+  return html`
+    <div class="in-hero">
+      <div class="thumb" style=${{ backgroundImage: thumbBg, cursor: canArt ? "" : "default" }}
+        title=${canArt ? "Artwork and episode cover" : undefined}
+        onClick=${canArt ? () => showArtwork(t) : undefined}></div>
+      <div style=${{ minWidth: "0" }}>
+        <div class="in-when">${TL.fmt(w.start) + " – " + TL.fmt(w.end) + " · " + TL.fmt(w.end - w.start)}</div>
+        <div class="in-when">${"track " + (i + 1) + " of " + S.tracks.length}</div>
+        <div class="in-badges">
+          ${t.rejected && html`<span class="badge warn">merged into previous</span>`}
+          ${t._new && html`<span class="badge">new — unsaved</span>`}
+          ${t.episode_cover && html`<span class="badge">★ episode cover</span>`}
+          <span class="badge">${joined.length + " sample" + (joined.length === 1 ? "" : "s")}</span>
+        </div>
+      </div>
+    </div>
+    <${NameField} t=${t} field="artist" label="Artist" />
+    <${NameField} t=${t} field="title" label="Title" />
+    ${names.length > 0 && html`
+      <div class="in-lbl">Shazam heard</div>
+      ${names.map(v => {
+        const current = v.artist === t.artist && v.title === t.title;
+        return html`
+          <div class="in-variant" key=${v.artist + "\u0000" + v.title}>
+            <div class="nm" title=${v.artist + " — " + v.title}>${v.artist + " — " + v.title}</div>
+            <span class="ct">${"×" + v.count}</span>
+            <button class="tbtn" disabled=${current || S.liveMode}
+              onClick=${() => { if (setNames(t, v.artist, v.title)) render(); }}>${current ? "in use" : "Use"}</button>
+          </div>`;
+      })}`}
+    ${joined.length > 0 && html`
+      <div class="in-lbl">Samples — click to hear one</div>
+      <div class="in-samples">${joined.map(sample)}</div>`}
+    ${folded.length > 0 && html`
+      <div class="in-lbl">Merged into this track</div>
+      ${folded.map(m => html`
+        <div class="in-variant" key=${keyOf(m)}>
+          <div class="nm" title=${trackName(m)}>${TL.fmt(m.timestamp) + " " + trackName(m)}</div>
+          <button class="tbtn" disabled=${S.liveMode} onClick=${() => toggleMerge(m)}>Unmerge</button>
+        </div>`)}`}
+    <div class="in-btns">
+      <button class="tbtn primary" onClick=${() => playFrom(i, { scroll: false })}>▶ Play</button>
+      ${!S.liveMode && html`
+        <button class="tbtn in-identify" disabled=${cantIdentify} title=${identTitle}
+          hidden=${!!t.rejected} onClick=${() => identifyAt(t, audio.currentTime || 0)}>Identify at playhead</button>
+        <button class="tbtn in-split" disabled=${cantSplit}
+          title=${cantSplit ? "Play inside this track, then split where the next one starts" : "Start a new track at " + TL.fmt(now)}
+          onClick=${splitAtPlayhead}>Split at playhead</button>
+        <button class="tbtn" onClick=${() => toggleMerge(t)}>${t.rejected ? "Unmerge" : (i === 0 ? "Reject" : "Merge into previous")}</button>
+        <button class="tbtn" onClick=${() => addBelow(i)}>＋ Add below</button>`}
+      ${canArt && !S.liveMode && html`<button class="tbtn" onClick=${() => showArtwork(t)}>Artwork…</button>`}
+    </div>
+    ${t.rejected && html`<div class="in-note">Merged tracks are left out of the tracklist when you save; their time goes to the track before.</div>`}
+    ${S.liveMode && html`<div class="in-note">Still identifying — this is the run's current answer, and it may change as the run narrows the boundaries. Editing opens when it finishes.</div>`}`;
+}
+
+export function renderInspector() {
+  const box = document.getElementById("insp");
+  const t = S.selectedTrack;
+  const i = t ? S.tracks.indexOf(t) : -1;
+  if (i === -1) {
+    S.selectedTrack = null;
+    paint(html`<h3>Track</h3><div class="empty">Click a track on the timeline — or anything in “Needs a look” — to see what Shazam heard there and fix it.</div>`, box);
+    return;
   }
-  box.appendChild(btns);
-  if (t.rejected) box.appendChild(el("div", "in-note", "Merged tracks are left out of the tracklist when you save; their time goes to the track before."));
-  if (S.liveMode) box.appendChild(el("div", "in-note", "Still identifying — this is the run's current answer, and it may change as the run narrows the boundaries. Editing opens when it finishes."));
+  // Keyed by track: choosing another track starts its fields fresh.
+  paint(html`<${Inspector} key=${keyOf(t)} t=${t} i=${i} />`, box);
 }
 
 // ---- needs a look ----

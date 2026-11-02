@@ -13,16 +13,12 @@ export const TL = window.Timeline;
 export const S = {
   tracks: [],
   dirty: false,
-  // The playing track's index, and the track *object* held alongside it.
-  // addBelow()'s splice and commit()'s re-sort can both move the playing track
-  // to a different array position without changing what's on screen for it --
-  // reindexPlayingTrack() re-derives playingIndex from the reference, so a
-  // stale bare index never points at a different track after either mutation.
-  playingIndex: null,
+  // The playing, selected and inline-edited tracks, all held as object
+  // references: an insert or a re-sort moves array positions, never objects.
+  // model.playingIndex() derives the playing track's position when needed.
   playingTrack: null,
-  // Held as an object reference, like playingTrack and artwork.js's artTrack:
-  // render() and the re-sorts that inserts cause move positions underneath it.
   selectedTrack: null,
+  editing: null,
   // The run's probes, drawn as pins; the audio's length as the run saw it.
   probes: [],
   probeDuration: null,
