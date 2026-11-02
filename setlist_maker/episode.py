@@ -14,12 +14,12 @@ the recorder may already have tagged the file.
 
 import json
 import logging
-import os
 import re
 from datetime import date
 from pathlib import Path
 
-from setlist_maker.uploads import _write_atomic, set_stem
+from setlist_maker.fileio import atomic_write_bytes, config_dir
+from setlist_maker.uploads import set_stem
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,7 @@ def episode_path_for(tracklist_path: Path) -> Path:
 
 def config_path() -> Path:
     """The user-level settings file. Honours ``XDG_CONFIG_HOME`` (tests rely on it)."""
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "setlist-maker" / "config.json"
+    return config_dir() / "config.json"
 
 
 def clean_tag(value: object) -> str:
@@ -83,7 +82,7 @@ def remember_artist(artist: str) -> None:
     config = _read_json(path)
     config["episode_artist"] = artist
     try:
-        _write_atomic(path, (json.dumps(config, indent=2) + "\n").encode("utf-8"))
+        atomic_write_bytes(path, (json.dumps(config, indent=2) + "\n").encode("utf-8"))
     except OSError as e:
         logger.warning("could not remember the episode artist in %s: %s", path, e)
 
@@ -106,5 +105,5 @@ def save_episode_tags(tracklist_path: Path, title: object, artist: object) -> No
     tags = {"title": clean_tag(title), "artist": clean_tag(artist)}
     path = episode_path_for(tracklist_path)
     if _read_json(path) != tags:
-        _write_atomic(path, (json.dumps(tags, indent=2) + "\n").encode("utf-8"))
+        atomic_write_bytes(path, (json.dumps(tags, indent=2) + "\n").encode("utf-8"))
     remember_artist(tags["artist"])

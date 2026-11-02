@@ -1,6 +1,9 @@
 """Shared pytest fixtures for setlist-maker tests."""
 
+import os
 import socket
+import socketserver
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -60,6 +63,64 @@ def block_outbound_network(monkeypatch):
         return real_getaddrinfo(host, *args, **kwargs)
 
     monkeypatch.setattr(socket, "getaddrinfo", guarded)
+
+
+class SubprocessBlocked(BaseException):
+    """Raised when a test tries to run a program that reaches beyond the machine.
+
+    A BaseException for the same reason as ``NetworkAccessBlocked``:
+    ``generate_summary()`` wraps its subprocess call in ``except Exception``
+    and degrades to "no summary", so an ordinary error would let the test pass.
+    """
+
+
+# Programs a test may never launch: each one talks to a remote service, which
+# the DNS guard cannot see because the lookup happens in another process.
+_BLOCKED_PROGRAMS = frozenset({"claude"})
+
+
+@pytest.fixture(autouse=True)
+def block_remote_subprocesses(monkeypatch):
+    """Fail any test that launches ``claude`` (a real LLM call, and ~4.5s).
+
+    ``process_single_file()`` defaults to ``summary=True``, so a test that
+    forgot ``summary=False`` used to spawn ``claude -p`` -- passing either way,
+    and behaving differently on a machine where it is not installed. Popen is
+    the choke point ``subprocess.run`` goes through; ffmpeg, ffprobe and node
+    are local and pass untouched. A test that patches
+    ``setlist_maker.summary.subprocess.run`` never reaches Popen at all.
+    """
+
+    class GuardedPopen(subprocess.Popen):
+        def __init__(self, args, *a, **kw):
+            argv = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args)
+            program = os.path.basename(os.fsdecode(argv[0])).split()[0] if argv else ""
+            if program in _BLOCKED_PROGRAMS:
+                raise SubprocessBlocked(
+                    f"test tried to run {program!r} -- pass summary=False, or patch "
+                    f"'setlist_maker.summary.subprocess.run'"
+                )
+            super().__init__(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
+
+
+@pytest.fixture(autouse=True)
+def fast_server_shutdown(monkeypatch):
+    """Make ``serve_forever()`` notice ``shutdown()`` in 50ms instead of 500ms.
+
+    Every server a test starts -- its own, or production ``WatchSession``'s --
+    blocks in ``serve_forever(poll_interval=0.5)``, and ``shutdown()`` waits
+    out the poll. At ~80 server tests that was most of the suite's wall clock.
+    Patched on the base class so it reaches every call site, including the
+    thread ``WatchSession`` starts itself.
+    """
+    real = socketserver.BaseServer.serve_forever
+
+    def serve_forever(self, poll_interval=0.05):
+        return real(self, poll_interval)
+
+    monkeypatch.setattr(socketserver.BaseServer, "serve_forever", serve_forever)
 
 
 @pytest.fixture

@@ -423,16 +423,18 @@ dependency, `shazamio_core`, has no compatible wheel and crashes on import.)
 git clone https://github.com/brigleb/setlist-maker.git
 cd setlist-maker
 
-# Create a virtualenv on a supported Python and install with dev extras
-python3.13 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+# Create .venv from the lockfile, with the dev extras
+uv sync --extra dev
 
 # Lint and test
-ruff check .
-ruff format --check .
-pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest
 ```
+
+Run `pytest` through `uv run` (or `.venv/bin/pytest`): a system-wide `pytest` cannot see the
+project's dependencies and fails importing `conftest.py`. Without uv,
+`pip install -e ".[dev]"` inside a virtualenv works too.
 
 ## License
 

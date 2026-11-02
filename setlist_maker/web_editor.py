@@ -283,6 +283,18 @@ class EditorContext:
     live: "LiveRun | None" = None
     # The page said Done; the server is shutting down.
     closed: bool = False
+    # Held by every handler that changes the tracklist or the files written
+    # from it (/api/save, /api/chapters): the server is threaded, and two
+    # saves interleaving in apply_edits() would each append the other's rows.
+    state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    # Bumped whenever which index names which track changes -- an inserted row
+    # re-sorts the list, and finishing a watched run replaces it. The page
+    # sends back the revision it loaded, and a save made against an older one
+    # is refused: its indices now point at other tracks. That is what makes a
+    # double-submitted save safe, where serializing it alone would not be --
+    # the second copy would insert its new row again, and rename whichever
+    # tracks its stale indices now land on.
+    revision: int = 0
 
 
 # How long a click on the live timeline waits for the run to get to it. The
@@ -423,10 +435,28 @@ class _Handler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b"{}"
+        with self._ctx.state_lock:
+            self._save_locked(raw)
+
+    def _save_locked(self, raw: bytes) -> None:
         ctx = self._ctx
         try:
             data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("expected a JSON object")
+            revision = data.get("revision")
+            if revision is not None and revision != ctx.revision:
+                self._send_json(
+                    {
+                        "ok": False,
+                        "error": "the tracklist changed since this page loaded; reload it",
+                    },
+                    HTTPStatus.CONFLICT,
+                )
+                return
             edits = data.get("tracks", [])
+            if not isinstance(edits, list) or not all(isinstance(e, dict) for e in edits):
+                raise ValueError("tracks must be a list of objects")
             cover = data.get("cover", _UNSET)
             episode = data.get("episode", _UNSET)
             if episode is not _UNSET and not isinstance(episode, dict):
@@ -437,12 +467,15 @@ class _Handler(BaseHTTPRequestHandler):
                     raise ValueError(f"episode cover must be an uploaded image -- got {cover!r}")
                 if not upload_path(artwork_dir_for(ctx.output_path), cover).exists():
                     raise ValueError(f"uploaded image {cover} is missing")
+            order = [id(t) for t in ctx.tracklist.tracks]
             apply_edits(
                 ctx.tracklist,
                 edits,
                 ctx.corrections_db,
                 summary=data.get("summary", _UNSET),
             )
+            if [id(t) for t in ctx.tracklist.tracks] != order:
+                ctx.revision += 1  # in memory now, whether or not the write below lands
             if cover not in (_UNSET, None):
                 # One episode cover: an uploaded one replaces the starred track.
                 for track in ctx.tracklist.tracks:
@@ -452,6 +485,9 @@ class _Handler(BaseHTTPRequestHandler):
                 set_episode_cover(ctx.output_path, cover)
             if episode is not _UNSET:
                 save_episode_tags(ctx.output_path, episode.get("title"), episode.get("artist"))
+        except ValueError as exc:  # the payload's fault, incl. a body that isn't JSON
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
         except Exception as exc:  # surface to the page; keep state intact
             self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -494,7 +530,12 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _send_tracklist(self) -> None:
         tracklist, live = self._current_tracklist()
-        api = tracklist_to_api(tracklist)
+        # Under the save lock, so the tracks and their revision are one
+        # snapshot: tracks from after an insert with the revision from before
+        # it would let the page save stale indices.
+        with self._ctx.state_lock:
+            api = tracklist_to_api(tracklist)
+            api["revision"] = self._ctx.revision
         api["live"] = live
         # A version for the page to cache-bust /api/cover with, or None when
         # the set has no uploaded episode cover.
@@ -841,9 +882,11 @@ class _Handler(BaseHTTPRequestHandler):
             # Imported here: cli imports this module, so a top-level import is a cycle.
             from setlist_maker.cli import embed_chapters_for_tracklist
 
-            chapters, images, cover = embed_chapters_for_tracklist(
-                ctx.tracklist, audio, fetch_art=True, tracklist_path=ctx.output_path
-            )
+            # A save landing mid-embed would change the tracklist being read.
+            with ctx.state_lock:
+                chapters, images, cover = embed_chapters_for_tracklist(
+                    ctx.tracklist, audio, fetch_art=True, tracklist_path=ctx.output_path
+                )
         except Exception as exc:  # a handler that raises sends no response at all
             self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -1015,8 +1058,10 @@ class WatchSession:
         ctx.sampler = (
             ShazamSampler(resolved_audio, last_call=time.monotonic()) if resolved_audio else None
         )
-        ctx.tracklist = tracklist
-        ctx.live = None
+        with ctx.state_lock:  # one snapshot for /api/tracklist
+            ctx.tracklist = tracklist
+            ctx.revision += 1  # every index the page held named a live guess
+            ctx.live = None
         print(f"\nEditing in your browser: {self.url}\n(Press Ctrl-C here to stop.)")
         try:
             while self.thread.is_alive():
