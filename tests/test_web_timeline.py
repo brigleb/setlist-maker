@@ -225,3 +225,16 @@ def test_what_was_heard_inside_a_merged_stretch_is_not_a_rival():
     probes += [probe(1100, "Parov Stelar", "All Night"), probe(1400, "Parov Stelar", "All Night")]
     issues = js("T.findIssues(tracks, probes, 1600)", tracks=merged, probes=probes)
     assert [i["index"] for i in issues if i["kind"] == "variants"] == [0]
+
+
+def test_snap_points_sit_between_the_excerpts_where_the_answer_changes():
+    """Shazam hears the middle 10s of each window: a 30s probe at 100 hears
+    110-120, a 12s probe at 130 hears 131-141, so the cut is guessed at 125.5.
+    The same track twice, or an unidentified probe, is no boundary."""
+    probes = [
+        probe(40, "A", "One"),
+        probe(100, "A", "One (2009 Remaster)"),  # same identity: no snap point
+        probe(115, None, None),  # heard nothing: skipped over
+        probe(130, "B", "Two", window=12.0),
+    ]
+    assert js("T.snapPoints(probes)", probes=probes) == [125.5]

@@ -1,11 +1,11 @@
 // The page's keyboard map.
 
 import { S } from "./state.js";
-import { audio, playerEl, pplayEl } from "./dom.js";
+import { audio, playerEl, pplayEl, toast } from "./dom.js";
 import { keptTrackAt } from "./model.js";
 import { redo, undo } from "./history.js";
 import { SKIP_SECONDS, nextTrack, prevTrack, skip } from "./player.js";
-import { splitAt } from "./edits.js";
+import { moveStart, splitAt } from "./edits.js";
 import { identifyAt } from "./inspector.js";
 import { overlay } from "./artwork.js";
 
@@ -33,6 +33,16 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // [ and ] nudge the selected track's start by a second; with ⇧ (which makes
+  // them { and }) by five. Above the player guard: no audio is needed.
+  const nudge = { "[": -1, "]": 1, "{": -5, "}": 5 }[e.key];
+  if (nudge !== undefined) {
+    const t = S.selectedTrack;
+    if (!t || S.liveMode) return;
+    e.preventDefault();
+    if (!moveStart(t, t.timestamp + nudge)) toast("It can't move any further: it would pass the track next to it");
+    return;
+  }
   if (playerEl.classList.contains("disabled")) return;
   switch (e.key) {
     case " ":

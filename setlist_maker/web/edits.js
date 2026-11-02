@@ -3,7 +3,7 @@
 import { S, TL } from "./state.js";
 import { audio, toast } from "./dom.js";
 import { fmt } from "./util.js";
-import { splitWindow } from "./model.js";
+import { clampStart, splitWindow } from "./model.js";
 import { setDirty } from "./history.js";
 import { sampleAt } from "./inspector.js";
 import { render } from "./main.js";
@@ -76,4 +76,24 @@ export function applyFix(fix) {
   }
   setDirty(true);
   render();
+}
+
+// Move track t's start (#55), clamped so it cannot pass a neighbour. Returns
+// whether it moved. One call is one undo step; a drag previews with
+// previewStart() and calls this once, on release.
+export function moveStart(t, seconds) {
+  const i = S.tracks.indexOf(t);
+  if (S.liveMode || i === -1) return false;
+  const at = clampStart(i, seconds);
+  if (at === t.timestamp) return false;
+  previewStart(t, at);
+  setDirty(true);
+  render();
+  return true;
+}
+
+// Set a start without recording it: the drag's live preview.
+export function previewStart(t, seconds) {
+  t.timestamp = seconds;
+  t.time = fmt(seconds);
 }

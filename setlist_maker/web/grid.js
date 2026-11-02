@@ -3,16 +3,16 @@
 import { GRADS, S, TL } from "./state.js";
 import { audio, el, toast } from "./dom.js";
 import { trackName } from "./util.js";
-import { setDuration, splitWindow, trackIndexAt } from "./model.js";
+import { clampStart, setDuration, splitWindow, trackIndexAt } from "./model.js";
 import { playAt } from "./player.js";
 import { renderList, revealSelected } from "./list.js";
-import { splitAt } from "./edits.js";
+import { moveStart, previewStart, splitAt } from "./edits.js";
 import { renderInspector, sampleAt } from "./inspector.js";
 import { renderIssues } from "./issues.js";
 import { artSrc } from "./artwork.js";
 import { html, keyOf, render as paint } from "./ui.js";
 import { showTab } from "./shell.js";
-import { load, refreshLiveTracks, setLive } from "./main.js";
+import { load, refreshLiveTracks, render, setLive } from "./main.js";
 
 export let replayShown = null;  // during a replay, how many probes are visible
 export let nextProbe = null;    // where the live run will listen next
@@ -29,7 +29,7 @@ export async function loadProbes() {
     S.canSample = !!data.can_sample;
     nextProbe = data.next || null;
     document.getElementById("tl-hint").textContent =
-      "click a track to inspect · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard"
+      "click a track to inspect · drag its left edge to move its start · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard"
       + (S.canSample ? " · I names the track at the playhead · click the pin lane to ask Shazam about any moment" : "");
     if (wasLive && !data.live) {
       // The run finished and this server is now its editor. Everything on
@@ -64,7 +64,7 @@ function Hour({ h, W, kept, shown, gaps }) {
   // only as a seam. Seams are not click targets -- merged blips sit seconds
   // apart, a pixel or two at this scale -- so a click lands on the kept block,
   // whose inspector lists what was merged into it, each with an Unmerge.
-  const segs = [], thumbs = [];
+  const segs = [], thumbs = [], edges = [];
   for (const w of kept) {
     if (w.end <= a || w.start >= b) continue;
     const i = w.index, t = S.tracks[i];
@@ -75,6 +75,11 @@ function Hour({ h, W, kept, shown, gaps }) {
         title=${trackName(t) + " · " + TL.fmt(w.start) + "–" + TL.fmt(w.end)}>
         ${y - x > 240 && html`<span>${TL.cleanTitle(t.title) || t.artist || "Unidentified"}</span>`}
       </div>`);
+    // The drag handle on the block's left edge moves this track's start (#55).
+    if (!S.liveMode && w.start >= a && w.start < b) {
+      edges.push(html`<div key=${"edge" + keyOf(t)} class=${"tl-edge" + sel(t)} data-i=${i}
+        style=${{ left: at(w.start) }} title=${"Drag to move the start of " + trackName(t) + " · ⌥ for no snapping"} />`);
+    }
     if ((t.artist || t.title) && w.start >= a && w.start < b) {
       const bg = t.coverart_url
         ? "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
@@ -125,7 +130,7 @@ function Hour({ h, W, kept, shown, gaps }) {
           ${[10, 20, 30, 40, 50].map(m => html`<span key=${m} style=${{ left: (m / 60 * 100) + "%" }}>${":" + m}</span>`)}
         </div>
         <div class="tl-art">${thumbs}</div>
-        <div class="tl-blocks">${segs}${seams}${unheard}</div>
+        <div class="tl-blocks">${segs}${seams}${unheard}${edges}</div>
         <div class=${"tl-pins" + (S.canSample ? " can-sample" : "")}>${pins}</div>
         <div class="tl-playhead"></div>
       </div>
@@ -213,6 +218,9 @@ export function selectTrack(t, opts) {
 
 export const tlRows = document.getElementById("tl-rows");
 tlRows.addEventListener("click", e => {
+  // A drag handle's click is the end of a drag (or a press that went nowhere),
+  // and with ⌥ held for no snapping it would otherwise read as alt-click split.
+  if (e.target.closest(".tl-edge")) return;
   const pin = e.target.closest(".tl-pin");
   if (pin) {
     const t = +pin.dataset.t;
@@ -234,13 +242,15 @@ tlRows.addEventListener("click", e => {
   }
 });
 tlRows.addEventListener("dblclick", e => {
-  if (!e.target.closest(".tl-blocks")) return;
+  if (!e.target.closest(".tl-blocks") || e.target.closest(".tl-edge")) return;
   const t = timeAt(e);
   if (t !== null) playAt(t);
 });
 tlRows.addEventListener("mousemove", e => {
+  if (drag) return;  // the drag draws its own readout
   const lanes = e.target.closest(".tl-lanes");
   let cur = tlRows.querySelector(".tl-cursor");
+  if (e.target.closest(".tl-edge")) { if (cur) cur.remove(); return; }
   const onPins = S.canSample && e.target.closest(".tl-pins") && !e.target.closest(".tl-pin");
   if (!lanes || !(e.target.closest(".tl-blocks") || onPins)) { if (cur) cur.remove(); return; }
   if (!cur || cur.parentNode !== lanes) { if (cur) cur.remove(); cur = el("div", "tl-cursor"); lanes.appendChild(cur); }
@@ -253,6 +263,106 @@ tlRows.addEventListener("mousemove", e => {
   cur.classList.toggle("split", splitting);
 });
 tlRows.addEventListener("mouseleave", () => { const cur = tlRows.querySelector(".tl-cursor"); if (cur) cur.remove(); });
+
+// ---- dragging a boundary (#55) ----
+// Pressing a block's left-edge handle and dragging moves that track's start.
+// The move is previewed on the model (grid, list and inspector all follow)
+// without being recorded, and committed once on release through moveStart(),
+// so one drag is one undo step. Escape puts it back. The boundary snaps to
+// where Shazam's answer changes (TL.snapPoints) within SNAP_PX; ⌥ turns that
+// off. Release plays from AUDITION_LEAD seconds before the new cut, so the
+// cut is heard straight away. At four hours a pixel is ~10s, which is why
+// the snapping and the readout matter as much as the drag.
+const SNAP_PX = 6;
+const AUDITION_LEAD = 5;
+export let drag = null;
+
+// The time under the pointer: whichever hour's lanes it is over (a drag may
+// cross hours), else extrapolated from the hour it started in.
+function timeAtPoint(x, y, home) {
+  const hit = document.elementFromPoint(x, y);
+  const lanes = (hit && hit.closest(".tl-lanes")) || home;
+  const r = lanes.getBoundingClientRect();
+  return { t: +lanes.dataset.hour * TL.HOUR + (x - r.left) / r.width * TL.HOUR, pxPerSec: r.width / TL.HOUR, lanes };
+}
+
+function dragReadout(t, x, lanes) {
+  const D = setDuration();
+  const kept = TL.keptWindows(S.tracks, D);
+  const k = kept.findIndex(w => S.tracks[w.index] === t);
+  const len = w => (w ? TL.fmt(w.end - w.start) : "—");
+  drag.tip.textContent = "Start " + TL.fmt(t.timestamp) + " · previous " + len(kept[k - 1]) + " · this " + len(kept[k])
+    + (drag.snapped ? " · snapped" : "");
+  const r = lanes.getBoundingClientRect();
+  drag.tip.style.left = x + "px";
+  drag.tip.style.top = (r.top + 6) + "px";
+}
+
+function endDrag(commit) {
+  if (!drag) return;
+  const { t, from, tip, pointerId } = drag;
+  const to = t.timestamp;
+  drag = null;
+  tip.remove();
+  document.body.classList.remove("tl-dragging");
+  document.removeEventListener("keydown", onDragKey, true);
+  try { tlRows.releasePointerCapture(pointerId); } catch (e) { /* already released */ }
+  previewStart(t, from);  // back to where it was, so the commit is one recorded change
+  if (commit && to !== from && moveStart(t, to)) {
+    playAt(Math.max(0, to - AUDITION_LEAD));
+  } else {
+    render();
+  }
+}
+
+function onDragKey(e) {
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); endDrag(false); }
+}
+
+tlRows.addEventListener("pointerdown", e => {
+  const edge = e.target.closest(".tl-edge");
+  if (!edge || e.button !== 0 || S.liveMode) return;
+  e.preventDefault();
+  const t = S.tracks[+edge.dataset.i];
+  if (!t) return;
+  // Captured on the container, not the handle: Preact replaces the handle
+  // when the boundary crosses into another hour, and capture would go with it.
+  tlRows.setPointerCapture(e.pointerId);
+  const tip = el("div", "tl-cursor tl-dragtip");
+  document.body.appendChild(tip);
+  drag = { t, from: t.timestamp, home: edge.closest(".tl-lanes"), snaps: TL.snapPoints(S.probes),
+           tip, pointerId: e.pointerId, snapped: false, frame: 0 };
+  document.body.classList.add("tl-dragging");
+  document.addEventListener("keydown", onDragKey, true);
+  selectTrack(t);
+  dragReadout(t, e.clientX, drag.home);
+});
+
+tlRows.addEventListener("pointermove", e => {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  const { x, y, alt } = { x: e.clientX, y: e.clientY, alt: e.altKey };
+  if (drag.frame) return;  // one preview per frame, however fast the pointer
+  drag.frame = requestAnimationFrame(() => {
+    if (!drag) return;
+    drag.frame = 0;
+    const { t: raw, pxPerSec, lanes } = timeAtPoint(x, y, drag.home);
+    let at = raw;
+    drag.snapped = false;
+    if (!alt) {
+      let best = null;
+      for (const s of drag.snaps) if (best === null || Math.abs(s - raw) < Math.abs(best - raw)) best = s;
+      if (best !== null && Math.abs(best - raw) * pxPerSec <= SNAP_PX) { at = best; drag.snapped = true; }
+    }
+    const i = S.tracks.indexOf(drag.t);
+    previewStart(drag.t, clampStart(i, at));
+    renderList();
+    renderTimeline();
+    dragReadout(drag.t, x, lanes);
+  });
+});
+
+tlRows.addEventListener("pointerup", e => { if (drag && e.pointerId === drag.pointerId) endDrag(true); });
+tlRows.addEventListener("pointercancel", e => { if (drag && e.pointerId === drag.pointerId) endDrag(false); });
 
 // Drop the pins back in, in the order the run asked for them -- the coarse
 // sweep first, then the refinement crowding into each boundary.

@@ -1261,3 +1261,88 @@ def test_timeline_script_is_served(sample_tracklist, tmp_path):
         with urllib.request.urlopen(base + "/timeline.js") as r:
             assert r.headers["Content-Type"].startswith("text/javascript")
             assert "findIssues" in r.read().decode()
+
+
+# ---- moving an existing track's start (#55) ----
+
+
+def test_apply_edits_moves_an_existing_start_and_resorts(sample_tracklist):
+    from setlist_maker.web_editor import apply_edits
+
+    praise = sample_tracklist.tracks[3]
+    apply_edits(
+        sample_tracklist,
+        [{"index": 3, "artist": "Fatboy Slim", "title": "Praise You", "timestamp": 300.4}],
+        None,
+    )
+    assert praise.timestamp == 300  # whole seconds: the markdown writes (m:ss)
+    assert [t.timestamp for t in sample_tracklist.tracks] == [0, 180, 300, 360]
+    assert sample_tracklist.tracks[2] is praise
+    assert not praise.was_corrected  # a boundary is not a correction
+
+
+@pytest.mark.parametrize("bad", [None, "1:23", -5, True, float("nan"), float("inf")])
+def test_apply_edits_leaves_the_start_alone_on_a_bad_value(sample_tracklist, bad):
+    from setlist_maker.web_editor import apply_edits
+
+    edit = {"index": 1, "artist": "The Chemical Brothers", "title": "Block Rockin' Beats"}
+    if bad is not None:
+        edit["timestamp"] = bad
+    apply_edits(sample_tracklist, [edit], None)
+    assert [t.timestamp for t in sample_tracklist.tracks] == [0, 180, 360, 540]
+
+
+def test_a_moved_track_keeps_its_art_pin_and_star_through_save_and_reload(
+    sample_tracklist, tmp_path
+):
+    """The sidecar is joined to the markdown by timestamp: both are rewritten
+    on save, so a moved start must carry its pinned art and its star along."""
+    from setlist_maker.cli import _load_tracklist_with_artwork_urls
+    from setlist_maker.editor import save_tracklist
+    from setlist_maker.web_editor import apply_edits
+
+    track = sample_tracklist.tracks[1]
+    track.coverart_url = "https://example.com/picked.jpg"
+    track.artwork_pinned = True
+    track.is_episode_cover = True
+    apply_edits(
+        sample_tracklist,
+        [{"index": 1, "artist": track.artist, "title": track.title, "timestamp": 200}],
+        None,
+    )
+    path = tmp_path / "set_tracklist.md"
+    save_tracklist(sample_tracklist, path, None)
+
+    reloaded, _ = _load_tracklist_with_artwork_urls(path)
+    moved = reloaded.tracks[1]
+    assert (moved.timestamp, moved.title) == (200, "Block Rockin' Beats")
+    assert moved.coverart_url == "https://example.com/picked.jpg"
+    assert moved.artwork_pinned and moved.is_episode_cover
+
+
+def test_post_save_reports_the_revision_a_reorder_bumps(sample_tracklist, tmp_path):
+    """A save that re-sorts the tracks bumps the revision; the response carries
+    it so the page reloads instead of 409ing on its next save."""
+    ctx = _ctx(sample_tracklist, tmp_path)
+    rows = [
+        {"index": i, "artist": t.artist, "title": t.title}
+        for i, t in enumerate(sample_tracklist.tracks)
+    ]
+
+    def save(tracks, revision):
+        req = urllib.request.Request(
+            base + "/api/save",
+            method="POST",
+            data=json.dumps({"revision": revision, "tracks": tracks}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req) as r:
+            return json.loads(r.read())
+
+    with running_server(ctx) as base:
+        same = save(rows, ctx.revision)
+        assert same["ok"] and same["revision"] == 0  # nothing moved past anything
+        rows[0]["timestamp"] = 400  # past two neighbours
+        moved = save(rows, 0)
+        assert moved["ok"] and moved["revision"] == 1
+    assert [t.timestamp for t in sample_tracklist.tracks] == [180, 360, 400, 540]

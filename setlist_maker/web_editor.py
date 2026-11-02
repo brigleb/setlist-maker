@@ -7,6 +7,7 @@ small JSON + audio API bound to loopback (``127.0.0.1``).
 """
 
 import json
+import math
 import re
 import threading
 import time
@@ -164,6 +165,17 @@ def _picked_artwork_url(edit: dict) -> str | None:
     return url
 
 
+def _moved_start(edit: dict, track: Track) -> int | None:
+    """The new start an indexed edit asks for, or None to leave it alone."""
+    value = edit.get("timestamp")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value < 0:  # JSON allows NaN and Infinity
+        return None
+    seconds = int(round(value))
+    return None if seconds == track.timestamp else seconds
+
+
 def apply_edits(
     tracklist: Tracklist,
     edits: list[dict],
@@ -178,6 +190,11 @@ def apply_edits(
     by their stable ``index``; an edit with no ``index`` is a track the user
     inserted in the page, which is appended and re-sorted into chronological
     position. Inserted tracks are not Shazam corrections, so none is recorded.
+    An existing track's ``timestamp`` moves its start (#55): a boundary edit,
+    not a correction. A value that isn't a whole number of seconds >= 0 leaves
+    the start where it was -- the insert path's "default to 0" would move an
+    existing track to the top of the set on a typo. The list is re-sorted
+    whenever a start moved, so the caller's order check sees any reordering.
     An optional ``summary`` (when omitted, the tracklist summary is left
     unchanged) replaces ``tracklist.summary``, normalized to a single
     paragraph; blank/None clears it.
@@ -198,6 +215,7 @@ def apply_edits(
 
     by_index = dict(enumerate(tracklist.tracks))
     inserted: list[Track] = []
+    moved = False
     chosen_cover: Track | None = None
     for edit in edits:
         new_artist = (edit.get("artist") or "").strip()
@@ -219,6 +237,10 @@ def apply_edits(
         track = by_index.get(edit.get("index"))
         if track is None:
             continue
+        moved_to = _moved_start(edit, track)
+        if moved_to is not None:
+            track.timestamp = moved_to
+            moved = True
         apply_track_edit(track, new_artist, new_title, corrections_db)
         track.rejected = bool(edit.get("rejected", track.rejected))
         if "coverart_url" in edit:
@@ -244,7 +266,7 @@ def apply_edits(
             if other is not chosen_cover:
                 other.is_episode_cover = False
 
-    if inserted:
+    if inserted or moved:
         tracklist.tracks.extend(inserted)
         tracklist.tracks.sort(key=lambda t: t.timestamp)  # stable: keeps load order on ties
 
@@ -510,7 +532,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         rejected = sum(1 for t in ctx.tracklist.tracks if t.rejected)
         edited = sum(1 for t in ctx.tracklist.tracks if t.was_corrected)
-        self._send_json({"ok": True, "rejected": rejected, "edited": edited})
+        # The revision, so a page whose save re-sorted the tracks (a moved
+        # start) knows its indices are stale and reloads before saving again.
+        self._send_json(
+            {"ok": True, "rejected": rejected, "edited": edited, "revision": ctx.revision}
+        )
 
     def do_GET(self) -> None:
         if self._reject_foreign_host():

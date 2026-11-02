@@ -9,8 +9,9 @@
 
 import { GRADS, S, TL } from "./state.js";
 import { fmt, parseTime } from "./util.js";
-import { playingIndex, setDuration } from "./model.js";
+import { clampStart, playingIndex, setDuration } from "./model.js";
 import { setDirty } from "./history.js";
+import { toast } from "./dom.js";
 import { playFrom } from "./player.js";
 import { artSrc, showArtwork, whenVisible } from "./artwork.js";
 import { render } from "./main.js";
@@ -57,21 +58,28 @@ function Thumb({ t, i }) {
     ${unknown ? "?" : ""}</div>`;
 }
 
-// Inline artist/title fields (and the time, for an inserted row). The typed
-// text lives in component state, so a re-render underneath -- the playing row
-// moving on, a sample landing -- keeps it. Enter moves on and finally commits;
-// Escape cancels; leaving the fields commits.
+// Inline artist, title and start fields. The typed text lives in component
+// state, so a re-render underneath -- the playing row moving on, a sample
+// landing -- keeps it. Enter moves on and finally commits; Escape cancels;
+// leaving the fields commits. An inserted row's start may land anywhere and
+// is sorted into place; an existing track's is kept between its neighbours
+// (clampStart), like a dragged boundary, so the list never reorders under it.
 function EditFields({ t }) {
   const isNew = !!t._new;
   const [artist, setArtist] = useState(t.artist);
   const [title, setTitle] = useState(t.title);
   const [time, setTime] = useState(t.time || fmt(t.timestamp));
+  // A start moved elsewhere while this is open (a drag, [ or ]) is the new
+  // value; committing the one seeded at mount would move the track back.
+  useEffect(() => setTime(t.time || fmt(t.timestamp)), [t.timestamp]);
   const wrap = useRef(null), artistIn = useRef(null), titleIn = useRef(null), timeIn = useRef(null);
   // Closing runs once: Enter commits and unmounts the fields, and the
   // focusout that follows must not commit a second time.
   const closed = useRef(false);
   // Into whichever cell was clicked.
-  useEffect(() => { (S.editField === "title" ? titleIn : artistIn).current.focus(); }, []);
+  useEffect(() => {
+    ({ title: titleIn, time: timeIn }[S.editField] || artistIn).current.focus();
+  }, []);
 
   const close = () => {
     closed.current = true;
@@ -86,14 +94,19 @@ function EditFields({ t }) {
       if (!isNew) t._edited = true;
       setDirty(true);
     }
+    const secs = parseTime(time);
+    if (secs === null && time.trim() !== t.time) toast("Start times look like 4:05 or 1:04:05");
     if (isNew) {
-      const secs = parseTime(time);
       if (secs !== null && secs !== t.timestamp) {
         t.timestamp = secs; setDirty(true);
         S.tracks.sort((x, y) => x.timestamp - y.timestamp);
       }
-      t.time = fmt(t.timestamp);
+    } else if (secs !== null) {
+      const at = clampStart(S.tracks.indexOf(t), secs);
+      if (at !== t.timestamp) { t.timestamp = at; setDirty(true); }
+      if (at !== secs) toast("Kept between its neighbours: starts at " + fmt(at));
     }
+    t.time = fmt(t.timestamp);
     close();
   };
   // Escape used to rebuild the list, which removed the focused input; Chrome
@@ -111,9 +124,9 @@ function EditFields({ t }) {
       <input ref=${artistIn} value=${artist} placeholder="Artist"
         onInput=${e => setArtist(e.target.value)} onKeyDown=${keys(titleIn)} />
       <input ref=${titleIn} value=${title} placeholder="Title"
-        onInput=${e => setTitle(e.target.value)} onKeyDown=${keys(isNew ? timeIn : null)} />
-      ${isNew && html`<input ref=${timeIn} class="timefield" value=${time} placeholder="MM:SS"
-        onInput=${e => setTime(e.target.value)} onKeyDown=${keys(null)} />`}
+        onInput=${e => setTitle(e.target.value)} onKeyDown=${keys(timeIn)} />
+      <input ref=${timeIn} class="timefield" value=${time} placeholder="MM:SS" aria-label="Start"
+        onInput=${e => setTime(e.target.value)} onKeyDown=${keys(null)} />
     </div>`;
 }
 
@@ -147,7 +160,7 @@ function Row({ t, i, playing, span, samples }) {
             <div class="artist" onClick=${() => startEdit(t, "artist")}>${t.artist || (unknown ? "Unidentified" : "")}</div>
             <div class="title" onClick=${() => startEdit(t, "title")}>${t.title || (unknown ? "add a label" : "")}</div>
           </div>`}
-      <span class="c-num time">${t.time}</span>
+      ${!editing && html`<span class="c-num time" onClick=${() => startEdit(t, "time")}>${t.time}</span>`}
       <span class="c-num len">${span === null ? "—" : fmt(span)}</span>
       <span class="c-num smp">${samples || ""}</span>
       <span class="star" title=${t.episode_cover ? "This track's artwork is the episode cover" : undefined}>${t.episode_cover ? "★" : ""}</span>

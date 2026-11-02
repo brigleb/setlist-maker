@@ -75,7 +75,7 @@ body.live .histbtn { display:none; }
 .row .idx, .row .len, .row .smp { color:var(--text-faint); font-size:12px; }
 .row .thumb { width:30px; height:30px; border-radius:5px; font-size:12px; }
 .row .meta { display:contents; }
-.row .artist, .row .title { cursor:text; }
+.row .artist, .row .title, .row .time { cursor:text; }
 .row .title { color:var(--text-soft); font-size:13px; }
 .acts { display:flex; justify-content:flex-end; gap:2px; }
 .row.rejected { opacity:.45; }
@@ -135,7 +135,7 @@ body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
 .title { color:var(--muted); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .row.rejected .artist, .row.rejected .title { text-decoration:line-through; }
 .row.unknown .artist { color:var(--warn); font-style:italic; }
-.editfields { grid-column:3 / 5; display:flex; gap:8px; min-width:0; }
+.editfields { grid-column:3 / 6; display:flex; gap:8px; min-width:0; }
 .editfields input { flex:1; min-width:0; font:inherit; font-size:13px; padding:4px 8px; border:1px solid var(--input-border); border-radius:6px; background:var(--card); color:var(--text); }
 .time { color:var(--text-faint); font-size:12px; font-variant-numeric:tabular-nums; }
 .iconbtn { background:none; border:none; cursor:pointer; font-size:14px; padding:2px 4px; line-height:1; }
@@ -211,6 +211,14 @@ body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
 .tl-playhead { position:absolute; top:14px; bottom:0; width:0; border-left:2px solid var(--accent); pointer-events:none; z-index:8; }
 .tl-cursor { position:absolute; top:-18px; transform:translateX(-50%); background:var(--accent); color:#fff; font-size:10px; padding:1px 5px; border-radius:4px; pointer-events:none; white-space:nowrap; z-index:9; font-variant-numeric:tabular-nums; }
 .tl-cursor.split { background:var(--warn); }
+/* A block's left-edge handle: drag to move that track's start (#55). It sits
+   above the blocks, the seams and the never-sampled hatching, and shows a bar
+   on hover so the target reads before it is pressed. */
+.tl-edge { position:absolute; top:0; bottom:0; width:9px; margin-left:-4px; cursor:col-resize; z-index:4; touch-action:none; }
+.tl-edge::after { content:""; position:absolute; left:3px; width:3px; top:0; bottom:0; border-radius:2px; background:var(--accent); opacity:0; transition:opacity .1s; }
+.tl-edge:hover::after, body.tl-dragging .tl-edge.sel::after { opacity:1; }
+.tl-dragtip { position:fixed; transform:translate(-50%, -100%); z-index:40; }
+body.tl-dragging, body.tl-dragging * { cursor:col-resize !important; user-select:none; }
 .tl-legend { display:flex; gap:14px; flex-wrap:wrap; flex:none; color:var(--muted); font-size:11px; padding:4px 0 2px 42px; }
 .tl-legend i { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--text); margin-right:4px; vertical-align:middle; }
 .tl-legend i.refine { background:var(--accent); width:5px; height:5px; }
@@ -238,6 +246,9 @@ body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
 #insp input { width:100%; font:inherit; font-size:14px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); }
 #insp input:focus { outline:none; border-color:var(--input-border); background:var(--focus-bg); }
 #insp input.in-title { font-weight:600; }
+#insp input.in-start { width:7em; font-variant-numeric:tabular-nums; }
+.in-start-row { display:flex; align-items:center; gap:8px; }
+.in-start-row .in-note { margin-top:0; }
 .in-variant { display:flex; gap:8px; align-items:center; padding:4px 0; font-size:12.5px; }
 .in-variant .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .in-variant .ct { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
@@ -265,7 +276,7 @@ body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
 #livepill { display:none; margin-left:8px; font-size:11px; font-weight:600; color:#fff; background:#d9433b; padding:2px 8px; border-radius:10px; vertical-align:middle; }
 #livepill::before { content:"● "; animation:tl-pulse 1.2s infinite; }
 body.live #livepill { display:inline-block; }
-body.live #list .artist, body.live #list .title { cursor:default; }
+body.live #list .artist, body.live #list .title, body.live #list .time { cursor:default; }
 body.live #list .iconbtn.reject, body.live #list .iconbtn.add, body.live #artwork-tools { display:none; }
 .tl-pin.next::after { background:#d9433b; animation:tl-pulse 1s infinite; }
 /* A narrow window: the inspector slides over the list instead of squeezing it. */
