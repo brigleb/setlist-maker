@@ -8,6 +8,7 @@ import { SKIP_SECONDS, nextTrack, prevTrack, skip } from "./player.js";
 import { moveStart, splitAt, startOf } from "./edits.js";
 import { identifyAt } from "./inspector.js";
 import { overlay } from "./artwork.js";
+import { zoomAll, zoomBy, zoomToTrack } from "./grid.js";
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && overlay.classList.contains("open")) { overlay.click(); return; }
@@ -43,6 +44,11 @@ document.addEventListener("keydown", (e) => {
     if (!moveStart(t, startOf(t) + nudge)) toast("It can't move any further: it would pass the track next to it");
     return;
   }
+  // The timeline's zoom (#57): Z fits the selected track, 0 the whole set,
+  // = and - zoom in and out around the middle. No audio needed either.
+  const zoom = { z: () => zoomToTrack(S.selectedTrack), Z: () => zoomToTrack(S.selectedTrack), 0: zoomAll,
+                 "=": () => zoomBy(0.5), "+": () => zoomBy(0.5), "-": () => zoomBy(2) }[e.key];
+  if (zoom) { e.preventDefault(); zoom(); return; }
   if (playerEl.classList.contains("disabled")) return;
   switch (e.key) {
     case " ":

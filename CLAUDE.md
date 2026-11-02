@@ -472,7 +472,8 @@ CLI application with the following modules:
   state, not the page's live fields, so the preview always reflects what would be
   embedded), `GET /api/artwork/options?index=N` (the picker's candidate list — see
   **Artwork curation** below), `POST /api/done` (graceful shutdown → returns control
-  to the CLI), `GET /api/probes` + `GET /timeline.js` (the timeline -- see below),
+  to the CLI), `GET /api/probes` + `GET /timeline.js` (the timeline -- see below), `GET /api/peaks` (the
+  waveform, see `peaks.py`),
   `POST /api/sample` (click-to-sample, see `sampler.py`), and the upload / episode cover /
   embed endpoints described under `uploads.py`. Both artwork endpoints resolve
   `index` through the shared `_track_for_query()`, so they answer for exactly the same set of tracks and 404 alike.
@@ -585,9 +586,28 @@ CLI application with the following modules:
   `render()` also calls `syncPlayerBar()` so the player bar's label, count and
   artwork stay correct after an edit or insert.
   Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, [ / ] nudge the selected track's start by 1s
-  (⇧ for 5s, which arrives as { / }), all suppressed while focus is in an
+  (⇧ for 5s, which arrives as { / }), Z / 0 / = / - zoom the timeline, all suppressed while
+  focus is in an
   input/textarea — except `#seek`, a range input that's deliberately exempted
   so the arrows still seek when the scrubber has focus.
+
+### `setlist_maker/peaks.py` - Waveform peaks (#57)
+
+- `GET /api/peaks` serves int8 (min, max) pairs at `PEAK_RATE` (50/s) behind a small header
+  (`"SMPK"`, version, rate, count, duration). That is 1.4MB for four hours, and finer than the
+  timeline's deepest zoom.
+- **Never `load_audio()`.** ffmpeg decodes to 8kHz mono s16 on a pipe and `audioop.minmax`
+  reduces each bin in C (audioop-lts on 3.13+, already a dependency; the 3.11-3.12 deprecation
+  warning is silenced at import). Decoding the MP3 is the slow part, ~9-10s for four hours on
+  one thread, so the file is cut into `SEGMENTS` (8) stretches of whole seconds decoded in
+  parallel: ~4s. Each stretch is padded or trimmed to exactly its bins so a stretch that decodes
+  a few samples long cannot shift the ones after it. Measured on the real CBR set against a
+  single pass: 19 bytes of 1.4M differ, all at the seams.
+- Cached in `$XDG_CACHE_HOME/setlist-maker/peaks`, keyed on the resolved path, mtime and size,
+  with one lock per key so a reload during the first computation waits rather than starting a
+  second fan-out. Embed rewrites the MP3's tag, so the first request after an Embed recomputes.
+- The page fetches it once, after the tracklist, and draws without it meanwhile ("reading the
+  waveform…" in the stats). A set with no audio gets a 404 and simply has no waveform.
 
 ### `setlist_maker/fileio.py` - Atomic writes and the config directory
 
@@ -729,6 +749,32 @@ CLI application with the following modules:
 
 ### `setlist_maker/web_timeline.js` + the editor's timeline
 
+- **One zoomable row (#57).** The timeline is one row over the whole set, not a row per hour.
+  `grid.js` holds `view = { start, span }`, and every position goes through it: blocks, pins,
+  the ruler, the playhead, the hover cursor, a click, a double-click, ⌥-click and the edge drag
+  (`timeAt()` / `tAtX()`). ⌘-scroll or a pinch (a wheel event with `ctrlKey`) zooms around the
+  pointer, and scrolling pans. `Z` fits the selected track, `0` the whole set, `=`/`-` zoom
+  around the middle. It goes from the whole set down to `TL.MIN_SPP` (0.05 s/px), and
+  `TL.clampView` / `zoomAt` / `tickStep` are the pure, Node-tested maths. Selecting a track
+  pans the view to it, at the same zoom, when none of it shows. Playback that runs off the
+  right edge of a view it was inside pages the view on; a view elsewhere is left alone.
+  - `paintView()` is everything that moves with the view and runs once per animation frame
+    while panning (`requestPaint()`). `renderTimeline()` is for model changes: it also redraws
+    the overview strip, the stats, the inspector and the queue. Measured on the 4-hour set,
+    a pan frame is ~8ms.
+  - The overview strip `#tl-mini` is a canvas: each kept track's colour along the top, the
+    whole set's waveform under it, and `#tl-mini-box` showing the view. Pressing outside the box
+    centres the view there; dragging moves it; double-click fits the set.
+  - The waveform is a canvas behind translucent blocks (`#tl-wave`). `TL.peakLevels` halves the
+    peaks repeatedly and `TL.peakColumns` reads about one pair per device pixel, so any view
+    costs about the same. Its colour is the `--wave` token, read from the stylesheet and
+    re-read when the colour scheme changes. Canvases sit in static markup, outside the Preact
+    roots (`#tl-ruler`, `#tl-blocks`, `#tl-pins`), so a render never resets them.
+  - A block wide enough shows its name, and wider still its artwork (capped at 56px). The old
+    art lane, and the thumbnails that overlapped and scaled up on hover, are gone.
+  - The player's scrubber has the same waveform for the playing track's window on a canvas
+    above the native range input (`#seek-wave`), the played part in the accent colour.
+
 - **The tracklist is the truth; probes are evidence laid over it.** The grid's blocks come from
   `tracks[]` (each track's window is the player's own `windowFor()` rule, via `Timeline.windows`)
   and each probe from `GET /api/probes` is joined to whichever window holds its *midpoint*. It
@@ -799,19 +845,19 @@ CLI application with the following modules:
   wins. An existing row's typed start is clamped the same way; only an *inserted* row's is
   sorted into place. `edits.moveStart()` is the one recorded move, used by the `[`/`]` keys,
   the inspector's Start field and the end of a drag.
-  - **Dragging.** Each kept block has a `.tl-edge` handle on its left edge, drawn in the hour
-    that holds its start (`.tl-seam` is a merged row's marker and takes no pointer events).
-    `pointerdown` captures on `#tl-rows`, not the handle: the handle is re-created when the
-    boundary crosses into another hour, and capture would go with it. The time under the pointer
-    comes from `elementFromPoint`, so a drag can cross hours. The drag previews with
+  - **Dragging.** Each kept block has a `.tl-edge` handle on its left edge while its start is
+    in view (`.tl-seam` is a merged row's marker and takes no pointer events). `pointerdown`
+    captures on `#tl-rows`, not the handle: the handle is dropped when the boundary leaves the
+    view, and capture would go with it. A start outside the view is reached by zooming out
+    first; the drag does not pan. The drag previews with
     `previewStart()` (unrecorded) once per animation frame, then puts the start back and commits
     with `moveStart()` on release, so one drag is one undo step. Escape cancels. Release plays
     from 5s before the new cut.
   - It snaps within 6px to `TL.snapPoints(probes)`: between two neighbouring identified probes
     with different identities, the midpoint of the gap between their centred 10s excerpts. ⌥
     turns snapping off, which is why the click handler ignores `.tl-edge`: otherwise a ⌥-drag
-    ends in a ⌥-click, which splits. Snapping to quiet points in the audio waits for the
-    waveform (#57).
+    ends in a ⌥-click, which splits. Snapping to quiet points in the waveform's peaks is not
+    built yet.
 - **Splitting** is one function, `splitAt(track, seconds)`, reached three ways: the inspector's
   button (selected track, playhead), **S** (whichever kept track holds the playhead -- automatic
   advance does not select, so the selection may be elsewhere) and **Alt-click** on a block (that

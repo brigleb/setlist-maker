@@ -30,8 +30,22 @@
       <div class="tl-stats" id="tl-stats"></div>
       <button id="tl-replay" class="tbtn" type="button" title="Drop the samples in again, in the order the run asked for them">▶ Replay the run</button>
     </div>
-    <div id="tl-rows"></div>
-    <div class="tl-legend"><span><i></i>30s sample</span><span><i class="refine"></i>12s refine</span><span><i class="miss"></i>heard nothing</span><span><i class="manual"></i>you asked</span><span id="tl-hint">click a track to inspect · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard</span></div>
+    <div id="tl-rows">
+      <div id="tl-mini" title="The whole set: drag the box to move the view, double-click to see it all">
+        <canvas id="tl-mini-wave"></canvas>
+        <div id="tl-mini-box" hidden></div>
+      </div>
+      <div id="tl-view">
+        <div id="tl-ruler" class="tl-ruler"></div>
+        <div id="tl-band">
+          <canvas id="tl-wave"></canvas>
+          <div id="tl-blocks" class="tl-blocks"></div>
+        </div>
+        <div id="tl-pins" class="tl-pins"></div>
+        <div class="tl-playhead" hidden></div>
+      </div>
+    </div>
+    <div class="tl-legend"><span><i></i>30s sample</span><span><i class="refine"></i>12s refine</span><span><i class="miss"></i>heard nothing</span><span><i class="manual"></i>you asked</span><span id="tl-hint">⌘-scroll or pinch to zoom · scroll to pan · Z fits the selected track, 0 the whole set · click a track to inspect · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard</span></div>
   </section>
   <div id="split-tl" class="divider rows" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" tabindex="0"></div>
   <div id="work">
@@ -85,6 +99,7 @@
         <div id="plabel">Nothing playing</div>
         <div id="pcount"></div>
       </div>
+      <canvas id="seek-wave" aria-hidden="true" hidden></canvas>
       <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek within track">
       <div id="pfoot">
         <div id="ppos">—</div>

@@ -1,6 +1,6 @@
 // The <audio> transport: track windows, the scrubber, prev/next.
 
-import { GRADS, S } from "./state.js";
+import { GRADS, S, TL } from "./state.js";
 import { audio, playerEl, pplayEl } from "./dom.js";
 import { fmt } from "./util.js";
 import { fmtWindowTimes, playingIndex, trackIndexAt, windowFor } from "./model.js";
@@ -91,19 +91,53 @@ export function nextTrack() {
 // so defining it after would leave a temporal-dead-zone trap for any future
 // caller that runs earlier than these listeners.
 export let seekDragging = false;
+// The scrubber's waveform strip (drawSeekWave, below); declared here for the
+// same reason.
+const seekWave = document.getElementById("seek-wave");
 
 // Reflect audio state into the bar. Called on timeupdate and after any seek.
 export function syncPlayerUI() {
   const seek = document.getElementById("seek");
   document.getElementById("ptime").textContent =
     fmt(audio.currentTime) + " / " + fmt(audio.duration);
+  // The strip keeps its height from the moment there is a waveform, so the
+  // bar does not grow when playback first starts.
+  seekWave.hidden = !S.peaks || !TL;
   const p = playingIndex();
   if (p === null) return;
   const w = windowFor(p);
   const frac = Math.max(0, Math.min((audio.currentTime - w.start) / w.length, 1));
   if (!seekDragging) seek.value = String(Math.round(frac * 1000));
+  drawSeekWave(w, frac);
   const times = fmtWindowTimes(p, audio.currentTime);
   document.getElementById("ppos").textContent = times.into + " · " + times.left;
+}
+
+// The scrubber's picture of the audio (#57): the playing track's window, the
+// played part in the accent colour, and a tick at each boundary. A canvas
+// above the native range input rather than a restyled track, which would
+// lose the input's system look.
+function drawSeekWave(w, frac) {
+  if (seekWave.hidden) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.round(seekWave.clientWidth * dpr), ch = Math.round(seekWave.clientHeight * dpr);
+  if (!cw || !ch) return;
+  if (seekWave.width !== cw) seekWave.width = cw;
+  if (seekWave.height !== ch) seekWave.height = ch;
+  const g = seekWave.getContext("2d");
+  g.clearRect(0, 0, cw, ch);
+  const cs = getComputedStyle(document.documentElement);
+  const wave = cs.getPropertyValue("--player-muted").trim(), accent = cs.getPropertyValue("--accent").trim();
+  const cols = TL.peakColumns(S.peaks.levels, S.peaks.rate, w.start, w.length, cw);
+  const played = Math.round(frac * cw), mid = ch / 2, k = (ch / 2 - 1) / 128;
+  for (let x = 0; x < cw; x++) {
+    const lo = cols[2 * x], hi = cols[2 * x + 1];
+    g.fillStyle = x < played ? accent : wave;
+    g.fillRect(x, mid - hi * k, 1, Math.max(1, (hi - lo) * k));
+  }
+  g.fillStyle = accent;
+  g.fillRect(0, 0, Math.ceil(dpr), ch);
+  g.fillRect(cw - Math.ceil(dpr), 0, Math.ceil(dpr), ch);
 }
 
 pplayEl.onclick = () => { if (audio.paused) audio.play(); else audio.pause(); };
