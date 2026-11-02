@@ -71,10 +71,16 @@ def test_page_wiring():
         "panel-queue",
         "split-tl",
         "split-side",
+        "keys-overlay",  # the shortcut sheet (#58)
+        "keys-btn",
+        "pfollow",
     ):
         assert f'id="{element_id}"' in html, f"missing #{element_id}"
     # The header is a sibling of #list: Preact owns everything inside #list.
-    assert html.index('id="list-head"') < html.index('<main id="list">')
+    assert html.index('id="list-head"') < html.index('<main id="list"')
+    # The keys are one table, and the sheet is built from it, so the old
+    # prose hint under the timeline is gone rather than kept in step (#58).
+    assert 'id="tl-hint"' not in html and 'role="listbox"' in html
 
     # Artwork. A saved edit changes the composite, so thumbs cache-bust on a
     # version bumped at save, or Chrome reuses the pre-edit image.

@@ -25,6 +25,13 @@ export function seekTo(seconds) {
 export function setPlayingIndex(i, opts) {
   if (i === null || !S.tracks[i]) return;
   S.playingTrack = S.tracks[i];
+  // Follow the playhead (#58): the selection moves with the audio. Before
+  // the scroll below, so the playing row's centring is the scroll that wins.
+  // Never while a field has focus: the inspector would change track under
+  // the text being typed.
+  if (S.follow && S.selectedTrack !== S.playingTrack && !typingInField()) {
+    selectTrack(S.playingTrack, { keepTab: true });
+  }
   syncPlayerBar();
   renderList();  // the .playing row
   if (opts && opts.scroll) scrollToPlaying();
@@ -56,7 +63,7 @@ export function playFrom(i, opts) {
   setPlayingIndex(i, { scroll });
   // Choosing to play a track is choosing to look at it; automatic advance
   // (setPlayingIndex from timeupdate) deliberately does not move the selection.
-  selectTrack(S.tracks[i], { keepTab: true });  // playing is not inspecting: ↑/↓ leave the tab alone
+  selectTrack(S.tracks[i], { keepTab: true });  // playing is not inspecting: ⌥↑/⌥↓ leave the tab alone
   // Capture the track now, not inside start(): if metadata is still
   // loading, start() runs later and a re-indexed `tracks[i]` at that point
   // could be a different track (or throw if tracks was replaced by load()).
@@ -67,6 +74,46 @@ export function playFrom(i, opts) {
 }
 
 export function skip(delta) { seekTo(audio.currentTime + delta); }
+
+// ⇧Space: the selected track from its start, which is choosing to play it.
+export function playSelected() {
+  const i = S.tracks.indexOf(S.selectedTrack);
+  if (i !== -1) playFrom(i, { scroll: false });
+}
+
+// J / K / L. A browser can't play audio backwards, so J slows a fast shuttle
+// down and otherwise steps back. Any pause drops back to 1x (below).
+export const SHUTTLE_RATES = [1, 1.5, 2];
+export function shuttle(k) {
+  const at = SHUTTLE_RATES.indexOf(audio.playbackRate);
+  if (k === "k") audio.pause();
+  else if (k === "l") {
+    if (audio.paused) audio.play();
+    else audio.playbackRate = SHUTTLE_RATES[Math.min(SHUTTLE_RATES.length - 1, at + 1)];
+  } else if (!audio.paused && at > 0) audio.playbackRate = SHUTTLE_RATES[at - 1];
+  else skip(-5);
+}
+
+// Follow the playhead, remembered per browser.
+const followEl = document.getElementById("pfollow");
+function readFollow() {
+  try { return localStorage.getItem("player.follow") === "1"; } catch (e) { return false; }
+}
+export function toggleFollow(on = !S.follow) {
+  S.follow = on;
+  try { localStorage.setItem("player.follow", on ? "1" : "0"); } catch (e) { /* private window */ }
+  followEl.setAttribute("aria-pressed", String(on));
+  followEl.classList.toggle("on", on);
+  if (on && S.playingTrack && S.selectedTrack !== S.playingTrack) selectTrack(S.playingTrack, { keepTab: true });
+}
+followEl.onclick = () => toggleFollow();
+// Deferred like onMetadata below: selectTrack reads other modules' state.
+queueMicrotask(() => { if (readFollow()) toggleFollow(true); });
+
+function typingInField() {
+  const f = document.activeElement;
+  return !!f && (f.tagName === "TEXTAREA" || (f.tagName === "INPUT" && f.type !== "range"));
+}
 
 // Prev/next step through `tracks` by position, so rejected tracks are included
 // -- a track is often auditioned before the decision to un-reject it.
@@ -97,7 +144,8 @@ const seekWave = document.getElementById("seek-wave");
 export function syncPlayerUI() {
   const seek = document.getElementById("seek");
   document.getElementById("ptime").textContent =
-    fmt(audio.currentTime) + " / " + fmt(audio.duration);
+    fmt(audio.currentTime) + " / " + fmt(audio.duration)
+    + (audio.playbackRate !== 1 ? " · " + audio.playbackRate + "×" : "");
   // The strip keeps its height from the moment there is a waveform, so the
   // bar does not grow when playback first starts.
   seekWave.hidden = !S.peaks || !TL;
@@ -145,7 +193,8 @@ document.getElementById("pprev").onclick = prevTrack;
 document.getElementById("pnext").onclick = nextTrack;
 
 audio.addEventListener("play", () => pplayEl.textContent = "⏸");
-audio.addEventListener("pause", () => pplayEl.textContent = "▶");
+audio.addEventListener("pause", () => { pplayEl.textContent = "▶"; audio.playbackRate = 1; });
+audio.addEventListener("ratechange", () => syncPlayerUI());
 function onMetadata() {
   playerEl.classList.remove("disabled");
   syncPlayerUI();

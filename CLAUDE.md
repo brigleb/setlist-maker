@@ -599,11 +599,8 @@ CLI application with the following modules:
   for a row's own ▶ button, since that row is already under the cursor.
   `render()` also calls `syncPlayerBar()` so the player bar's label, count and
   artwork stay correct after an edit or insert.
-  Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, [ / ] nudge the selected track's start by 1s
-  (⇧ for 5s, which arrives as { / }), Z / 0 / = / - zoom the timeline, all suppressed while
-  focus is in an
-  input/textarea — except `#seek`, a range input that's deliberately exempted
-  so the arrows still seek when the scrubber has focus.
+  Keyboard: see **The keyboard map (#58)** under `setlist_maker/web/`. Prev/next is ⌥↑/⌥↓
+  there, since ↑/↓ move the selection.
 
 ### `setlist_maker/peaks.py` - Waveform peaks (#57)
 
@@ -742,9 +739,33 @@ CLI application with the following modules:
     and unsubscribe in their effect's cleanup; until then `artFor(t, i, false)` is just the
     gradient.
 - Inline editing is `S.editing` (a track object, plus `S.editField`, the cell that was clicked)
-  rather than DOM surgery. **Escape cancels.**
+  rather than DOM surgery. **Escape cancels.** From the keyboard (`S.editSelect`) the field's
+  text starts selected, and Enter selects the next field's, so typing replaces the name; Enter
+  and Escape hand focus back to the row.
   It used to commit: the old Escape rebuilt the list, Chrome fires `focusout` when the focused
   input is removed, and the commit-on-leave handler then saved what had been typed.
+- **The keyboard map (#58).** `keys.js`'s `KEYMAP` is one table of `{ group, keys, label, match,
+  need, run }`, and both the dispatcher and the `?` sheet (`#keys-overlay`, built on first open)
+  read it, so the sheet can't drift; mouse gestures are the static `MOUSE` list beside it, which
+  replaced the prose hint under the timeline. The first entry that matches wins (⇧Space above
+  Space), `need` gates on the player or a selection, and a `run` returning `false` lets the key
+  through. ↑/↓ move the **selection**, not the audio. Enter/F2 rename, ⌫ / ⇧⌫ merge into the
+  previous / next track with the inspector's gates (on a merged row, ⌫ brings it back), ←/→ seek
+  5s (⇧ 15s, ⌥ 1s), J/K/L shuttle (no reverse in a browser, so J slows a fast shuttle or steps
+  back 5s; any pause drops to 1x), F follows the playhead.
+  - The guard order matters: the sheet and the artwork panel own the keyboard while open; then
+    ⌘S, *before* the input guard, since a field holds a draft until it blurs (the list commits on
+    a timeout), so ⌘S blurs it and saves on the next tick; then the guard, which checks the
+    event's **target** as well as the focus, because a field's Enter can move focus to its row
+    before the event bubbles here, and would then rename that row again; then ⌘Z, past the
+    guard so a field keeps its own undo. Space and Enter yield to a focused button.
+  - The list is a `listbox` of `option` rows with a roving `tabindex`: the selected row (or the
+    first) is the one tab stop, and the rows' buttons are out of the tab order. Keyboard
+    selection focuses the row (`focusSelected()`, `preventScroll`) and scrolls with
+    `revealSelected()`'s `block:"nearest"`; rows have `scroll-margin-top` for the sticky header.
+    `load()` puts focus back on the selected row when a reload remounted it under the user.
+  - Two row markers: the selection is the background (deeper while the list has focus), and
+    playing is the accent bar on the left edge.
 - **The app shell (#54).** The body is a full-window CSS grid: toolbar, timeline, divider, then
   the tracklist beside the inspector, then the player as an ordinary grid row. `html` and `body`
   are `overflow:hidden`; only the panes scroll. `shell.js` owns the inspector's tabs (Track, Set,
@@ -875,7 +896,8 @@ CLI application with the following modules:
 - **Splitting** is one function, `splitAt(track, seconds)`, reached three ways: the inspector's
   button (selected track, playhead), **S** (whichever kept track holds the playhead -- automatic
   advance does not select, so the selection may be elsewhere) and **Alt-click** on a block (that
-  block, pointer position). S leaves focus alone so Space and the arrows keep driving playback.
+  block, pointer position). S focuses the new row (not its fields), so Space and the arrows keep
+  driving playback and Enter names it.
   The new row is inserted in timestamp order, since a kept window runs over merged rows.
 - **Identify at playhead** (inspector button, **I**) is `identifyAt(track, seconds)`: a
   `sampleAt()` centred on the playhead, then `setNames()` -- an ordinary, undoable edit. The track
@@ -885,7 +907,9 @@ CLI application with the following modules:
   user's own correction; declining leaves the answer in "Shazam heard" with its Use button.
   Live mode only samples: nothing may be edited under the run.
 - Selection is an object reference (`selectedTrack`), like `playingTrack`/`artTrack`. Choosing
-  to play a track selects it; automatic advance does not. During a replay the inspector and the
+  to play a track selects it; automatic advance does not, unless **Follow** is on (`S.follow`, F,
+  the player bar's toggle, kept in `localStorage`), and never while a text field has focus, or
+  the inspector would change track under the typing. During a replay the inspector and the
   queue skip the redraws: they describe every sample, not the replay's subset.
 
 ### `setlist_maker/sampler.py` - Click-to-sample

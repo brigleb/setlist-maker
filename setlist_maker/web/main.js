@@ -4,7 +4,7 @@ import { S, TL } from "./state.js";
 import { audio, autosizeSummary, epArtist, epTitle, summaryEl, toast } from "./dom.js";
 import { playingIndex, setDuration, trackIndexAt, windowFor } from "./model.js";
 import { resetHistory, setDirty } from "./history.js";
-import { renderList } from "./list.js";
+import { focusSelected, renderList } from "./list.js";
 import { syncPlayerBar } from "./player.js";
 import { loadPeaks, loadProbes, renderTimeline } from "./grid.js";
 import { closeArtwork, overlay, renderCover } from "./artwork.js";
@@ -24,6 +24,8 @@ export async function load() {
   const was = S.selectedTrack;
   // ...and the player by position: a reload keeps the order.
   const playing = playingIndex();
+  // Every row remounts, so focus on one (⌘S from the list) is put back.
+  const listFocused = !!document.activeElement && !!document.activeElement.closest("#list");
   setLive(!!data.live);
   // Every object is new, and an index may now name another track (a live
   // run finishing, a save that inserted rows): no thumb may reuse an old URL.
@@ -44,6 +46,7 @@ export async function load() {
   S.canEmbed = !!data.can_embed;
   resetHistory();
   render();
+  if (listFocused) focusSelected();
   loadProbes();
   loadPeaks();  // once a page; slow the first time a set is opened (peaks.py)
 }
