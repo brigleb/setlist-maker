@@ -87,7 +87,10 @@ function Hour({ h, W, kept, shown, gaps }) {
         style=${{ left: at(w.start), backgroundImage: bg }} title=${trackName(t) + " · " + TL.fmt(w.start)} />`);
     }
   }
-  const seams = S.tracks.map((t, i) => (!t.rejected || W[i].start < a || W[i].start >= b) ? null
+  // A row merged into the next track starts that track's block (#56): its
+  // seam would sit on the block's own edge, so it has none.
+  const starts = new Set(kept.map(w => w.start));
+  const seams = S.tracks.map((t, i) => (!t.rejected || starts.has(W[i].start) || W[i].start < a || W[i].start >= b) ? null
     : html`<div key=${"seam" + keyOf(t)} class=${"tl-seam" + sel(t)} data-i=${i} style=${{ left: at(W[i].start) }} />`);
   const unheard = gaps.map(([x0, y0], n) => (y0 <= a || x0 >= b) ? null
     : html`<div key=${"gap" + n} class="tl-unheard" title=${"Never sampled: " + TL.fmt(x0) + "–" + TL.fmt(y0)}
@@ -181,7 +184,7 @@ export function updatePlayhead() {
   const ident = document.querySelector("#insp .in-identify");
   if (S.selectedTrack && (split || ident)) {
     const w = splitWindow(S.selectedTrack);
-    if (split) split.disabled = !(t > w.start + 1 && t < w.end - 1);
+    if (split) split.disabled = !(t > Math.max(w.start, S.selectedTrack.timestamp) + 1 && t < w.end - 1);
     if (ident) ident.disabled = !S.canSample || !(t >= w.start && t < w.end);
   }
 }
@@ -291,7 +294,7 @@ function dragReadout(t, x, lanes) {
   const kept = TL.keptWindows(S.tracks, D);
   const k = kept.findIndex(w => S.tracks[w.index] === t);
   const len = w => (w ? TL.fmt(w.end - w.start) : "—");
-  drag.tip.textContent = "Start " + TL.fmt(t.timestamp) + " · previous " + len(kept[k - 1]) + " · this " + len(kept[k])
+  drag.tip.textContent = "Start " + TL.fmt(kept[k] ? kept[k].start : t.timestamp) + " · previous " + len(kept[k - 1]) + " · this " + len(kept[k])
     + (drag.snapped ? " · snapped" : "");
   const r = lanes.getBoundingClientRect();
   drag.tip.style.left = x + "px";
@@ -323,19 +326,22 @@ tlRows.addEventListener("pointerdown", e => {
   const edge = e.target.closest(".tl-edge");
   if (!edge || e.button !== 0 || S.liveMode) return;
   e.preventDefault();
-  const t = S.tracks[+edge.dataset.i];
-  if (!t) return;
+  const owner = S.tracks[+edge.dataset.i];
+  if (!owner) return;
+  // The row whose timestamp is the block's start: the track's own, or the
+  // first row merged into it from before (#56).
+  const t = S.tracks[TL.startIndex(S.tracks, +edge.dataset.i)];
   // Captured on the container, not the handle: Preact replaces the handle
   // when the boundary crosses into another hour, and capture would go with it.
   tlRows.setPointerCapture(e.pointerId);
   const tip = el("div", "tl-cursor tl-dragtip");
   document.body.appendChild(tip);
-  drag = { t, from: t.timestamp, home: edge.closest(".tl-lanes"), snaps: TL.snapPoints(S.probes),
+  drag = { t, owner, from: t.timestamp, home: edge.closest(".tl-lanes"), snaps: TL.snapPoints(S.probes),
            tip, pointerId: e.pointerId, snapped: false, frame: 0 };
   document.body.classList.add("tl-dragging");
   document.addEventListener("keydown", onDragKey, true);
-  selectTrack(t);
-  dragReadout(t, e.clientX, drag.home);
+  selectTrack(owner);
+  dragReadout(owner, e.clientX, drag.home);
 });
 
 tlRows.addEventListener("pointermove", e => {
@@ -357,7 +363,7 @@ tlRows.addEventListener("pointermove", e => {
     previewStart(drag.t, clampStart(i, at));
     renderList();
     renderTimeline();
-    dragReadout(drag.t, x, lanes);
+    dragReadout(drag.owner, x, lanes);
   });
 });
 

@@ -238,3 +238,96 @@ def test_snap_points_sit_between_the_excerpts_where_the_answer_changes():
         probe(130, "B", "Two", window=12.0),
     ]
     assert js("T.snapPoints(probes)", probes=probes) == [125.5]
+
+
+# ---- merging into the following track (#56) ----
+
+
+def merged_next(ts, artist="", title=""):
+    return {**track(ts, artist, title, rejected=True), "merged": "next"}
+
+
+def test_a_row_merged_into_next_moves_that_tracks_start_back():
+    tracks = [track(0, "A", "a"), merged_next(100, "X", "x"), track(300, "B", "b")]
+    got = js("T.keptWindows(tracks, 500)", tracks=tracks)
+    assert got == [{"index": 0, "start": 0, "end": 100}, {"index": 2, "start": 100, "end": 500}]
+    assert js("T.startIndex(tracks, 2)", tracks=tracks) == 1
+    assert js("T.startIndex(tracks, 0)", tracks=tracks) == 0
+
+
+def test_the_first_track_merged_into_the_second_leaves_nothing_unowned():
+    tracks = [merged_next(0, "Intro", "x"), track(40, "B", "b"), track(300, "C", "c")]
+    got = js("T.keptWindows(tracks, 500)", tracks=tracks)
+    assert got[0] == {"index": 1, "start": 0, "end": 300}
+
+
+def test_a_mixed_run_splits_at_the_first_row_merged_into_next():
+    # Rows go to the earlier track up to the first "next", then to the later
+    # one, so both windows stay contiguous.
+    tracks = [
+        track(0, "A", "a"),
+        track(50, "R", "r", rejected=True),
+        merged_next(100, "S", "s"),
+        track(150, "Q", "q", rejected=True),
+        track(300, "B", "b"),
+    ]
+    got = js("T.keptWindows(tracks, 500)", tracks=tracks)
+    assert got == [{"index": 0, "start": 0, "end": 100}, {"index": 4, "start": 100, "end": 500}]
+    assert js("T.owners(tracks, 500)", tracks=tracks) == [0, 0, 4, 4, 4]
+
+
+def test_merged_into_next_with_no_kept_track_after_stays_with_the_one_before():
+    tracks = [track(0, "A", "a"), merged_next(100, "X", "x")]
+    assert js("T.keptWindows(tracks, 500)", tracks=tracks) == [{"index": 0, "start": 0, "end": 500}]
+    assert js("T.owners(tracks, 500)", tracks=tracks) == [0, 0]
+
+
+def test_a_merge_into_next_pools_the_rows_evidence_into_that_track():
+    tracks = [track(0, "A", "a"), merged_next(100, "X", "x"), track(130, "B", "b")]
+    probes = [probe(95, "X", "x"), probe(140, "B", "b")]
+    got = js("T.joinProbes(tracks, probes, 500)", tracks=tracks, probes=probes)
+    assert [len(p) for p in got] == [0, 1, 2]
+
+
+def short_fix(tracks, probes, duration=900):
+    issues = js("T.findIssues(tracks, probes, d)", tracks=tracks, probes=probes, d=duration)
+    return [i for i in issues if i["kind"] == "short"]
+
+
+def test_a_short_first_track_offers_merge_down_only():
+    tracks = [track(0, "X", "x"), track(20, "B", "b"), track(400, "C", "c")]
+    [short] = short_fix(tracks, [])
+    assert short["index"] == 0
+    assert short["fix"] == {"label": "Merge down", "mergeNext": [0]}
+    assert short["alt"] is None
+
+
+def test_a_short_last_track_offers_merge_up_only():
+    tracks = [track(0, "A", "a"), track(400, "B", "b"), track(880, "X", "x")]
+    [short] = short_fix(tracks, [])
+    assert short["fix"] == {"label": "Merge up", "reject": [2]}
+    assert short["alt"] is None
+
+
+def test_a_short_track_leaning_on_the_next_one_offers_merge_down_first():
+    tracks = [track(0, "A", "a"), track(200, "X", "x"), track(225, "B", "b")]
+    # Inside the blip Shazam already hears the incoming record, and inside the
+    # incoming record it hears the blip's name again.
+    probes = [probe(195, "B", "b", window=12), probe(300, "X", "x")]
+    [short] = short_fix(tracks, probes)
+    assert short["fix"] == {"label": "Merge down", "mergeNext": [1]}
+    assert short["alt"] == {"label": "Merge up", "reject": [1]}
+
+
+def test_a_short_track_with_no_evidence_either_way_keeps_merge_up_first():
+    tracks = [track(0, "A", "a"), track(200, "X", "x"), track(225, "B", "b")]
+    [short] = short_fix(tracks, [])
+    assert short["fix"]["label"] == "Merge up"
+    assert short["alt"] == {"label": "Merge down", "mergeNext": [1]}
+
+
+def test_a_short_track_leaning_on_the_previous_one_keeps_merge_up_first():
+    tracks = [track(0, "A", "a"), track(200, "X", "x"), track(225, "B", "b")]
+    probes = [probe(195, "A", "a", window=12), probe(100, "X", "x"), probe(300, "X", "x")]
+    [short] = short_fix(tracks, probes)
+    assert short["fix"]["label"] == "Merge up"

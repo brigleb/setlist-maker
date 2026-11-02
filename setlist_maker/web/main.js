@@ -78,11 +78,17 @@ export async function doSave() {
   // Existing rows map back by their stable server index (NOT array position,
   // which inserted rows shift); new rows carry a timestamp and no index.
   const hasNew = S.tracks.some(t => t._new);
+  // A kept track is written from its kept window's start, which a merge into
+  // it from before moved back to that row's (#56). The server moves it like
+  // any other start, and a reload then shows the start it saved.
+  const starts = new Map(TL ? TL.keptWindows(S.tracks, setDuration()).map(w => [S.tracks[w.index], w.start]) : []);
+  const startAt = t => (starts.has(t) ? starts.get(t) : t.timestamp);
+  const merged = S.tracks.some(t => startAt(t) !== t.timestamp);
   const payload = { revision: revision, summary: summaryEl.value,
                     episode: { title: epTitle.value, artist: epArtist.value },
                     tracks: S.tracks.map(t => {
-    if (t._new) return { artist: t.artist, title: t.title, timestamp: t.timestamp, rejected: !!t.rejected };
-    const edit = { index: t.index, artist: t.artist, title: t.title, timestamp: t.timestamp,
+    if (t._new) return { artist: t.artist, title: t.title, timestamp: startAt(t), rejected: !!t.rejected };
+    const edit = { index: t.index, artist: t.artist, title: t.title, timestamp: startAt(t),
                    rejected: !!t.rejected, episode_cover: !!t.episode_cover };
     // Only rows whose artwork the user actually picked carry a coverart_url.
     // Sending it for every row would re-pin the art that apply_track_edit()
@@ -108,7 +114,7 @@ export async function doSave() {
       if (S.coverChoice !== undefined) { S.coverVersion = S.coverChoice ? Date.now() : null; S.coverChoice = undefined; }
       // Inserted rows need real indices, and a save that re-sorted the tracks
       // (a moved start) bumped the revision: either way, reload first.
-      if (hasNew || res.revision !== revision) await load();
+      if (hasNew || merged || res.revision !== revision) await load();
       else render();
       setDirty(false); resetHistory(); toast("Saved");
       return true;

@@ -1320,6 +1320,39 @@ def test_a_moved_track_keeps_its_art_pin_and_star_through_save_and_reload(
     assert moved.artwork_pinned and moved.is_episode_cover
 
 
+def test_a_merge_into_the_next_track_saves_one_track_at_the_merged_start(
+    sample_tracklist, tmp_path
+):
+    """#56: the page rejects the merged row and sends the next track's start as
+    the merged row's. The two share a second in memory, but the rejected row is
+    in neither file, so the reload has one track there, with its art."""
+    from setlist_maker.cli import _load_tracklist_with_artwork_urls
+    from setlist_maker.editor import save_tracklist
+    from setlist_maker.web_editor import apply_edits
+
+    blip, nxt = sample_tracklist.tracks[1], sample_tracklist.tracks[2]
+    nxt.coverart_url = "https://example.com/next.jpg"
+    nxt.artwork_pinned = True
+    apply_edits(
+        sample_tracklist,
+        [
+            {"index": 1, "artist": blip.artist, "title": blip.title, "rejected": True},
+            {"index": 2, "artist": nxt.artist, "title": nxt.title, "timestamp": blip.timestamp},
+        ],
+        None,
+    )
+    path = tmp_path / "set_tracklist.md"
+    save_tracklist(sample_tracklist, path, None)
+
+    reloaded, _ = _load_tracklist_with_artwork_urls(path)
+    assert [(t.timestamp, t.title) for t in reloaded.tracks] == [
+        (0, sample_tracklist.tracks[0].title),
+        (180, nxt.title),
+        (540, sample_tracklist.tracks[3].title),
+    ]
+    assert reloaded.tracks[1].coverart_url == "https://example.com/next.jpg"
+
+
 def test_post_save_reports_the_revision_a_reorder_bumps(sample_tracklist, tmp_path):
     """A save that re-sorts the tracks bumps the revision; the response carries
     it so the page reloads instead of 409ing on its next save."""

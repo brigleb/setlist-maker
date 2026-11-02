@@ -262,6 +262,7 @@ body.tl-dragging, body.tl-dragging * { cursor:col-resize !important; user-select
 .tbtn { font:inherit; font-size:12px; font-weight:600; padding:5px 10px; border-radius:7px; cursor:pointer; background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
 .tbtn.primary { background:var(--accent); color:#fff; border-color:transparent; }
 .tbtn:disabled { opacity:.45; cursor:default; }
+.tbtn.quiet { background:transparent; }
 .in-note { color:var(--muted); font-size:11.5px; margin-top:8px; line-height:1.4; }
 .issue { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-top:1px solid var(--hairline); cursor:pointer; }
 .issue:first-child { border-top:none; }

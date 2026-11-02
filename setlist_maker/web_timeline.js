@@ -65,17 +65,49 @@
     });
   }
 
-  // The windows of the tracks that will actually be written. A rejected track
-  // is dropped from the markdown, so its span belongs to whatever kept track
-  // precedes it; that is what "merge into previous" means.
+  // The windows of the tracks that will actually be written. A rejected row is
+  // dropped from the markdown, so its span goes to a kept neighbour: the one
+  // before it ("merge into previous", the default), or, for a row marked
+  // merged: "next", the one after it, whose start moves back to that row's
+  // (#56). Within one run of rejected rows between two kept tracks, rows go to
+  // the earlier track up to the first one marked "next" and to the later track
+  // from there on, so both windows stay contiguous. A "next" row with no kept
+  // track after it has nothing to join and stays with the one before.
   function keptWindows(tracks, duration) {
     const kept = [];
     tracks.forEach((t, i) => { if (!t.rejected) kept.push(i); });
+    const starts = kept.map((i, k) => tracks[startRow(tracks, kept, k)].timestamp);
     return kept.map((i, k) => {
-      const next = kept[k + 1];
-      const end = next !== undefined ? tracks[next].timestamp : Math.max(duration || 0, tracks[i].timestamp + 1);
-      return { index: i, start: tracks[i].timestamp, end: Math.max(end, tracks[i].timestamp + 1) };
+      const end = k + 1 < kept.length ? starts[k + 1] : Math.max(duration || 0, starts[k] + 1);
+      return { index: i, start: starts[k], end: Math.max(end, starts[k] + 1) };
     });
+  }
+
+  // The row whose timestamp is kept track kept[k]'s start: the first row
+  // merged into it from before, else the track itself.
+  function startRow(tracks, kept, k) {
+    for (let r = k ? kept[k - 1] + 1 : 0; r < kept[k]; r++) if (tracks[r].merged === "next") return r;
+    return kept[k];
+  }
+
+  // For each row, the index of the kept track that owns its start (itself, for
+  // a kept track), or -1 for a rejected row before the first kept window.
+  function owners(tracks, duration) {
+    const kept = keptWindows(tracks, duration);
+    return tracks.map((t, i) => {
+      if (!t.rejected) return i;
+      const w = kept.find(x => t.timestamp >= x.start && t.timestamp < x.end);
+      return w ? w.index : -1;
+    });
+  }
+
+  // The index of the row holding track i's start, for whatever moves it: the
+  // dragged edge, [ and ], the Start fields. A merged row holds its own.
+  function startIndex(tracks, i) {
+    if (!tracks[i] || tracks[i].rejected) return i;
+    const kept = [];
+    tracks.forEach((t, j) => { if (!t.rejected) kept.push(j); });
+    return startRow(tracks, kept, kept.indexOf(i));
   }
 
   // Attach each probe to the track whose window holds its midpoint. Probes
@@ -150,6 +182,7 @@
     const issues = [];
     const kept = keptWindows(tracks, duration);
     const byIndex = joinProbes(tracks, probes, duration);
+    const ownerOf = owners(tracks, duration);
     const idOf = i => identity(tracks[i].artist, tracks[i].title);
     const len = w => w.end - w.start;
     const inChain = new Set();
@@ -188,8 +221,21 @@
       });
     }
 
-    for (const w of kept) {
-      const t = tracks[w.index];
+    // Which neighbour a short track more likely belongs to: the neighbours'
+    // names heard inside its window, plus its own name heard inside theirs
+    // (Shazam reading the same record under the wrong name). A tie keeps the
+    // old default, the track before.
+    const leansNext = (k) => {
+      const i = kept[k].index, p = kept[k - 1].index, n = kept[k + 1].index;
+      const me = idOf(i);
+      const votes = (other, oid) =>
+        byIndex[i].filter(x => oid && identity(x.artist, x.title) === oid).length
+        + byIndex[other].filter(x => me && identity(x.artist, x.title) === me).length;
+      return votes(n, idOf(n)) > votes(p, idOf(p));
+    };
+
+    for (let k = 0; k < kept.length; k++) {
+      const w = kept[k], t = tracks[w.index];
       if (inChain.has(w.index)) continue;
       if (!t.artist && !t.title) {
         issues.push({
@@ -198,12 +244,20 @@
           detail: `${fmt(w.start)}–${fmt(w.end)}: nothing Shazam knew`,
           fix: { label: "Sample 3 more", sample: quarters(w.start, w.end) },
         });
-      } else if (len(w) < SHORT_SECONDS && w.index !== kept[0].index) {
+      } else if (len(w) < SHORT_SECONDS && kept.length > 1) {
+        // Up into the track before, or down into the one after (#56): the
+        // first track can only go down, the last only up, and in between the
+        // evidence picks the default and the other is offered beside it.
+        const up = { label: "Merge up", reject: [w.index] };
+        const down = { label: "Merge down", mergeNext: [w.index] };
+        const first = k === 0, last = k === kept.length - 1;
+        const goDown = first || (!last && leansNext(k));
         issues.push({
           kind: "short", key: "short:" + t.timestamp, index: w.index,
           title: `Only ${fmt(len(w))} long`,
           detail: `${t.artist || "Unknown artist"} — ${t.title || ""} at ${fmt(w.start)}`,
-          fix: { label: "Merge up", reject: [w.index] },
+          fix: goDown ? down : up,
+          alt: first || last ? null : (goDown ? up : down),
         });
       }
     }
@@ -222,10 +276,9 @@
       // inspector lists it) but is not a rival worth flagging. A merged *repeat*
       // of this track settles nothing -- that span was never in dispute.
       const settled = new Set();
-      const end = kept[k + 1] ? kept[k + 1].index : tracks.length;
-      for (let r = i + 1; r < end; r++) {
-        if (idOf(r) !== idOf(i)) byIndex[r].forEach(p => settled.add(p));
-      }
+      ownerOf.forEach((o, r) => {
+        if (o === i && r !== i && idOf(r) !== idOf(i)) byIndex[r].forEach(p => settled.add(p));
+      });
       const names = variants(byIndex[i].filter(p => !settled.has(p)), neighbours);
       const own = identity(t.artist, "").split("\u0000")[0];
       // Compared by identity, not spelling: once a title is tidied, Shazam's
@@ -287,7 +340,7 @@
 
   return {
     BLIP_SECONDS, SHORT_SECONDS, UNHEARD_SECONDS, HOUR,
-    fmt, quarters, cleanTitle, identity, hue, windows, keptWindows, joinProbes, variants, unheard, findIssues,
+    fmt, quarters, cleanTitle, identity, hue, windows, keptWindows, owners, startIndex, joinProbes, variants, unheard, findIssues,
     snapPoints,
   };
 });
