@@ -1,6 +1,6 @@
 // The selected track's inspector, and asking Shazam about a moment.
 
-import { GRADS, S, TL } from "./state.js";
+import { S, TL } from "./state.js";
 import { audio, toast } from "./dom.js";
 import { fmt, parseTime, trackName } from "./util.js";
 import { setDuration } from "./model.js";
@@ -8,7 +8,7 @@ import { addBelow, renderList } from "./list.js";
 import { playAt, playFrom } from "./player.js";
 import { pendingSamples, renderTimeline } from "./grid.js";
 import { moveStart, setNames, splitAtPlayhead, startOf, toggleMerge } from "./edits.js";
-import { artSrc, showArtwork } from "./artwork.js";
+import { artFor, showArtwork } from "./artwork.js";
 import { render } from "./main.js";
 import { html, keyOf, render as paint, useEffect, useState } from "./ui.js";
 
@@ -79,8 +79,7 @@ function Inspector({ t, i }) {
   const w = k === -1 ? TL.windows(S.tracks, D)[i] : kept[k];
   const joined = TL.joinProbes(S.tracks, S.probes, D)[i];
   const canArt = (t.artist || t.title) && t.index !== undefined && t.index !== null;
-  const thumbBg = t.coverart_url
-    ? "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
+  const thumbBg = artFor(t, i);
 
   // Every name Shazam gave the audio in this window. The neighbours' names are
   // left out: a probe at the edge hearing the next track is not a candidate.

@@ -470,7 +470,9 @@ CLI application with the following modules:
   page re-requests after a save. 404s on an unparseable or out-of-range `index`, and
   on an unidentified track, which `chapters` skips too. Keyed by **saved** track
   state, not the page's live fields, so the preview always reflects what would be
-  embedded), `GET /api/artwork/options?index=N` (the picker's candidate list — see
+  embedded), `GET /api/artwork/source?index=N` (the cover as found, with no overlay:
+  `source_artwork()`'s bytes, resolved through the same `_track_for_query()`, plus a 404 when
+  no source has art -- see **One picture per track** below), `GET /api/artwork/options?index=N` (the picker's candidate list — see
   **Artwork curation** below), `POST /api/done` (graceful shutdown → returns control
   to the CLI), `GET /api/probes` + `GET /timeline.js` (the timeline -- see below), `GET /api/peaks` (the
   waveform, see `peaks.py`),
@@ -533,7 +535,7 @@ CLI application with the following modules:
   It lives in the static markup **outside `#list`**, which Preact owns, and it holds the open
   track as an **object reference** (`artTrack`) for the same reason `playingTrack` exists — a
   re-sort or insert moves array positions underneath it.
-  Tiles load candidate URLs **directly from the source**, like the player bar's thumbnail: the
+  Tiles load candidate URLs **directly from the source**: the
   covers differ only in the picture, and compositing each one server-side to show the identical
   lower-third would add latency and nothing else. Which tile reads as in use comes from the
   server's own `current` flag (`artCurrentUrl`), *not* from comparing `artTrack.coverart_url`:
@@ -547,10 +549,22 @@ CLI application with the following modules:
   name would offer covers for the song being corrected away.
   A pick sets `coverart_url` (the artwork cache's key, so it regenerates on its own) plus a
   client-only `_art` flag, which is both why the save payload includes the URL at all — sending
-  it for every row would re-pin art `apply_track_edit()` means to drop — and why the row
-  previews the raw image until the save rebuilds the composite. A pasted URL is loaded into an
+  it for every row would re-pin art `apply_track_edit()` means to drop — and why every
+  thumbnail previews the raw image until the save (see `artFor()` below). A pasted URL is loaded into an
   `Image` first: the server falls *through* its waterfall on a URL that will not download, so a
   dead link would not error, it would quietly composite another source's art under this track.
+- **One picture per track (#60).** Every thumbnail -- the list row, the timeline block, the
+  inspector and the player bar -- takes its background from `artwork.artFor(t, i)`. They used to
+  disagree: the list showed the server composite and the rest drew `coverart_url`, which a
+  track whose art came from further down the waterfall doesn't have (10 of 64 on the 09-28 set),
+  so it had art in the list and a gradient everywhere else. `artFor()` is two CSS layers, the
+  source cover (`/api/artwork/source?index=N&v=artVersion`) over the track's gradient: still
+  loading, or a 404 for no art anywhere, paints nothing and the gradient shows through, so the
+  page keeps no load state. An unsaved pick (`_art`) shows the raw choice instead. The composite,
+  with its lower-third, is shown only in the artwork panel, which previews what Embed writes.
+  `S.artVersion` is bumped by every save **and** every `load()`, since after a reload an index
+  can name another track. Measured: one request per track across all four surfaces despite
+  `no-store`, and panning the timeline asks only for newly revealed thumbs.
 - **Theming:** one set of selectors, two palettes. Every color on the page reads a
   `:root` custom property; `@media (prefers-color-scheme: dark)` redefines only the
   tokens, and `color-scheme: light dark` (on `:root` and as a `<meta>`) lets native
@@ -724,9 +738,9 @@ CLI application with the following modules:
     props, because `updatePlayhead()` moves it on every `timeupdate`. The hover `.tl-cursor` is
     appended by hand to a Preact-owned `.tl-lanes`; Preact leaves trailing nodes it didn't
     create alone.
-  - Thumbs ask `artwork.whenVisible()` to tell them when they scroll near the viewport, and
-    unsubscribe in their effect's cleanup. A thumb with a new URL (after a save bumps
-    `S.artVersion`) shows the gradient until the new composite loads, as before.
+  - List thumbs ask `artwork.whenVisible()` to tell them when they scroll near the viewport,
+    and unsubscribe in their effect's cleanup; until then `artFor(t, i, false)` is just the
+    gradient.
 - Inline editing is `S.editing` (a track object, plus `S.editField`, the cell that was clicked)
   rather than DOM surgery. **Escape cancels.**
   It used to commit: the old Escape rebuilt the list, Chrome fires `focusout` when the focused

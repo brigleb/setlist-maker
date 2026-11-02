@@ -1,6 +1,6 @@
 // The timeline grid: blocks, seams, pins, the playhead, selection.
 
-import { GRADS, S, TL } from "./state.js";
+import { S, TL } from "./state.js";
 import { audio, el, toast } from "./dom.js";
 import { trackName } from "./util.js";
 import { clampStart, setDuration, splitWindow, trackIndexAt } from "./model.js";
@@ -9,7 +9,7 @@ import { renderList, revealSelected } from "./list.js";
 import { moveStart, previewStart, splitAt } from "./edits.js";
 import { renderInspector, sampleAt } from "./inspector.js";
 import { renderIssues } from "./issues.js";
-import { artSrc } from "./artwork.js";
+import { artFor } from "./artwork.js";
 import { html, keyOf, render as paint } from "./ui.js";
 import { showTab } from "./shell.js";
 import { load, refreshLiveTracks, render, setLive } from "./main.js";
@@ -197,8 +197,7 @@ export function paintView() {
     const wide = px(y - x);
     const named = !!(t.artist || t.title);
     const art = named && thumbSide >= 24 && wide >= thumbSide + 40 && w.start >= a;
-    const bg = !art ? null : t.coverart_url
-      ? "url('" + artSrc(t.coverart_url).replace(/'/g, "%27") + "')" : GRADS[i % GRADS.length];
+    const bg = art ? artFor(t, i) : null;
     segs.push(html`
       <div key=${keyOf(t)} class=${"tl-seg" + (named ? "" : " none") + sel(t)} data-i=${i}
         style=${{ "--h": blockHue(i), left: xPct(x), width: wPct(y - x) }}

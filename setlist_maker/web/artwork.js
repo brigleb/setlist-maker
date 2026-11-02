@@ -1,6 +1,6 @@
 // Row thumbnails, the artwork panel and picker, uploads, the episode cover, Embed.
 
-import { S } from "./state.js";
+import { GRADS, S } from "./state.js";
 import { audio, epArtist, epTitle, toast } from "./dom.js";
 import { trackName } from "./util.js";
 import { setDirty } from "./history.js";
@@ -220,6 +220,34 @@ document.getElementById("art-auto").onclick = () => chooseArtwork(null);
 // a cross-site form cannot post one.
 export function artSrc(url) {
   return url && url.startsWith("upload:") ? "/api/upload/" + url.slice(7) : url;
+}
+
+// ---- one picture per track (#60) ----
+// Every thumbnail -- the list, the timeline, the inspector, the player bar --
+// takes its background from here, so a track shows the same art everywhere.
+// It is the cover as found (/api/artwork/source), not the chapter composite:
+// the lower-third is unreadable at thumbnail size and belongs to the artwork
+// panel, which previews what Embed writes. Two layers, the cover over the
+// track's gradient: a cover still loading, or a 404 (no art anywhere), paints
+// nothing and the gradient shows through, so there is no load state to keep.
+// Keyed by saved state like the composite, so S.artVersion (bumped by every
+// save and load) is what makes it fetch again. `near` false gives just the
+// gradient, for a list row not yet scrolled near the viewport.
+export function artFor(t, i, near = true) {
+  const grad = GRADS[i % GRADS.length];
+  if (t._art) {
+    // Picked in this session and not saved yet: the server still has the old
+    // art, so show the raw choice. "Automatic" has no URL until the save.
+    return t.coverart_url ? cssUrl(artSrc(t.coverart_url)) + ", " + grad : grad;
+  }
+  // 0 is a real index; an unsaved inserted row has none.
+  const saved = t.index !== undefined && t.index !== null;
+  if (!near || !saved || !(t.artist || t.title)) return grad;
+  return cssUrl("/api/artwork/source?index=" + t.index + "&v=" + S.artVersion) + ", " + grad;
+}
+
+function cssUrl(u) {
+  return "url('" + String(u).replace(/'/g, "%27") + "')";
 }
 
 export async function uploadImage(file) {
