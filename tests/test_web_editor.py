@@ -55,9 +55,25 @@ def test_page_wiring():
     # Dark mode is tokens + a prefers-color-scheme block; native controls follow (#34).
     assert '<meta name="color-scheme" content="light dark">' in html
     assert "color-scheme: light dark" in src and "@media (prefers-color-scheme: dark)" in src
-    # The list must clear the fixed player bar (~84px).
-    padding = re.search(r"body\s*\{[^}]*padding-bottom:\s*(\d+)px", src)
-    assert padding and int(padding.group(1)) >= 100
+    # The app shell (#54): the window never scrolls, only the panes do, and
+    # the player is a grid row rather than a fixed bar covering the list.
+    assert "html, body { height:100%; overflow:hidden; }" in src
+    assert "#player { position:fixed" not in src
+    for element_id in (
+        "toolbar",
+        "listpane",
+        "list-head",
+        "side",
+        "tabs",
+        "panel-track",
+        "panel-set",
+        "panel-queue",
+        "split-tl",
+        "split-side",
+    ):
+        assert f'id="{element_id}"' in html, f"missing #{element_id}"
+    # The header is a sibling of #list: Preact owns everything inside #list.
+    assert html.index('id="list-head"') < html.index('<main id="list">')
 
     # Artwork. A saved edit changes the composite, so thumbs cache-bust on a
     # version bumped at save, or Chrome reuses the pre-edit image.

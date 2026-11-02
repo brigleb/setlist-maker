@@ -11,7 +11,7 @@
 </script>
 </head>
 <body>
-  <header>
+  <header id="toolbar">
     <div>
       <div class="file"><span id="file">—</span><span id="livepill" title="Following the run as it samples; editing opens when it finishes">identifying</span></div>
       <div class="counts" id="counts"></div>
@@ -21,38 +21,56 @@
       <button id="redo" class="histbtn" disabled title="Redo (⇧⌘Z)">Redo</button>
       <button id="save" disabled>Save</button>
       <button id="done">Done</button>
+      <button id="side-toggle" class="histbtn" type="button" aria-controls="side" aria-expanded="false" title="Show the inspector">Inspector</button>
     </div>
   </header>
-  <section id="timeline">
-    <div id="tl-grid" class="tl-card">
-      <div id="tl-head">
-        <div class="tl-title">Timeline</div>
-        <div class="tl-stats" id="tl-stats"></div>
-        <button id="tl-replay" class="tbtn" type="button" title="Drop the samples in again, in the order the run asked for them">▶ Replay the run</button>
+  <section id="timeline" class="pane" aria-label="Timeline">
+    <div id="tl-head">
+      <div class="tl-title">Timeline</div>
+      <div class="tl-stats" id="tl-stats"></div>
+      <button id="tl-replay" class="tbtn" type="button" title="Drop the samples in again, in the order the run asked for them">▶ Replay the run</button>
+    </div>
+    <div id="tl-rows"></div>
+    <div class="tl-legend"><span><i></i>30s sample</span><span><i class="refine"></i>12s refine</span><span><i class="miss"></i>heard nothing</span><span><i class="manual"></i>you asked</span><span id="tl-hint">click a track to inspect · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard</span></div>
+  </section>
+  <div id="split-tl" class="divider rows" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" tabindex="0"></div>
+  <div id="work">
+    <section id="listpane" class="pane" aria-label="Tracklist">
+      <div id="list-head" class="trow"><span class="c-num">#</span><span></span><span>Artist</span><span>Title</span><span class="c-num">Start</span><span class="c-num len">Length</span><span class="c-num smp" title="Samples Shazam took inside this track">Samples</span><span class="star"></span><span></span></div>
+      <main id="list"></main>
+    </section>
+    <div id="split-side" class="divider cols" role="separator" aria-orientation="vertical" aria-label="Resize the inspector" tabindex="0"></div>
+    <aside id="side" class="pane">
+      <div id="tabs" role="tablist">
+        <button role="tab" id="tab-track" data-tab="track" aria-controls="panel-track" aria-selected="true">Track</button>
+        <button role="tab" id="tab-set" data-tab="set" aria-controls="panel-set" aria-selected="false" tabindex="-1">Set</button>
+        <button role="tab" id="tab-queue" data-tab="queue" aria-controls="panel-queue" aria-selected="false" tabindex="-1">Needs a look <span id="qcount" class="count">0</span></button>
       </div>
-      <div id="tl-rows"></div>
-      <div class="tl-legend"><span><i></i>30s sample</span><span><i class="refine"></i>12s refine</span><span><i class="miss"></i>heard nothing</span><span><i class="manual"></i>you asked</span><span id="tl-hint">click a track to inspect · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard</span></div>
-    </div>
-    <aside id="tl-side">
-      <div id="insp" class="tl-card"></div>
-      <div id="queue" class="tl-card"><h3>Needs a look · <span id="qcount">0</span></h3><div id="issues"></div></div>
+      <div id="panel-track" class="panel" role="tabpanel" aria-labelledby="tab-track"><div id="insp"></div></div>
+      <div id="panel-set" class="panel" role="tabpanel" aria-labelledby="tab-set" hidden>
+        <div class="in-lbl">Description</div>
+        <textarea id="summary" class="summary" rows="3" aria-label="Set description" placeholder="Add a description for this set…"></textarea>
+        <div class="in-lbl">Podcast episode</div>
+        <section id="episode" aria-label="Podcast episode">
+          <div class="ep-row">
+            <div id="ep-thumb" class="empty" title="Episode cover — drop an image here"></div>
+            <div class="ep-text">
+              <input id="ep-title" class="ep-field ep-title" type="text" maxlength="200" aria-label="Episode title" placeholder="Episode title" spellcheck="false">
+              <input id="ep-artist" class="ep-field ep-artist" type="text" maxlength="200" aria-label="Episode artist" placeholder="Artist" spellcheck="false">
+            </div>
+          </div>
+          <div id="ep-note" class="ep-note"></div>
+          <div class="in-btns">
+            <button id="ep-upload" class="tbtn" type="button">Upload cover…</button>
+            <button id="ep-remove" class="tbtn" type="button" hidden>Remove cover</button>
+            <input id="ep-file" type="file" accept="image/*" hidden>
+            <button id="embed" class="tbtn primary" type="button" hidden title="Write the title, artist, chapter markers, chapter artwork and episode cover into the MP3 (saves first)">Embed chapters in MP3</button>
+          </div>
+        </section>
+      </div>
+      <div id="panel-queue" class="panel" role="tabpanel" aria-labelledby="tab-queue" hidden><div id="issues"></div></div>
     </aside>
-  </section>
-  <textarea id="summary" class="summary" rows="2" aria-label="Set description" placeholder="Add a description for this set…"></textarea>
-  <section id="episode" aria-label="Podcast episode">
-    <div id="ep-thumb" class="empty" title="Episode cover — drop an image here"></div>
-    <div class="ep-text">
-      <input id="ep-title" class="ep-field ep-title" type="text" maxlength="200" aria-label="Episode title" placeholder="Episode title" spellcheck="false">
-      <input id="ep-artist" class="ep-field ep-artist" type="text" maxlength="200" aria-label="Episode artist" placeholder="Artist" spellcheck="false">
-      <div id="ep-note" class="ep-note"></div>
-    </div>
-    <button id="ep-upload" class="artbtn" type="button">Upload…</button>
-    <button id="ep-remove" class="artbtn" type="button" hidden>Remove</button>
-    <input id="ep-file" type="file" accept="image/*" hidden>
-    <div class="ep-spacer"></div>
-    <button id="embed" class="artbtn" type="button" hidden title="Write the title, artist, chapter markers, chapter artwork and episode cover into the MP3 (saves first)">Embed chapters in MP3</button>
-  </section>
-  <main id="list"></main>
+  </div>
   <div id="player" class="disabled">
     <div id="pthumb"></div>
     <div id="pbody">

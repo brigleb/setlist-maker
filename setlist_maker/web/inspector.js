@@ -4,7 +4,7 @@ import { GRADS, S, TL } from "./state.js";
 import { audio, toast } from "./dom.js";
 import { trackName } from "./util.js";
 import { setDuration } from "./model.js";
-import { addBelow } from "./list.js";
+import { addBelow, renderList } from "./list.js";
 import { playAt, playFrom } from "./player.js";
 import { pendingSamples, renderTimeline } from "./grid.js";
 import { setNames, splitAtPlayhead, toggleMerge } from "./edits.js";
@@ -142,7 +142,7 @@ export function renderInspector() {
   const i = t ? S.tracks.indexOf(t) : -1;
   if (i === -1) {
     S.selectedTrack = null;
-    paint(html`<h3>Track</h3><div class="empty">Click a track on the timeline — or anything in “Needs a look” — to see what Shazam heard there and fix it.</div>`, box);
+    paint(html`<div class="empty">Click a track on the timeline — or anything in “Needs a look” — to see what Shazam heard there and fix it.</div>`, box);
     return;
   }
   // Keyed by track: choosing another track starts its fields fresh.
@@ -172,6 +172,7 @@ export async function sampleAt(t, opts) {
     toast("Sample failed");
   } finally {
     pendingSamples.splice(pendingSamples.indexOf(t), 1);
+    renderList();  // its Samples column
     renderTimeline();
   }
   return got;

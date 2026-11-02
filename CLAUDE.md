@@ -504,8 +504,8 @@ CLI application with the following modules:
   to reload. A payload with no `revision` (an older page) is not checked. The page's `save()`
   also joins a save already in flight instead of sending a second one. A payload that fails
   validation (a `ValueError`, including a body that isn't JSON) is a 400, not a 500.
-- **Editable set description:** the page renders `Tracklist.summary` as an always-on,
-  column-aligned `<textarea>` (empty shows an "add a description" placeholder). Its
+- **Editable set description:** the page renders `Tracklist.summary` as a `<textarea>` in the
+  inspector's Set tab (empty shows an "add a description" placeholder). Its
   text rides along in the `POST /api/save` body; `_handle_save()` forwards it as
   `apply_edits(..., summary=...)`, which uses an `_UNSET` sentinel — an absent
   `summary` key leaves `tracklist.summary` untouched (so older clients can't wipe it),
@@ -702,9 +702,25 @@ CLI application with the following modules:
   - Thumbs ask `artwork.whenVisible()` to tell them when they scroll near the viewport, and
     unsubscribe in their effect's cleanup. A thumb with a new URL (after a save bumps
     `S.artVersion`) shows the gradient until the new composite loads, as before.
-- Inline editing is `S.editing` (a track object) rather than DOM surgery. **Escape cancels.**
+- Inline editing is `S.editing` (a track object, plus `S.editField`, the cell that was clicked)
+  rather than DOM surgery. **Escape cancels.**
   It used to commit: the old Escape rebuilt the list, Chrome fires `focusout` when the focused
   input is removed, and the commit-on-leave handler then saved what had been typed.
+- **The app shell (#54).** The body is a full-window CSS grid: toolbar, timeline, divider, then
+  the tracklist beside the inspector, then the player as an ordinary grid row. `html` and `body`
+  are `overflow:hidden`; only the panes scroll. `shell.js` owns the inspector's tabs (Track, Set,
+  Needs a look), the two dividers and the narrow-window slide-over. Pane sizes are the `--tl-h`
+  and `--side-w` custom properties, saved in `localStorage` (inside try/catch) and `clamp()`ed by
+  the grid, so a size saved on a big screen cannot push a pane off a small one.
+  - The tracklist is a CSS-grid table. The column header `#list-head` is static markup *beside*
+    `#list`, because the Preact render owns all of `#list`. Rows and header share the `.trow`
+    template. `.meta` is `display:contents`, so artist and title are two grid cells.
+  - Clicking a row selects it; clicking its artist or title also edits that cell in place.
+    Selecting shows the Track tab, except from "Needs a look" (`keepTab`), where the list and
+    timeline already show the choice. `splitAt()` shows the Track tab too, since its new fields
+    are where the new track gets named, and a field in a hidden tab can't take focus.
+  - The description lives in the Set tab. `autosizeSummary()` skips a hidden textarea, which
+    measures 0, and `showTab("set")` sizes it.
 
 ### `setlist_maker/web_timeline.js` + the editor's timeline
 

@@ -1,17 +1,20 @@
 // The tracklist pane: rows, inline editing, inserting.
 //
-// One Preact render of every row, keyed by track object, so an edit, insert or
-// re-sort updates the rows that changed and moves the rest. Selection, the
-// playing row and the row being edited are all derived from S on each render;
-// nothing reaches into a row's DOM afterwards.
+// A table: one Preact render of every row, keyed by track object, so an edit,
+// insert or re-sort updates the rows that changed and moves the rest.
+// Selection, the playing row and the row being edited are all derived from S
+// on each render; nothing reaches into a row's DOM afterwards. The column
+// header is static markup beside #list, not inside it: this render owns all
+// of #list and would replace anything else put there.
 
-import { GRADS, S } from "./state.js";
+import { GRADS, S, TL } from "./state.js";
 import { fmt, parseTime } from "./util.js";
-import { playingIndex } from "./model.js";
+import { playingIndex, setDuration } from "./model.js";
 import { setDirty } from "./history.js";
 import { playFrom } from "./player.js";
 import { artSrc, showArtwork, whenVisible } from "./artwork.js";
 import { render } from "./main.js";
+import { selectTrack } from "./grid.js";
 import { html, keyOf, render as paint, useEffect, useRef, useState } from "./ui.js";
 
 const listEl = document.getElementById("list");
@@ -67,7 +70,8 @@ function EditFields({ t }) {
   // Closing runs once: Enter commits and unmounts the fields, and the
   // focusout that follows must not commit a second time.
   const closed = useRef(false);
-  useEffect(() => { artistIn.current.focus(); }, []);
+  // Into whichever cell was clicked.
+  useEffect(() => { (S.editField === "title" ? titleIn : artistIn).current.focus(); }, []);
 
   const close = () => {
     closed.current = true;
@@ -113,10 +117,10 @@ function EditFields({ t }) {
     </div>`;
 }
 
-function Row({ t, i, playing }) {
+function Row({ t, i, playing, span, samples }) {
   const unknown = !t.artist && !t.title;
   const editing = S.editing === t;
-  const cls = "row" + (t.rejected ? " rejected" : "") + (unknown ? " unknown" : "")
+  const cls = "row trow" + (t.rejected ? " rejected" : "") + (unknown ? " unknown" : "")
     + (t === S.selectedTrack ? " selected" : "") + (playing ? " playing" : "")
     + (editing ? " editing" : "");
   const reject = e => {
@@ -130,27 +134,43 @@ function Row({ t, i, playing }) {
     setDirty(true);
     render();
   };
+  // Clicking a row selects it; clicking its artist or title also edits it in
+  // place. The .meta wrapper is display:contents, so its two cells sit in the
+  // row's grid while still sharing one click handler.
   return html`
-    <div class=${cls} data-key=${keyOf(t)}>
+    <div class=${cls} data-key=${keyOf(t)} onClick=${() => selectTrack(t)}>
+      <span class="c-num idx">${i + 1}</span>
       <${Thumb} t=${t} i=${i} />
       ${editing
         ? html`<${EditFields} t=${t} />`
-        : html`<div class="meta" onClick=${() => startEdit(t)}>
-            <div class="artist">${t.artist || (unknown ? "Unidentified" : "")}</div>
-            <div class="title">${t.title || (unknown ? "add a label" : "")}</div>
+        : html`<div class="meta">
+            <div class="artist" onClick=${() => startEdit(t, "artist")}>${t.artist || (unknown ? "Unidentified" : "")}</div>
+            <div class="title" onClick=${() => startEdit(t, "title")}>${t.title || (unknown ? "add a label" : "")}</div>
           </div>`}
-      ${t.episode_cover && html`<div class="star" title="This track's artwork is the episode cover">★</div>`}
-      <div class="time">${t.time}</div>
-      <button class="iconbtn play" onClick=${e => { e.stopPropagation(); playFrom(i, { scroll: false }); }}>▶</button>
-      <button class="iconbtn reject" onClick=${reject}>${t.rejected ? "↩" : "✕"}</button>
-      <button class="iconbtn add" title="Add a track below"
-        onClick=${e => { e.stopPropagation(); addBelow(i); }}>＋</button>
+      <span class="c-num time">${t.time}</span>
+      <span class="c-num len">${span === null ? "—" : fmt(span)}</span>
+      <span class="c-num smp">${samples || ""}</span>
+      <span class="star" title=${t.episode_cover ? "This track's artwork is the episode cover" : undefined}>${t.episode_cover ? "★" : ""}</span>
+      <span class="acts">
+        <button class="iconbtn play" title="Play from here" onClick=${e => { e.stopPropagation(); playFrom(i, { scroll: false }); }}>▶</button>
+        <button class="iconbtn reject" title=${t.rejected ? "Bring back" : "Reject"} onClick=${reject}>${t.rejected ? "↩" : "✕"}</button>
+        <button class="iconbtn add" title="Add a track below"
+          onClick=${e => { e.stopPropagation(); addBelow(i); }}>＋</button>
+      </span>
     </div>`;
 }
 
 export function renderList() {
   const p = playingIndex();
-  paint(S.tracks.map((t, i) => html`<${Row} key=${keyOf(t)} t=${t} i=${i} playing=${i === p} />`), listEl);
+  const D = setDuration();
+  // Length is what will be written: a kept track's kept window, which runs
+  // over any rows merged into it. A merged row has none of its own.
+  // Without /timeline.js the grid is gone, but the list must still render.
+  const spans = S.tracks.map(() => null);
+  if (TL) for (const w of TL.keptWindows(S.tracks, D)) spans[w.index] = w.end - w.start;
+  const joined = TL ? TL.joinProbes(S.tracks, S.probes, D) : null;
+  paint(S.tracks.map((t, i) => html`<${Row} key=${keyOf(t)} t=${t} i=${i} playing=${i === p}
+    span=${spans[i]} samples=${joined ? joined[i].length : 0} />`), listEl);
 }
 
 // Bring the playing row into view (automatic advance, prev/next).
@@ -159,9 +179,16 @@ export function scrollToPlaying() {
   if (row) row.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
-export function startEdit(t) {
+// Bring the selected row into view, when it was chosen somewhere else.
+export function revealSelected() {
+  const row = listEl.querySelector(".row.selected");
+  if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+export function startEdit(t, field) {
   if (S.liveMode || S.editing === t) return;
   S.editing = t;
+  S.editField = field || "artist";
   render();
 }
 
@@ -176,5 +203,6 @@ export function addBelow(i) {
   S.tracks.splice(i + 1, 0, row);
   setDirty(true);
   S.editing = row;
+  S.editField = "artist";
   render();
 }
