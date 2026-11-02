@@ -22,7 +22,8 @@ from setlist_maker.audio import (
     slice_audio,
 )
 from setlist_maker.call_log import CallLog, CallRecorder, describe_error
-from setlist_maker.editor import CorrectionsDB, Track, Tracklist
+from setlist_maker.editor import CorrectionsDB, Track, Tracklist, save_tracklist
+from setlist_maker.fileio import atomic_write_text
 from setlist_maker.progress import RunState, live_display
 from setlist_maker.shazam_client import MAX_RETRIES, identify_sample_with_retry
 from setlist_maker.summary import generate_summary
@@ -306,8 +307,7 @@ def save_progress(results: list, filepath: Path):
     """Save intermediate results to JSON in case of interruption."""
     # Convert to serializable format
     serializable = [(ts, info) for ts, info in results]
-    with open(filepath, "w") as f:
-        json.dump(serializable, f, indent=2)
+    atomic_write_text(filepath, json.dumps(serializable, indent=2))
 
 
 def load_progress(filepath: Path) -> list:
@@ -388,13 +388,9 @@ def finalize_outputs(tracklist: Tracklist, output_path: Path, summary: bool) -> 
 
     # Write markdown plus a JSON sidecar. The JSON carries each track's
     # Shazam cover-art URL, which the chapters command relies on, so it is
-    # always written here -- not only when the editor saves.
-    with open(output_path, "w") as f:
-        f.write(tracklist.to_markdown())
-
-    json_path = output_path.with_suffix(".json")
-    with open(json_path, "w") as f:
-        json.dump(tracklist.to_json(), f, indent=2)
+    # always written here -- not only when the editor saves. The editor's own
+    # writer, so a run's output and a save's are written the same safe way.
+    save_tracklist(tracklist, output_path)
 
     print(f"  Saved: {output_path}")
     print(f"  Found {len(tracklist.tracks)} unique tracks")

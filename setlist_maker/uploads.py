@@ -20,12 +20,12 @@ name against ``_REF`` before it goes anywhere near a path.
 import hashlib
 import io
 import logging
-import os
 import re
-import tempfile
 from pathlib import Path
 
 from PIL import Image
+
+from setlist_maker.fileio import atomic_write_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -120,25 +120,13 @@ def normalize_image(data: bytes, max_edge: int = MAX_STORED_EDGE) -> bytes:
     return buf.getvalue()
 
 
-def _write_atomic(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        os.replace(tmp, path)
-    except OSError:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
 def store_upload(artwork_dir: Path, data: bytes) -> str:
     """Normalize and store an uploaded image; return its ``upload:`` reference."""
     stored = normalize_image(data)
     name = hashlib.sha256(stored).hexdigest()[:24]
     path = artwork_dir / f"{name}.jpg"
     if not path.exists():
-        _write_atomic(path, stored)
+        atomic_write_bytes(path, stored)
     return f"{UPLOAD_PREFIX}{name}.jpg"
 
 
@@ -151,4 +139,4 @@ def set_episode_cover(tracklist_path: Path, ref: str | None) -> None:
     data = read_upload(artwork_dir_for(tracklist_path), ref)
     if data is None:
         raise UploadError(f"uploaded image {ref!r} is missing")
-    _write_atomic(cover, data)
+    atomic_write_bytes(cover, data)

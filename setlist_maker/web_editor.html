@@ -502,6 +502,7 @@
   document.getElementById("redo").onclick = redo;
   function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); }
 
+  let revision = null;
   async function load() {
     const data = await (await fetch("/api/tracklist")).json();
     document.getElementById("file").textContent = "🎚 " + data.source_file;
@@ -510,6 +511,9 @@
     const was = selectedTrack;
     setLive(!!data.live);
     tracks = data.tracks;
+    // Sent back with every save: the server refuses one made against an older
+    // revision, whose indices would land on other tracks.
+    revision = data.revision === undefined ? null : data.revision;
     if (was) selectedTrack = tracks.find(t => t.timestamp === was.timestamp && t.artist === was.artist) || null;
     summaryEl.value = data.summary || "";
     autosizeSummary();
@@ -1277,12 +1281,20 @@
 
   document.getElementById("save").onclick = () => save();
 
-  // Returns whether the save landed, so Embed chapters can save first.
-  async function save() {
+  // Returns whether the save landed, so Embed chapters can save first. A save
+  // asked for while one is in flight (a double click, ⌘S then Embed) joins it
+  // rather than sending the same rows again.
+  let saving = null;
+  function save() {
+    if (!saving) saving = doSave().finally(() => { saving = null; });
+    return saving;
+  }
+
+  async function doSave() {
     // Existing rows map back by their stable server index (NOT array position,
     // which inserted rows shift); new rows carry a timestamp and no index.
     const hasNew = tracks.some(t => t._new);
-    const payload = { summary: summaryEl.value,
+    const payload = { revision, summary: summaryEl.value,
                       episode: { title: epTitle.value, artist: epArtist.value },
                       tracks: tracks.map(t => {
       if (t._new) return { artist: t.artist, title: t.title, timestamp: t.timestamp, rejected: !!t.rejected };

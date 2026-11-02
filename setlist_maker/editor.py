@@ -9,6 +9,7 @@ Provides a spreadsheet-like interface for:
 """
 
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -23,7 +24,10 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
 
 from setlist_maker import AUDIO_EXTENSIONS
+from setlist_maker.fileio import atomic_write_text, config_dir
 from setlist_maker.playback import PREVIEW_SECONDS, PlaybackController, playback_available
+
+logger = logging.getLogger(__name__)
 
 # The set description is free text the user types, so it can contain any shape
 # this format otherwise uses -- including a line that reads exactly like a
@@ -521,12 +525,19 @@ def save_tracklist(
 ) -> None:
     """Write a tracklist to markdown + its JSON sidecar, and persist corrections.
 
-    Shared by the TUI editor and the web editor so both front ends produce
-    identical output and cannot drift apart.
+    Shared by the TUI editor, the web editor and the identify run's own output,
+    so all three produce identical files and cannot drift apart.
+
+    Each file is replaced atomically (#64): the ``.md`` is authoritative for
+    which tracks exist and the description's only store, so a crash mid-write
+    must leave the previous one, never a truncated one. The sidecar goes
+    first. If only one of the two lands, new sidecar + old ``.md`` is harmless
+    (it is joined by timestamp, and a row it lacks just has no artwork), while
+    new ``.md`` + old sidecar would re-join a corrected track to the stale
+    Shazam URL it was corrected away from (#30).
     """
-    output_path.write_text(tracklist.to_markdown())
-    json_path = output_path.with_suffix(".json")
-    json_path.write_text(json.dumps(tracklist.to_json(), indent=2))
+    atomic_write_text(output_path.with_suffix(".json"), json.dumps(tracklist.to_json(), indent=2))
+    atomic_write_text(output_path, tracklist.to_markdown())
     if corrections_db:
         corrections_db.save()
 
@@ -984,13 +995,16 @@ class CorrectionsDB:
 
     def __init__(self, db_path: Path | None = None):
         if db_path is None:
-            # Default to ~/.config/setlist-maker/corrections.json
-            config_dir = Path.home() / ".config" / "setlist-maker"
-            config_dir.mkdir(parents=True, exist_ok=True)
-            db_path = config_dir / "corrections.json"
+            # $XDG_CONFIG_HOME/setlist-maker/corrections.json, else ~/.config/...
+            # -- the same rule as episode.py's config.json, and the one the
+            # tests' isolated_user_config redirects.
+            db_path = config_dir() / "corrections.json"
 
         self.db_path = db_path
         self.corrections: dict[str, dict[str, str]] = {}
+        # Set when the file exists but could not be read: saving would replace
+        # every correction ever learned with only this session's.
+        self._unsaveable = False
         self._load()
 
     def _make_key(self, artist: str, title: str) -> str:
@@ -998,19 +1012,65 @@ class CorrectionsDB:
         return f"{artist.lower().strip()}|||{title.lower().strip()}"
 
     def _load(self) -> None:
-        """Load corrections from disk."""
-        if self.db_path.exists():
-            try:
-                with open(self.db_path) as f:
-                    data = json.load(f)
-                    self.corrections = data.get("corrections", {})
-            except (json.JSONDecodeError, IOError):
-                self.corrections = {}
+        """Load corrections from disk, never at the cost of the file's contents (#64).
+
+        Unparseable (a half-synced iCloud copy, a stray hand edit) or the wrong
+        shape: the file is moved aside to ``corrections.json.corrupt-<time>``
+        and this session starts empty, so the next save cannot overwrite it.
+        Unreadable (permissions, I/O): it cannot be moved either, so saving is
+        refused for this session instead.
+        """
+        try:
+            raw = self.db_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return
+        except OSError as e:
+            self._unsaveable = True
+            logger.warning(
+                "could not read corrections from %s (%s); "
+                "corrections from this session will not be saved",
+                self.db_path,
+                e,
+            )
+            return
+        try:
+            data = json.loads(raw)
+            corrections = data.get("corrections", {}) if isinstance(data, dict) else None
+            if not isinstance(corrections, dict):
+                raise ValueError("expected an object with a 'corrections' object")
+        except ValueError as e:
+            self._quarantine(e)
+            return
+        self.corrections = corrections
+
+    def _quarantine(self, error: Exception) -> None:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        aside = self.db_path.with_name(f"{self.db_path.name}.corrupt-{stamp}")
+        try:
+            self.db_path.replace(aside)
+        except OSError as e:
+            self._unsaveable = True
+            logger.warning(
+                "corrections file %s is unreadable (%s) and could not be moved aside (%s); "
+                "corrections from this session will not be saved",
+                self.db_path,
+                error,
+                e,
+            )
+            return
+        logger.warning(
+            "corrections file %s is unreadable (%s); kept it as %s and started a new one",
+            self.db_path,
+            error,
+            aside,
+        )
 
     def save(self) -> None:
-        """Save corrections to disk."""
-        with open(self.db_path, "w") as f:
-            json.dump({"corrections": self.corrections}, f, indent=2)
+        """Save corrections to disk (atomically; refused if the file couldn't be read)."""
+        if self._unsaveable:
+            logger.warning("not saving corrections: %s could not be read", self.db_path)
+            return
+        atomic_write_text(self.db_path, json.dumps({"corrections": self.corrections}, indent=2))
 
     def add_correction(
         self,

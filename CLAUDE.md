@@ -371,7 +371,14 @@ CLI application with the following modules:
 ### `setlist_maker/editor.py` - Interactive TUI editor
 - **TracklistEditor:** Textual app providing spreadsheet-like interface
 - **EditTrackScreen:** Modal dialog for editing artist/title fields
-- **CorrectionsDB:** Persistent storage for user corrections (~/.config/setlist-maker/corrections.json)
+- **CorrectionsDB:** Persistent storage for user corrections, at
+  `$XDG_CONFIG_HOME/setlist-maker/corrections.json` (else `~/.config/...`), via
+  `fileio.config_dir()` like `episode.py`'s config, so the tests' `isolated_user_config` covers it.
+  It is every correction ever learned, so a load never risks it (#64). An unparseable or
+  wrong-shaped file is renamed `corrections.json.corrupt-<time>` with a warning, and the session
+  starts empty. It used to load as `{}`, and the next save then overwrote the file with only that
+  session's corrections. A file that exists but can't be *read* can't be moved either, so `save()`
+  refuses for the rest of the session. Saves are atomic.
 - **apply_track_edit():** The one place a correction lands on a `Track` — shared with the
   web editor (like `save_tracklist()`) so the two front ends cannot drift. Stamps
   `original_*` once, records the correction, and **clears `coverart_url`**: that URL is
@@ -487,6 +494,16 @@ CLI application with the following modules:
   recorded). The page sends existing rows by `index` (not array position, which
   inserts shift) and reloads after saving new tracks so re-save can't duplicate.
   Opened with `identify --web-edit` / `-w`; mutually exclusive with `--edit`.
+- **Saving is serialized and revisioned (#64).** `ctx.state_lock` is held by `/api/save` and
+  around the embed in `/api/chapters`, and by `/api/tracklist` while it snapshots the tracks.
+  The lock alone does not make a double-submitted save safe. The second copy would insert its
+  new row again, and once the first copy's insert has re-sorted the list, its stale indices
+  rename other tracks. So `ctx.revision` is bumped whenever a save changes which index names
+  which track (and when `WatchSession.finish()` swaps the tracklist in). `/api/tracklist` returns
+  it, the page sends it back, and a save carrying an older revision is a 409 that asks the user
+  to reload. A payload with no `revision` (an older page) is not checked. The page's `save()`
+  also joins a save already in flight instead of sending a second one. A payload that fails
+  validation (a `ValueError`, including a body that isn't JSON) is a 400, not a 500.
 - **Editable set description:** the page renders `Tracklist.summary` as an always-on,
   column-aligned `<textarea>` (empty shows an "add a description" placeholder). Its
   text rides along in the `POST /api/save` body; `_handle_save()` forwards it as
@@ -567,6 +584,21 @@ CLI application with the following modules:
   Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, all suppressed while focus is in an
   input/textarea — except `#seek`, a range input that's deliberately exempted
   so the arrows still seek when the scrubber has focus.
+
+### `setlist_maker/fileio.py` - Atomic writes and the config directory
+
+- **`atomic_write_bytes` / `atomic_write_text`:** a temp file in the same directory, fsynced,
+  then `os.replace`d over the target, so a crash or a full disk leaves the previous file. Used
+  for the `.md` and `.json` (`save_tracklist()`, which the identify run's own output also goes
+  through), the corrections DB, the sequential progress file, uploads, and the episode and
+  config files. The replaced file keeps its mode, since `mkstemp` would make it owner-only, and a
+  symlinked target stays a symlink. The umask is read once at import: reading it means briefly
+  setting it to 0, process-wide, and the web editor is threaded.
+- `save_tracklist()` writes the **sidecar before the `.md`**. If only one lands, a new sidecar
+  under an old `.md` is harmless, but a new `.md` over an old sidecar re-joins a corrected track to
+  the stale Shazam URL (#30).
+- **`config_dir()`:** `$XDG_CONFIG_HOME/setlist-maker`, else `~/.config/setlist-maker`. Leaf
+  module, standard library only.
 
 ### `setlist_maker/uploads.py` - Uploaded artwork and episode covers
 
