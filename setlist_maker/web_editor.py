@@ -263,6 +263,23 @@ def _load_timeline_script() -> str:
     return (files("setlist_maker") / "web_timeline.js").read_text(encoding="utf-8")
 
 
+# The page's own modules and stylesheet (setlist_maker/web/). A plain name and
+# a known extension, so a request can never walk out of that directory.
+_WEB_ASSET = re.compile(r"^/web/([a-z_]+)\.(js|css)$")
+_WEB_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8"}
+
+
+def _load_web_asset(path: str) -> tuple[str, str] | None:
+    """``(text, content type)`` for a ``/web/`` request, or None if there is no such file."""
+    m = _WEB_ASSET.match(path)
+    if not m:
+        return None
+    asset = files("setlist_maker") / "web" / f"{m.group(1)}.{m.group(2)}"
+    if not asset.is_file():
+        return None
+    return asset.read_text(encoding="utf-8"), _WEB_TYPES[m.group(2)]
+
+
 @dataclass
 class EditorContext:
     """Mutable state shared with the request handler for one editing session."""
@@ -503,6 +520,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_text(_load_page(), "text/html; charset=utf-8")
         elif path == "/timeline.js":
             self._send_text(_load_timeline_script(), "text/javascript; charset=utf-8")
+        elif path.startswith("/web/"):
+            asset = _load_web_asset(path)
+            if asset is None:
+                self.send_error(HTTPStatus.NOT_FOUND)
+            else:
+                self._send_text(*asset)
         elif path == "/api/tracklist":
             self._send_tracklist()
         elif path == "/api/probes":
