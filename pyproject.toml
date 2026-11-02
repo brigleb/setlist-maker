@@ -54,7 +54,7 @@ Issues = "https://github.com/brigleb/setlist-maker/issues"
 where = ["."]
 
 [tool.setuptools.package-data]
-setlist_maker = ["web_editor.html", "web_timeline.js", "web/*.js", "web/*.css"]
+setlist_maker = ["web_editor.html", "web_timeline.js", "web/*.js", "web/*.css", "web/*.md"]
 
 [tool.pytest.ini_options]
 # A hang (a server that never shuts down, a wait on a queue nobody fills)

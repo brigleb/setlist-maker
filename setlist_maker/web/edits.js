@@ -3,7 +3,7 @@
 import { S, TL } from "./state.js";
 import { audio, toast } from "./dom.js";
 import { fmt } from "./util.js";
-import { reindexPlayingTrack, splitWindow } from "./model.js";
+import { splitWindow } from "./model.js";
 import { setDirty } from "./history.js";
 import { sampleAt } from "./inspector.js";
 import { render } from "./main.js";
@@ -41,7 +41,6 @@ export function splitAt(t, seconds) {
   let j = i + 1;
   while (j < S.tracks.length && S.tracks[j].timestamp <= at) j++;
   S.tracks.splice(j, 0, row);
-  reindexPlayingTrack();
   setDirty(true);
   S.selectedTrack = row;
   render();

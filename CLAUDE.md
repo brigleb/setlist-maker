@@ -525,9 +525,9 @@ CLI application with the following modules:
   and store nothing in its place); `#toast` needs `z-index:60` or a toast raised over it renders behind
   the backdrop; and `[hidden] { display:none !important; }` is required because the panel's
   author `display:flex` otherwise beats the UA stylesheet's `[hidden]` rule.
-  It lives in the static markup **outside `#list`**, since `render()` rebuilds every row, and it
-  holds the open track as an **object reference** (`artTrack`) for the same reason
-  `playingTrack` exists — a re-sort or insert moves array positions underneath it.
+  It lives in the static markup **outside `#list`**, which Preact owns, and it holds the open
+  track as an **object reference** (`artTrack`) for the same reason `playingTrack` exists — a
+  re-sort or insert moves array positions underneath it.
   Tiles load candidate URLs **directly from the source**, like the player bar's thumbnail: the
   covers differ only in the picture, and compositing each one server-side to show the identical
   lower-third would add latency and nothing else. Which tile reads as in use comes from the
@@ -560,11 +560,11 @@ CLI application with the following modules:
   recording. On a 4-hour set the global bar was 13.6 s/px, so fine positioning
   was unavailable; a window brings that down to roughly 0.1-0.2 s/px depending
   on track length (measured ~0.143 s/px on a 3-minute track). Windows come from
-  `windowFor(i)`, derived on demand so an inserted row needs no bookkeeping for
-  its *window* — but the playing track's bare array index does: `addBelow()`'s
-  splice and `commit()`'s re-sort can both move it, so a module-scope
-  `playingTrack` reference is re-resolved to a fresh `playingIndex` via
-  `tracks.indexOf()` (`reindexPlayingTrack()`) at both mutation sites. Windows
+  `windowFor(i)`, derived on demand so an inserted row needs no bookkeeping. The
+  playing track is held only as an object (`S.playingTrack`); its position is
+  `model.playingIndex()`, derived each time, so a splice or re-sort cannot leave a
+  stale index. `load()` replaces every object, so it re-resolves the playing track
+  by position, since a reload keeps the order. Windows
   are clamped to ≥1s so duplicate timestamps cannot divide by zero, and
   `trackIndexAt()` lets the playing track win while the position is still inside
   its own window — its backwards walk otherwise resolves a shared timestamp to
@@ -578,9 +578,8 @@ CLI application with the following modules:
   advance and manual prev/next, *including* `prevTrack()`'s restart branch,
   which scrolls even though the index is unchanged — and left unscrolled only
   for a row's own ▶ button, since that row is already under the cursor.
-  `render()` also calls `setPlayingIndex()` (with `scroll: false`) so the
-  player bar's label/count/artwork stay correct after an edit or insert, not
-  just the row highlight.
+  `render()` also calls `syncPlayerBar()` so the player bar's label, count and
+  artwork stay correct after an edit or insert.
   Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, all suppressed while focus is in an
   input/textarea — except `#seek`, a range input that's deliberately exempted
   so the arrows still seek when the scrubber has focus.
@@ -679,6 +678,33 @@ CLI application with the following modules:
   player stayed disabled, and every playback key did nothing.
 - `test_every_module_import_is_exported` is the only check on the imports: with no bundler, a
   bad import fails only in the browser and takes the whole page down.
+- **Rendering is Preact** (#53): vendored Preact 10 and htm (tagged templates, so no JSX and no
+  build). See `web/LICENSES.md` for versions and hashes; an import map in the page resolves the
+  bare `"preact"` the hooks file imports, and the page's own modules go through `ui.js` only.
+  The four panes `render()` used to rebuild wholesale are components: the list, the timeline
+  grid, the inspector and the queue. Each `renderX()` is a top-level Preact render into its
+  container, which is synchronous. `splitAtPlayhead()` relies on that when it focuses the new
+  track's field straight after. Rows, blocks, thumbs and seams are keyed by track object
+  (`ui.keyOf`), so an edit replaces the nodes that changed (measured: rejecting one row removed
+  82 subtrees before, 2 nodes now). The player bar, the episode cover strip and the artwork
+  panel are still updated in place by hand.
+- Preact 10 traps this page hits:
+  - Preact compares `value` against the input's live DOM value on every render, so a
+    re-render resets a field mid-keystroke unless the typed text lives in component state. The
+    inspector's `NameField` and the list's `EditFields` keep drafts, and that is what replaced
+    the old "don't rebuild the inspector while a field has focus" guard. Escape writes the saved
+    value into the DOM *before* blurring, or the blur's `change` would commit the draft.
+  - Preact diffs against its last vnode, not the DOM. So an attribute that code outside
+    Preact also writes must stay out of the vnode: `.tl-playhead` has no `hidden` or `style`
+    props, because `updatePlayhead()` moves it on every `timeupdate`. The hover `.tl-cursor` is
+    appended by hand to a Preact-owned `.tl-lanes`; Preact leaves trailing nodes it didn't
+    create alone.
+  - Thumbs ask `artwork.whenVisible()` to tell them when they scroll near the viewport, and
+    unsubscribe in their effect's cleanup. A thumb with a new URL (after a save bumps
+    `S.artVersion`) shows the gradient until the new composite loads, as before.
+- Inline editing is `S.editing` (a track object) rather than DOM surgery. **Escape cancels.**
+  It used to commit: the old Escape rebuilt the list, Chrome fires `focusout` when the focused
+  input is removed, and the commit-on-leave handler then saved what had been typed.
 
 ### `setlist_maker/web_timeline.js` + the editor's timeline
 
@@ -735,8 +761,8 @@ CLI application with the following modules:
   user's own correction; declining leaves the answer in "Shazam heard" with its Use button.
   Live mode only samples: nothing may be edited under the run.
 - Selection is an object reference (`selectedTrack`), like `playingTrack`/`artTrack`. Choosing
-  to play a track selects it; automatic advance does not. During a replay the inspector is not
-  rebuilt, or a tick would take the focus out of a field being typed in.
+  to play a track selects it; automatic advance does not. During a replay the inspector and the
+  queue skip the redraws: they describe every sample, not the replay's subset.
 
 ### `setlist_maker/sampler.py` - Click-to-sample
 

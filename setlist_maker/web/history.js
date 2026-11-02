@@ -2,7 +2,6 @@
 
 import { S } from "./state.js";
 import { autosizeSummary, epArtist, epTitle, summaryEl, toast } from "./dom.js";
-import { reindexPlayingTrack } from "./model.js";
 import { closeArtwork, overlay } from "./artwork.js";
 import { render } from "./main.js";
 
@@ -71,8 +70,9 @@ export function restore(to) {
     Object.assign(t, snap.fields[i]);
   });
   S.coverChoice = snap.cover;
-  reindexPlayingTrack();
-  if (S.selectedTrack && !S.tracks.includes(S.selectedTrack)) S.selectedTrack = null;
+  for (const k of ["playingTrack", "selectedTrack", "editing"]) {
+    if (S[k] && !S.tracks.includes(S[k])) S[k] = null;
+  }
   if (overlay.classList.contains("open")) closeArtwork();  // it may show a pick being undone
   S.dirty = stepAt !== savedAt || textState() !== savedText;
   document.getElementById("save").disabled = !S.dirty;

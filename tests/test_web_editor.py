@@ -11,6 +11,8 @@ from importlib.resources import files
 import pytest
 
 WEB = files("setlist_maker") / "web"
+# Copied from npm and checked by hash (web/LICENSES.md), not by the import test.
+VENDORED = {"preact.js", "preact_hooks.js", "htm.js"}
 
 
 def _page_source():
@@ -62,9 +64,9 @@ def test_page_wiring():
     assert '"&v=" + S.artVersion' in src and "S.artVersion++" in src
     # The `background` shorthand resets background-size:cover: a corner crop
     # with the composite's lower third off-screen.
-    assert "thumb.style.background =" not in src and "pt.style.background =" not in src
-    # render() rebuilds every row; observers must be dropped first or they leak.
-    assert "artObserver.disconnect()" in src
+    assert "pt.style.background =" not in src and "style=${{ backgroundImage: bg }}" in src
+    # A row's thumb stops observing when it unmounts, or every edit would leak one.
+    assert "return () => { artObserver.unobserve(node)" in src
     # 0 is a real index; an unsaved row has none and must not request art.
     assert "t.index !== undefined && t.index !== null" in src
     # The panel is full of controls: only the backdrop dismisses it, and it owns
@@ -86,12 +88,14 @@ def test_every_module_import_is_exported():
     doesn't export fails only in the browser, and takes the whole page with it."""
     exports, imports = {}, {}
     for f in WEB.iterdir():
-        if not f.name.endswith(".js"):
+        if not f.name.endswith(".js") or f.name in VENDORED:
             continue
         text = f.read_text(encoding="utf-8")
         exports[f.name] = set(
             re.findall(r"^export (?:async )?(?:function|const|let) (\w+)", text, re.M)
         )
+        for names in re.findall(r"^export \{([^}]*)\};", text, re.M):
+            exports[f.name] |= {n.strip() for n in names.split(",") if n.strip()}
         imports[f.name] = re.findall(r'^import \{([^}]*)\} from "\./(\w+\.js)";', text, re.M)
         for side_effect in re.findall(r'^import "\./(\w+\.js)";', text, re.M):
             imports[f.name].append(("", side_effect))
@@ -99,8 +103,20 @@ def test_every_module_import_is_exported():
     for name, stmts in imports.items():
         for names, source in stmts:
             assert source in exports, f"{name} imports from missing {source}"
-            for imported in (n.strip() for n in names.split(",") if n.strip()):
+            for imported in (n.split(" as ")[0].strip() for n in names.split(",") if n.strip()):
                 assert imported in exports[source], f"{name}: {source} does not export {imported}"
+
+
+def test_vendored_files_match_their_recorded_hashes():
+    """Preact and htm are copied from npm byte for byte; an edit to one would
+    otherwise pass unnoticed as "the library"."""
+    import hashlib
+
+    table = (WEB / "LICENSES.md").read_text(encoding="utf-8")
+    recorded = dict(re.findall(r"^\| `([\w.]+)` \|.*\| `([0-9a-f]{64})` \|$", table, re.M))
+    assert set(recorded) == VENDORED
+    for name, digest in recorded.items():
+        assert hashlib.sha256((WEB / name).read_bytes()).hexdigest() == digest, name
 
 
 def test_web_assets_are_served_and_nothing_else(sample_tracklist, tmp_path):

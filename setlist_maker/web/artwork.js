@@ -7,17 +7,24 @@ import { setDirty } from "./history.js";
 import { render, save } from "./main.js";
 
 // Generate visible rows first: 60-track sets are network-bound on a miss.
-export const artObserver = new IntersectionObserver((entries) => {
+// One observer for every thumb; whenVisible() returns the unsubscribe a
+// component's effect cleanup calls, so an unmounted row leaves nothing behind.
+const onVisible = new WeakMap();
+const artObserver = new IntersectionObserver((entries) => {
   for (const e of entries) {
     if (!e.isIntersecting) continue;
-    const el = e.target;
-    artObserver.unobserve(el);
-    const img = new Image();
-    // 404 = unidentified or out of range; keep the gradient placeholder.
-    img.onload = () => { el.style.backgroundImage = "url('" + img.src + "')"; };
-    img.src = "/api/artwork?index=" + el.dataset.index + "&v=" + S.artVersion;
+    const cb = onVisible.get(e.target);
+    artObserver.unobserve(e.target);
+    onVisible.delete(e.target);
+    if (cb) cb();
   }
 }, { rootMargin: "200px" });  // start just before the row scrolls into view
+
+export function whenVisible(node, cb) {
+  onVisible.set(node, cb);
+  artObserver.observe(node);
+  return () => { artObserver.unobserve(node); onVisible.delete(node); };
+}
 
 export const overlay = document.getElementById("artwork-overlay");
 export const overlayImg = document.getElementById("artwork-large");
@@ -28,9 +35,7 @@ export const artUrlEl = document.getElementById("art-url");
 export const artCoverBtn = document.getElementById("art-cover");
 
 // The track the panel is showing, held as an object reference rather than a
-// position: render() rebuilds every row and addBelow()/commit() can re-sort
-// the array while the panel is open, so a stored index would go stale the
-// same way playingIndex does (hence reindexPlayingTrack).
+// position: addBelow()/commit() can re-sort the array while the panel is open.
 export let artTrack = null;
 // Which tile the grid marks as in use. Seeded from the server's own `current`
 // flag rather than compared against artTrack.coverart_url: the server offers

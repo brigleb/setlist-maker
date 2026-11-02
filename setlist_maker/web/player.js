@@ -3,8 +3,8 @@
 import { GRADS, S } from "./state.js";
 import { audio, playerEl, pplayEl } from "./dom.js";
 import { fmt } from "./util.js";
-import { fmtWindowTimes, trackIndexAt, windowFor } from "./model.js";
-import { highlightPlayingRow } from "./list.js";
+import { fmtWindowTimes, playingIndex, trackIndexAt, windowFor } from "./model.js";
+import { renderList, scrollToPlaying } from "./list.js";
 import { renderTimeline, selectTrack, updatePlayhead } from "./grid.js";
 import { artSrc } from "./artwork.js";
 
@@ -24,9 +24,19 @@ export function seekTo(seconds) {
 // already under their cursor and yanking the list would be hostile.
 export function setPlayingIndex(i, opts) {
   if (i === null || !S.tracks[i]) return;
-  S.playingIndex = i;
+  S.playingTrack = S.tracks[i];
+  syncPlayerBar();
+  renderList();  // the .playing row
+  if (opts && opts.scroll) scrollToPlaying();
+}
+
+// The bar's label, count and thumbnail for the playing track. render() calls
+// this too: an edit to the playing track's name, or an insert above it,
+// changes what the bar should say.
+export function syncPlayerBar() {
+  const i = playingIndex();
+  if (i === null) return;
   const t = S.tracks[i];
-  S.playingTrack = t;
   // Only a track missing *both* halves is unidentified; one that knows just
   // its title says so, in the same words the saved markdown uses (#44).
   document.getElementById("plabel").textContent =
@@ -38,7 +48,6 @@ export function setPlayingIndex(i, opts) {
   pt.style.backgroundImage = t.coverart_url
     ? "url('" + artSrc(t.coverart_url) + "')"
     : GRADS[i % GRADS.length];
-  highlightPlayingRow(opts && opts.scroll);
 }
 
 // `scroll` defaults to true: any jump the user did not initiate by clicking a
@@ -64,7 +73,7 @@ export function skip(delta) { seekTo(audio.currentTime + delta); }
 // Prev/next step through `tracks` by position, so rejected tracks are included
 // -- a track is often auditioned before the decision to un-reject it.
 export function prevTrack() {
-  const i = S.playingIndex === null ? trackIndexAt(audio.currentTime) : S.playingIndex;
+  const i = playingIndex() ?? trackIndexAt(audio.currentTime);
   if (i === null) return;
   // Familiar transport convention: restart this track unless already near its start.
   const target = (audio.currentTime - S.tracks[i].timestamp > PREV_RESTART_THRESHOLD)
@@ -73,7 +82,7 @@ export function prevTrack() {
 }
 
 export function nextTrack() {
-  const i = S.playingIndex === null ? trackIndexAt(audio.currentTime) : S.playingIndex;
+  const i = playingIndex() ?? trackIndexAt(audio.currentTime);
   if (i === null) return;
   playFrom(Math.min(S.tracks.length - 1, i + 1));
 }
@@ -88,11 +97,12 @@ export function syncPlayerUI() {
   const seek = document.getElementById("seek");
   document.getElementById("ptime").textContent =
     fmt(audio.currentTime) + " / " + fmt(audio.duration);
-  if (S.playingIndex === null) return;
-  const w = windowFor(S.playingIndex);
+  const p = playingIndex();
+  if (p === null) return;
+  const w = windowFor(p);
   const frac = Math.max(0, Math.min((audio.currentTime - w.start) / w.length, 1));
   if (!seekDragging) seek.value = String(Math.round(frac * 1000));
-  const times = fmtWindowTimes(S.playingIndex, audio.currentTime);
+  const times = fmtWindowTimes(p, audio.currentTime);
   document.getElementById("ppos").textContent = times.into + " · " + times.left;
 }
 
@@ -122,7 +132,7 @@ audio.addEventListener("timeupdate", syncPlayerUI);
 // how a boundary gets verified. Re-scope to whatever track we are now inside.
 audio.addEventListener("timeupdate", () => {
   const i = trackIndexAt(audio.currentTime);
-  if (i !== null && i !== S.playingIndex) {
+  if (i !== null && i !== playingIndex()) {
     setPlayingIndex(i, { scroll: true });
     // The syncPlayerUI() listener above already ran this tick against the
     // old index, so the thumb/position would otherwise show one stale
@@ -142,7 +152,7 @@ seekEl.addEventListener("pointercancel", endSeekDrag);
 seekEl.addEventListener("input", e => {
   // Same fallback as skip()/prevTrack()/nextTrack(): before the first play
   // playingIndex is null, but the scrubber should still work.
-  const i = S.playingIndex === null ? trackIndexAt(audio.currentTime) : S.playingIndex;
+  const i = playingIndex() ?? trackIndexAt(audio.currentTime);
   if (i === null) return;
   const w = windowFor(i);
   seekTo(w.start + (e.target.value / 1000) * w.length);
