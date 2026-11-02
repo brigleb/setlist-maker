@@ -64,6 +64,13 @@ export function splitAt(t, seconds) {
   const at = Math.floor(seconds);
   const w = splitWindow(t);
   if (S.liveMode || i === -1 || !w || !(at > w.start && at < w.end)) return false;
+  // Before the track's own row is time merged into it from the track before
+  // (#56). A new row cut there would sit between that merged row and this
+  // track, take the merged span over, and the cut would show nowhere.
+  if (at <= t.timestamp) {
+    toast("That part was merged in from the track before. Unmerge it to cut there");
+    return false;
+  }
   const row = { artist: "", title: "", timestamp: at, time: fmt(at), rejected: false, _new: true };
   // In timestamp order: a merged track's span runs over the rows merged into it.
   let j = i + 1;

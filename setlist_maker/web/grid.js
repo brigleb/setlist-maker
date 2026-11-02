@@ -184,7 +184,7 @@ export function updatePlayhead() {
   const ident = document.querySelector("#insp .in-identify");
   if (S.selectedTrack && (split || ident)) {
     const w = splitWindow(S.selectedTrack);
-    if (split) split.disabled = !(t > w.start + 1 && t < w.end - 1);
+    if (split) split.disabled = !(t > Math.max(w.start, S.selectedTrack.timestamp) + 1 && t < w.end - 1);
     if (ident) ident.disabled = !S.canSample || !(t >= w.start && t < w.end);
   }
 }

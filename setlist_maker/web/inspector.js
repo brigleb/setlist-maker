@@ -96,7 +96,8 @@ function Inspector({ t, i }) {
   // The split and identify buttons also follow the playhead between renders:
   // grid.updatePlayhead() keeps their `disabled` current as it moves.
   const now = audio.currentTime || 0;
-  const cantSplit = !(now > w.start + 1 && now < w.end - 1);
+  // Not inside time merged in from before (#56): see edits.splitAt().
+  const cantSplit = !(now > Math.max(w.start, t.timestamp) + 1 && now < w.end - 1);
   const cantIdentify = !S.canSample || !(now >= w.start && now < w.end);
   const identTitle = !S.canSample ? "Sampling needs the set's audio"
     : cantIdentify ? "Play inside this track, then ask Shazam what is playing (I)"

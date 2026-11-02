@@ -758,6 +758,10 @@ CLI application with the following modules:
   in #55, and the page reloads. After that reload the rejected row really does share the next
   track's second, which is why `clampStart` never pushes a row past a neighbour it already ties,
   and why `edits.mergeTrack()` refuses to bring that row back until the track has moved off it.
+  `splitAt()` refuses a cut inside the span merged in from before (and the Split button is
+  disabled there): the new row would land between the merged row and the track, take the merged
+  span over, and the cut would show nowhere. "＋ Add below" on a merged row does take its span,
+  which is what adding below that row means.
   `mergeTrack()` is the one place a row is merged or brought back (the inspector, the list's ✕
   and ↩, Needs a look), and `TL.owners()` says which kept track holds each row, for the
   inspector's "Merged into this track" and the variant rule. The short-track issue offers Merge
