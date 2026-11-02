@@ -7,13 +7,13 @@
 // header is static markup beside #list, not inside it: this render owns all
 // of #list and would replace anything else put there.
 
-import { GRADS, S, TL } from "./state.js";
+import { S, TL } from "./state.js";
 import { fmt, parseTime } from "./util.js";
 import { clampStart, playingIndex, setDuration } from "./model.js";
 import { setDirty } from "./history.js";
 import { toast } from "./dom.js";
 import { playFrom } from "./player.js";
-import { artSrc, showArtwork, whenVisible } from "./artwork.js";
+import { artFor, showArtwork, whenVisible } from "./artwork.js";
 import { render } from "./main.js";
 import { selectTrack } from "./grid.js";
 import { previewStart, startOf, toggleMerge } from "./edits.js";
@@ -21,39 +21,19 @@ import { html, keyOf, render as paint, useEffect, useRef, useState } from "./ui.
 
 const listEl = document.getElementById("list");
 
-// The row's thumbnail: a gradient until the chapter composite has loaded.
-// Requested only once the row is near the viewport (sets are network-bound on
-// a miss), and again whenever its URL changes -- an edit plus a save bumps
-// S.artVersion, which is what makes the browser fetch the regenerated image.
+// The row's thumbnail: artFor(), the same picture as everywhere else (#60).
+// The cover is asked for only once the row is near the viewport, since a
+// set opened for the first time is network-bound on every lookup.
 function Thumb({ t, i }) {
   const unknown = !t.artist && !t.title;
-  // 0 is a real index; an unsaved inserted row has none and requests nothing.
   const hasIndex = t.index !== undefined && t.index !== null;
-  const src = !unknown && hasIndex && !t._art
-    ? "/api/artwork?index=" + t.index + "&v=" + S.artVersion : null;
-  const [loaded, setLoaded] = useState(null);
+  const [near, setNear] = useState(false);
   const ref = useRef(null);
-  useEffect(() => {
-    if (!src) return undefined;
-    return whenVisible(ref.current, () => {
-      const img = new Image();
-      // 404 = unidentified or out of range: the gradient stays.
-      img.onload = () => setLoaded({ src, url: img.src });
-      img.src = src;
-    });
-  }, [src]);
+  useEffect(() => near ? undefined : whenVisible(ref.current, () => setNear(true)), [near]);
   // backgroundImage, never the `background` shorthand: the shorthand resets
-  // background-size/position, so the composite would render at natural size
-  // anchored top-left -- a corner crop with its label off-screen.
-  let bg = GRADS[i % GRADS.length];
-  if (t._art) {
-    // Picked in this session and not saved yet. The server's composite is
-    // still built from the old art, so show the raw choice instead; "Automatic"
-    // leaves no URL to show, so the gradient stands in until the save.
-    if (t.coverart_url) bg = "url('" + artSrc(t.coverart_url) + "')";
-  } else if (loaded && loaded.src === src) {
-    bg = "url('" + loaded.url + "')";
-  }
+  // background-size/position, so the cover would render at natural size
+  // anchored top-left.
+  const bg = artFor(t, i, near);
   const open = hasIndex && !unknown ? e => { e.stopPropagation(); showArtwork(t); } : undefined;
   return html`<div class="thumb" ref=${ref} style=${{ backgroundImage: bg }} onClick=${open}>
     ${unknown ? "?" : ""}</div>`;

@@ -25,6 +25,9 @@ export async function load() {
   // ...and the player by position: a reload keeps the order.
   const playing = playingIndex();
   setLive(!!data.live);
+  // Every object is new, and an index may now name another track (a live
+  // run finishing, a save that inserted rows): no thumb may reuse an old URL.
+  S.artVersion++;
   S.tracks = data.tracks;
   S.playingTrack = playing === null ? null : S.tracks[playing] || null;
   S.editing = null;

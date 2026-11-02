@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlparse
 
 from setlist_maker.adaptive import append_probe, live_snapshot, load_probes
 from setlist_maker.artwork import CHAPTER_IMAGE_SIZE, is_fetchable_url, resize_cover_art_url
-from setlist_maker.artwork_cache import artwork_options, chapter_image
+from setlist_maker.artwork_cache import artwork_options, chapter_image, source_artwork
 from setlist_maker.audio import probe_duration_seconds
 from setlist_maker.boundary import EngineConfig
 from setlist_maker.editor import (
@@ -304,6 +304,19 @@ def _load_web_asset(path: str) -> tuple[str, str] | None:
     return asset.read_text(encoding="utf-8"), _WEB_TYPES[m.group(2)]
 
 
+def _image_type(data: bytes) -> str:
+    """The media type of fetched cover art, which is not always JPEG."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return "application/octet-stream"
+
+
 @dataclass
 class EditorContext:
     """Mutable state shared with the request handler for one editing session."""
@@ -566,6 +579,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_artwork()
         elif path == "/api/artwork/options":
             self._send_artwork_options()
+        elif path == "/api/artwork/source":
+            self._send_artwork_source()
         elif path.startswith("/api/upload/"):
             self._send_upload(path[len("/api/upload/") :])
         elif path == "/api/cover":
@@ -831,6 +846,44 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError):
             pass  # row scrolled away / page closed
+
+    def _send_artwork_source(self) -> None:
+        """Serve one track's cover as found, without the chapter overlay (#60).
+
+        Every thumbnail on the page (list, timeline, inspector, player bar)
+        shows this, so a track has the same art everywhere. Before, only the
+        list asked the server and the rest drew ``coverart_url``, which a track
+        whose art came from further down the waterfall does not have: real art
+        in the list, a gradient everywhere else. The composite stays where it
+        is the thing being previewed, the artwork panel.
+
+        Resolved through ``_track_for_query()`` like the composite, so both
+        answer for the same tracks, and keyed by saved state the same way. The
+        one extra 404 is a track with no art anywhere, which the page draws as
+        its gradient; the composite renders that gradient server-side instead.
+        """
+        track = self._track_for_query()
+        if track is None:
+            return
+        data = source_artwork(
+            artist=track.artist,
+            title=track.title,
+            coverart_url=track.coverart_url,
+            uploads_dir=artwork_dir_for(self._ctx.output_path),
+        )
+        if not data:
+            self.send_error(HTTPStatus.NOT_FOUND, "no artwork found")
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", _image_type(data))
+        self.send_header("Content-Length", str(len(data)))
+        # The page keeps what it fetched, per save; see artwork.js artFor().
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _handle_upload(self) -> None:
         """Store an uploaded image beside the tracklist; answer with its reference.

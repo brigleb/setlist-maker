@@ -1,12 +1,12 @@
 // The <audio> transport: track windows, the scrubber, prev/next.
 
-import { GRADS, S, TL } from "./state.js";
+import { S, TL } from "./state.js";
 import { audio, playerEl, pplayEl } from "./dom.js";
 import { fmt } from "./util.js";
 import { fmtWindowTimes, playingIndex, trackIndexAt, windowFor } from "./model.js";
 import { renderList, scrollToPlaying } from "./list.js";
 import { renderTimeline, selectTrack, updatePlayhead } from "./grid.js";
-import { artSrc } from "./artwork.js";
+import { artFor } from "./artwork.js";
 
 export const SKIP_SECONDS = 15;
 export const PREV_RESTART_THRESHOLD = 3;  // ⏮ within this many seconds goes to the previous track
@@ -45,9 +45,7 @@ export function syncPlayerBar() {
   document.getElementById("pcount").textContent = "track " + (i + 1) + " of " + S.tracks.length;
   const pt = document.getElementById("pthumb");
   // backgroundImage, never the `background` shorthand -- see the CSS comment.
-  pt.style.backgroundImage = t.coverart_url
-    ? "url('" + artSrc(t.coverart_url) + "')"
-    : GRADS[i % GRADS.length];
+  pt.style.backgroundImage = artFor(t, i);
 }
 
 // `scroll` defaults to true: any jump the user did not initiate by clicking a

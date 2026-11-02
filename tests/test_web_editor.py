@@ -36,6 +36,7 @@ def test_page_wiring():
         "/api/probes",
         "/api/artwork?index=",
         "/api/artwork/options?index=",
+        "/api/artwork/source?index=",
     ):
         assert endpoint in src
     for element_id in (
@@ -773,6 +774,7 @@ def _request(base, path, host=None, method="GET", body=None):
         ("/api/audio", "GET", None),
         ("/api/artwork?index=0", "GET", None),
         ("/api/artwork/options?index=0", "GET", None),
+        ("/api/artwork/source?index=0", "GET", None),
         ("/api/probes", "GET", None),
         ("/timeline.js", "GET", None),
         ("/api/save", "POST", b'{"tracks": []}'),
@@ -1011,13 +1013,45 @@ def test_artwork_options_survives_a_failing_lookup(sample_tracklist, tmp_path, m
     assert "unreachable" in data["error"]
 
 
+@pytest.mark.parametrize("endpoint", ["options", "source"])
 @pytest.mark.parametrize("qs", ["index=99", "index=-1", "index=abc", "", "index=2"])
-def test_artwork_options_404s_where_the_composite_does(sample_tracklist, tmp_path, qs):
-    """Both artwork endpoints answer for exactly the same set of tracks --
+def test_artwork_endpoints_404_where_the_composite_does(
+    sample_tracklist, tmp_path, offline_artwork, qs, endpoint
+):
+    """Every artwork endpoint answers for exactly the same set of tracks --
     index 2 in the fixture is unidentified, which chapters skips too."""
     with running_server(_ctx(sample_tracklist, tmp_path)) as base:
         with pytest.raises(urllib.error.HTTPError) as exc:
-            urllib.request.urlopen(f"{base}/api/artwork/options?{qs}")
+            urllib.request.urlopen(f"{base}/api/artwork/{endpoint}?{qs}")
+    assert exc.value.code == 404
+
+
+def test_artwork_source_serves_the_cover_without_the_overlay(
+    sample_tracklist, tmp_path, monkeypatch
+):
+    """The page's thumbnails all show this (#60), so it is the art as found."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    png = b"\x89PNG\r\n\x1a\n" + b"cover"
+    monkeypatch.setattr(
+        "setlist_maker.artwork_cache.fetch_artwork",
+        lambda artist, title, coverart_url=None, size=600: png,
+    )
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(f"{base}/api/artwork/source?index=0") as r:
+            assert r.headers["Content-Type"] == "image/png"
+            assert "no-store" in r.headers.get("Cache-Control", "")
+            assert r.read() == png
+
+
+def test_a_track_with_no_art_anywhere_404s_only_from_the_source(
+    sample_tracklist, tmp_path, offline_artwork
+):
+    """The composite draws the gradient card itself; the page draws its own."""
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(f"{base}/api/artwork?index=0") as r:
+            assert r.status == 200
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(f"{base}/api/artwork/source?index=0")
     assert exc.value.code == 404
 
 
