@@ -39,6 +39,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "pytest-timeout>=2.2",
     "ruff>=0.1.0",
 ]
 
@@ -55,9 +56,17 @@ where = ["."]
 [tool.setuptools.package-data]
 setlist_maker = ["web_editor.html", "web_timeline.js"]
 
+[tool.pytest.ini_options]
+# A hang (a server that never shuts down, a wait on a queue nobody fills)
+# fails the test instead of stalling the run. Generous: the slowest test is ~3s.
+timeout = 120
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# Recent ruff also formats Python code blocks inside Markdown. The ones here are
+# plans and specs quoting code as it was, not code to keep formatted.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

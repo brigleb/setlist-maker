@@ -463,6 +463,7 @@ class TestProcessSingleFileOutput:
                     output_dir=temp_dir,
                     delay_seconds=0,
                     resume=False,
+                    summary=False,
                 )
             )
 

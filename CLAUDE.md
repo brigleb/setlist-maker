@@ -9,21 +9,21 @@ Setlist Maker is a Python CLI tool that generates tracklists from DJ sets or lon
 ## Development Commands
 
 ```bash
-# Install for development (editable mode)
-pip install -e ".[dev]"
+# Install for development: .venv from uv.lock, with the dev extras
+uv sync --extra dev
 
 # Run the CLI
-setlist-maker <audio_file_or_directory>
+uv run setlist-maker <audio_file_or_directory>
 
 # Run as module
-python -m setlist_maker <audio_file_or_directory>
+uv run python -m setlist_maker <audio_file_or_directory>
 
 # Lint with ruff
-ruff check .
-ruff format .
+uv run ruff check .
+uv run ruff format .
 
-# Run tests
-pytest
+# Run tests (~15s). A global `pytest` can't import the deps; use uv run or .venv/bin/pytest.
+uv run pytest
 ```
 
 **System dependency:** Requires ffmpeg installed (`brew install ffmpeg` / `apt install ffmpeg`).
@@ -849,6 +849,19 @@ helper wraps its request in `except Exception` and returns `None`, so an ordinar
 swallowed and the unpatched test would pass quietly with no artwork — the exact silence the
 guard exists to end. Patch seams instead: `setlist_maker.artwork.urllib.request.urlopen` for a
 source helper, or `fetch_artwork` / `artwork_candidates` **in the module that imported it**.
+
+### Test subprocess guard and server shutdown
+
+Beside the network guard, `block_remote_subprocesses` swaps `subprocess.Popen` for a subclass
+that raises `SubprocessBlocked` (also a `BaseException`, because `generate_summary()` catches
+`Exception`) when the program is `claude`. The DNS guard cannot see that call: the lookup
+happens in another process. `process_single_file()` defaults to `summary=True`, so a test that
+drives it must pass `summary=False`. ffmpeg, ffprobe and node are local and run normally.
+
+`fast_server_shutdown` makes `socketserver.BaseServer.serve_forever` default to a 50ms poll.
+Patched on the base class so it also reaches the thread production `WatchSession` starts;
+at 0.5s, waiting out `shutdown()` was ~75% of the suite's wall clock. `pytest-timeout`
+(`timeout = 120` in `pyproject.toml`) turns a hang into a failure.
 
 ## Code Style
 
