@@ -1,0 +1,163 @@
+// The <audio> transport: track windows, the scrubber, prev/next.
+
+import { GRADS, S } from "./state.js";
+import { audio, playerEl, pplayEl } from "./dom.js";
+import { fmt } from "./util.js";
+import { fmtWindowTimes, trackIndexAt, windowFor } from "./model.js";
+import { highlightPlayingRow } from "./list.js";
+import { renderTimeline, selectTrack, updatePlayhead } from "./grid.js";
+import { artSrc } from "./artwork.js";
+
+export const SKIP_SECONDS = 15;
+export const PREV_RESTART_THRESHOLD = 3;  // ⏮ within this many seconds goes to the previous track
+
+// Seeks clamp to the audio's real bounds, never to the track window: crossing
+// a boundary is how a user checks whether that boundary is right.
+export function seekTo(seconds) {
+  if (!audio.duration) return;
+  audio.currentTime = Math.max(0, Math.min(seconds, audio.duration));
+  syncPlayerUI();
+}
+
+// Point the player at track i without seeking. `scroll` brings its row into
+// view -- true only on automatic advance, since a row the user just clicked is
+// already under their cursor and yanking the list would be hostile.
+export function setPlayingIndex(i, opts) {
+  if (i === null || !S.tracks[i]) return;
+  S.playingIndex = i;
+  const t = S.tracks[i];
+  S.playingTrack = t;
+  // Only a track missing *both* halves is unidentified; one that knows just
+  // its title says so, in the same words the saved markdown uses (#44).
+  document.getElementById("plabel").textContent =
+    (t.artist || t.title ? (t.artist || "Unknown artist") : "Unidentified") +
+    (t.title ? " — " + t.title : "");
+  document.getElementById("pcount").textContent = "track " + (i + 1) + " of " + S.tracks.length;
+  const pt = document.getElementById("pthumb");
+  // backgroundImage, never the `background` shorthand -- see the CSS comment.
+  pt.style.backgroundImage = t.coverart_url
+    ? "url('" + artSrc(t.coverart_url) + "')"
+    : GRADS[i % GRADS.length];
+  highlightPlayingRow(opts && opts.scroll);
+}
+
+// `scroll` defaults to true: any jump the user did not initiate by clicking a
+// specific row should bring the destination into view. Only the row's own ▶
+// passes false, because that row is already under the cursor.
+export function playFrom(i, opts) {
+  const scroll = !opts || opts.scroll !== false;
+  setPlayingIndex(i, { scroll });
+  // Choosing to play a track is choosing to look at it; automatic advance
+  // (setPlayingIndex from timeupdate) deliberately does not move the selection.
+  selectTrack(S.tracks[i]);
+  // Capture the track now, not inside start(): if metadata is still
+  // loading, start() runs later and a re-indexed `tracks[i]` at that point
+  // could be a different track (or throw if tracks was replaced by load()).
+  const track = S.tracks[i];
+  const start = () => { audio.currentTime = track.timestamp; audio.play(); };
+  if (audio.readyState >= 1) start();
+  else audio.addEventListener("loadedmetadata", start, { once: true });
+}
+
+export function skip(delta) { seekTo(audio.currentTime + delta); }
+
+// Prev/next step through `tracks` by position, so rejected tracks are included
+// -- a track is often auditioned before the decision to un-reject it.
+export function prevTrack() {
+  const i = S.playingIndex === null ? trackIndexAt(audio.currentTime) : S.playingIndex;
+  if (i === null) return;
+  // Familiar transport convention: restart this track unless already near its start.
+  const target = (audio.currentTime - S.tracks[i].timestamp > PREV_RESTART_THRESHOLD)
+    ? i : Math.max(0, i - 1);
+  playFrom(target);
+}
+
+export function nextTrack() {
+  const i = S.playingIndex === null ? trackIndexAt(audio.currentTime) : S.playingIndex;
+  if (i === null) return;
+  playFrom(Math.min(S.tracks.length - 1, i + 1));
+}
+
+// Declared before syncPlayerUI, which reads it: `let` has no hoisted value,
+// so defining it after would leave a temporal-dead-zone trap for any future
+// caller that runs earlier than these listeners.
+export let seekDragging = false;
+
+// Reflect audio state into the bar. Called on timeupdate and after any seek.
+export function syncPlayerUI() {
+  const seek = document.getElementById("seek");
+  document.getElementById("ptime").textContent =
+    fmt(audio.currentTime) + " / " + fmt(audio.duration);
+  if (S.playingIndex === null) return;
+  const w = windowFor(S.playingIndex);
+  const frac = Math.max(0, Math.min((audio.currentTime - w.start) / w.length, 1));
+  if (!seekDragging) seek.value = String(Math.round(frac * 1000));
+  const times = fmtWindowTimes(S.playingIndex, audio.currentTime);
+  document.getElementById("ppos").textContent = times.into + " · " + times.left;
+}
+
+pplayEl.onclick = () => { if (audio.paused) audio.play(); else audio.pause(); };
+document.getElementById("pback15").onclick = () => skip(-SKIP_SECONDS);
+document.getElementById("pfwd15").onclick = () => skip(SKIP_SECONDS);
+document.getElementById("pprev").onclick = prevTrack;
+document.getElementById("pnext").onclick = nextTrack;
+
+audio.addEventListener("play", () => pplayEl.textContent = "⏸");
+audio.addEventListener("pause", () => pplayEl.textContent = "▶");
+function onMetadata() {
+  playerEl.classList.remove("disabled");
+  syncPlayerUI();
+  renderTimeline();  // the real duration can differ from the saved one
+}
+audio.addEventListener("loadedmetadata", onMetadata);
+// Module scripts run after the document has parsed, by which time a quick
+// <audio preload="metadata"> may already have fired the event above; the
+// player would then stay disabled, and with it every playback key. Deferred:
+// renderTimeline() reads state in modules that may not have run yet.
+if (audio.readyState >= 1) queueMicrotask(onMetadata);  // after every module has loaded
+audio.addEventListener("timeupdate", () => updatePlayhead());
+audio.addEventListener("error", () => playerEl.classList.add("disabled"));
+audio.addEventListener("timeupdate", syncPlayerUI);
+// Playback deliberately runs past a window's end: hearing the transition is
+// how a boundary gets verified. Re-scope to whatever track we are now inside.
+audio.addEventListener("timeupdate", () => {
+  const i = trackIndexAt(audio.currentTime);
+  if (i !== null && i !== S.playingIndex) {
+    setPlayingIndex(i, { scroll: true });
+    // The syncPlayerUI() listener above already ran this tick against the
+    // old index, so the thumb/position would otherwise show one stale
+    // frame (pegged to the old window's edge) until the next timeupdate.
+    syncPlayerUI();
+  }
+});
+
+export const seekEl = document.getElementById("seek");
+seekEl.addEventListener("pointerdown", () => { seekDragging = true; });
+// A drag the OS interrupts (gesture cancelled, pointer lost) ends in
+// pointercancel with no pointerup; a flag stuck true would keep timeupdate
+// from moving the thumb until the next complete drag cleared it.
+export const endSeekDrag = () => { seekDragging = false; };
+seekEl.addEventListener("pointerup", endSeekDrag);
+seekEl.addEventListener("pointercancel", endSeekDrag);
+seekEl.addEventListener("input", e => {
+  // Same fallback as skip()/prevTrack()/nextTrack(): before the first play
+  // playingIndex is null, but the scrubber should still work.
+  const i = S.playingIndex === null ? trackIndexAt(audio.currentTime) : S.playingIndex;
+  if (i === null) return;
+  const w = windowFor(i);
+  seekTo(w.start + (e.target.value / 1000) * w.length);
+});
+
+// Start playback at an arbitrary second (a pin, a double-click) rather than
+// at a track's start, and let the player's own timeupdate re-scoping find
+// which track that is.
+export function playAt(seconds) {
+  const go = () => {
+    audio.currentTime = Math.max(0, seconds);
+    const i = trackIndexAt(audio.currentTime);
+    if (i !== null) setPlayingIndex(i, { scroll: false });
+    audio.play();
+  };
+  if (audio.readyState >= 1) go();
+  else audio.addEventListener("loadedmetadata", go, { once: true });
+}

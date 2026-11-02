@@ -1,6 +1,7 @@
 """Tests for the web editor (setlist_maker.web_editor)."""
 
 import json
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -9,15 +10,109 @@ from importlib.resources import files
 
 import pytest
 
+WEB = files("setlist_maker") / "web"
 
-def test_page_asset_exists_and_has_hooks():
-    """The packaged HTML page exists and references the API + audio element."""
+
+def _page_source():
+    """The page as the browser gets it: markup, stylesheet and every module."""
+    parts = [(files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")]
+    parts += [f.read_text(encoding="utf-8") for f in sorted(WEB.iterdir(), key=lambda f: f.name)]
+    return "\n".join(parts)
+
+
+def test_page_wiring():
+    """Substring-level guards for decisions a refactor could silently undo."""
+    src = _page_source()
     html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
-    assert "/api/tracklist" in html
-    assert "/api/save" in html
-    assert "/api/done" in html
-    assert "/api/audio" in html
-    assert "<audio" in html
+    assert '<script src="/timeline.js"></script>' in html
+    assert '<script type="module" src="/web/main.js"></script>' in html
+    for endpoint in (
+        "/api/tracklist",
+        "/api/save",
+        "/api/done",
+        "/api/audio",
+        "/api/probes",
+        "/api/artwork?index=",
+        "/api/artwork/options?index=",
+    ):
+        assert endpoint in src
+    for element_id in (
+        "timeline",
+        "artwork-overlay",
+        "artwork-panel",
+        "artwork-grid",
+        "art-choose",
+        "art-cover",
+        "art-url",
+    ):
+        assert f'id="{element_id}"' in html, f"missing #{element_id}"
+    assert '<textarea id="summary"' in html and "Add a description for this set" in html
+    assert "summary: summaryEl.value" in src  # the description is in the save payload
+    assert "addBelow(" in src and "timefield" in src and "MM:SS" in src  # insert + its time
+
+    # Dark mode is tokens + a prefers-color-scheme block; native controls follow (#34).
+    assert '<meta name="color-scheme" content="light dark">' in html
+    assert "color-scheme: light dark" in src and "@media (prefers-color-scheme: dark)" in src
+    # The list must clear the fixed player bar (~84px).
+    padding = re.search(r"body\s*\{[^}]*padding-bottom:\s*(\d+)px", src)
+    assert padding and int(padding.group(1)) >= 100
+
+    # Artwork. A saved edit changes the composite, so thumbs cache-bust on a
+    # version bumped at save, or Chrome reuses the pre-edit image.
+    assert '"&v=" + S.artVersion' in src and "S.artVersion++" in src
+    # The `background` shorthand resets background-size:cover: a corner crop
+    # with the composite's lower third off-screen.
+    assert "thumb.style.background =" not in src and "pt.style.background =" not in src
+    # render() rebuilds every row; observers must be dropped first or they leak.
+    assert "artObserver.disconnect()" in src
+    # 0 is a real index; an unsaved row has none and must not request art.
+    assert "t.index !== undefined && t.index !== null" in src
+    # The panel is full of controls: only the backdrop dismisses it, and it owns
+    # the keyboard while open (its tiles are BUTTONs the input guard exempts).
+    assert "if (e.target === overlay) closeArtwork()" in src
+    assert 'if (overlay.classList.contains("open")) return;' in src
+    assert "[hidden] { display:none !important; }" in src  # beats author display rules
+    assert "z-index:60" in src  # the toast outranks the overlay
+    # An unsaved pick wins over saved state in the panel, and is the only reason
+    # a row sends coverart_url -- sending it for every row re-pins art (#30).
+    assert "if (t._art) {" in src and "if (!t._art) {" in src
+    assert "if (t._art) edit.coverart_url = t.coverart_url;" in src
+    assert "episode_cover: !!t.episode_cover" in src
+    assert "&artist=" in src and "&title=" in src  # the picker searches the live text
+
+
+def test_every_module_import_is_exported():
+    """No bundler checks the page's imports: a module importing a name its source
+    doesn't export fails only in the browser, and takes the whole page with it."""
+    exports, imports = {}, {}
+    for f in WEB.iterdir():
+        if not f.name.endswith(".js"):
+            continue
+        text = f.read_text(encoding="utf-8")
+        exports[f.name] = set(
+            re.findall(r"^export (?:async )?(?:function|const|let) (\w+)", text, re.M)
+        )
+        imports[f.name] = re.findall(r'^import \{([^}]*)\} from "\./(\w+\.js)";', text, re.M)
+        for side_effect in re.findall(r'^import "\./(\w+\.js)";', text, re.M):
+            imports[f.name].append(("", side_effect))
+    assert "main.js" in exports
+    for name, stmts in imports.items():
+        for names, source in stmts:
+            assert source in exports, f"{name} imports from missing {source}"
+            for imported in (n.strip() for n in names.split(",") if n.strip()):
+                assert imported in exports[source], f"{name}: {source} does not export {imported}"
+
+
+def test_web_assets_are_served_and_nothing_else(sample_tracklist, tmp_path):
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(base + "/web/main.js") as r:
+            assert r.headers["Content-Type"].startswith("text/javascript")
+        with urllib.request.urlopen(base + "/web/editor.css") as r:
+            assert r.headers["Content-Type"].startswith("text/css")
+        for bad in ("/web/nope.js", "/web/../web_editor.py", "/web/%2e%2e/cli.js", "/web/main.py"):
+            with pytest.raises(urllib.error.HTTPError) as e:
+                urllib.request.urlopen(base + bad)
+            assert e.value.code == 404, bad
 
 
 def test_page_asset_has_player_controls():
@@ -25,32 +120,6 @@ def test_page_asset_has_player_controls():
     html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
     for element_id in ("pprev", "pback15", "pplay", "pfwd15", "pnext", "ppos", "pcount", "seek"):
         assert f'id="{element_id}"' in html, f"missing #{element_id}"
-
-
-def test_page_follows_color_scheme():
-    """Dark mode is tokens + a prefers-color-scheme block, and native controls
-    follow via color-scheme (#34). Substring-level: there is no JS/CSS harness."""
-    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
-    assert '<meta name="color-scheme" content="light dark">' in html
-    assert "color-scheme: light dark" in html  # on :root, for the seek slider et al.
-    assert "@media (prefers-color-scheme: dark)" in html
-
-
-def test_body_padding_clears_the_player_bar():
-    """The list must not hide behind the fixed player.
-
-    Substring-level, because there is no JS harness -- it catches the specific
-    regression of growing the bar without growing the padding.
-    """
-    import re
-
-    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
-    padding = re.search(r"body\s*\{[^}]*padding-bottom:\s*(\d+)px", html)
-    assert padding, "body padding-bottom not found"
-    assert int(padding.group(1)) >= 100, (
-        f"body padding-bottom is {padding.group(1)}px; the reworked player bar is ~84px "
-        f"and needs more clearance than that"
-    )
 
 
 def test_tracklist_to_api_shape(sample_tracklist):
@@ -285,23 +354,6 @@ def test_inserted_track_round_trips_through_markdown(sample_tracklist):
     third = reparsed.tracks[2]
     assert third.artist == "Caribou"
     assert third.title == "Odessa"
-
-
-def test_page_has_insert_affordance_and_time_field():
-    """The page exposes a way to add a track and edit a new row's timestamp."""
-    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
-    assert "addBelow(" in html  # per-row "+ Add below" handler
-    assert "timefield" in html  # inline timestamp field for new rows
-    assert "MM:SS" in html  # ...with an MM:SS placeholder
-
-
-def test_page_has_editable_summary():
-    """The description is an always-on textarea, has the empty-state placeholder,
-    and is included in the save payload."""
-    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
-    assert '<textarea id="summary"' in html
-    assert "Add a description for this set" in html  # empty-state placeholder
-    assert "summary: summaryEl.value" in html  # included in the POST /api/save body
 
 
 @contextmanager
@@ -671,39 +723,6 @@ def test_artwork_endpoint_is_not_browser_cached(sample_tracklist, tmp_path, offl
             assert "no-store" in r.headers.get("Cache-Control", "")
 
 
-def test_page_lazy_loads_composite_artwork():
-    """The page requests the real composite per row and enlarges it on click."""
-    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
-    assert "/api/artwork?index=" in html
-    assert "IntersectionObserver" in html  # visible rows generate first
-    assert "artwork-overlay" in html  # click-to-enlarge target
-    # The script looks the overlay up at top level, so the element must appear
-    # before it. Placed after </script>, getElementById returns null and the
-    # TypeError takes down the whole page -- which a substring check misses.
-    assert html.index('id="artwork-overlay"') < html.index("<script>")
-    # A saved edit changes the composite; without a cache-busting version param,
-    # Chrome reuses the decoded image for the identical pre-edit URL and the
-    # thumb never updates until a full page reload.
-    assert '"&v=" + artVersion' in html
-    assert "artVersion++" in html  # bumped on save so the next request is fresh
-    # The `background` shorthand resets every background-* longhand, including
-    # the background-size:cover that scales a 600px composite into a 42px thumb.
-    # Setting it inline (or after background-size in a rule) renders the image at
-    # natural size anchored top-left: a corner crop with the lower-third label --
-    # the entire point of the composite -- off-screen.
-    assert "thumb.style.background =" not in html
-    assert "pt.style.background =" not in html
-    assert "thumb.style.backgroundImage =" in html
-    # Every render() rebuilds all rows; without disconnecting first, thumbs that
-    # never scrolled into view leak one stale IntersectionObserver registration
-    # per edit/reject/add on a detached element that will never be cleaned up.
-    assert "artObserver.disconnect()" in html
-    # An unsaved inserted row has no server index yet; observing/wiring it would
-    # fire a wasted /api/artwork?index=undefined request. 0 is a legitimate
-    # index, so the guard must check for undefined/null, not falsiness.
-    assert "t.index !== undefined && t.index !== null" in html
-
-
 def _request(base, path, host=None, method="GET", body=None):
     """Issue a request, optionally forging the Host header."""
     req = urllib.request.Request(base + path, method=method, data=body)
@@ -1015,29 +1034,6 @@ def test_save_round_trips_curation_into_the_sidecar(sample_tracklist, tmp_path):
     assert starred[0].artwork_pinned is True
 
 
-def test_page_has_the_artwork_picker():
-    """Substring-level, as every page assertion here is: there is no JS harness."""
-    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
-    assert "/api/artwork/options?index=" in html
-    for element_id in ("artwork-panel", "artwork-grid", "art-choose", "art-cover", "art-url"):
-        assert f'id="{element_id}"' in html, f"missing #{element_id}"
-    # Same reason as #artwork-overlay: the script resolves these at top level,
-    # so markup placed after </script> makes getElementById return null and the
-    # TypeError takes down the whole page -- which a substring check misses.
-    assert html.index('id="artwork-panel"') < html.index("<script>")
-    # The panel is full of controls now, so only a click on the backdrop itself
-    # may dismiss it.
-    assert "if (e.target === overlay) closeArtwork()" in html
-    # Candidate tiles are BUTTONs and the keyboard guard exempts only inputs,
-    # so without this the arrows seek the audio while covers are being browsed.
-    assert 'if (overlay.classList.contains("open")) return;' in html
-    # An author display rule beats the UA stylesheet, so the flex containers
-    # would ignore the hidden attribute without this.
-    assert "[hidden] { display:none !important; }" in html
-    # The toast must outrank the overlay or it is raised behind the backdrop.
-    assert "z-index:60" in html
-
-
 def test_apply_edits_refuses_the_star_on_a_rejected_track(sample_tracklist):
     """A rejected track cannot be the episode cover, and must not clear the choice.
 
@@ -1117,30 +1113,6 @@ def test_artwork_options_searches_the_live_artist_and_title(
             r.read()
 
     assert asked == [("Justice", "Genesis"), ("Daft Punk", "Around the World")]
-
-
-def test_page_panel_survives_an_unsaved_pick_and_sends_it():
-    """Substring-level guards for the two places live page state must win.
-
-    The row thumb already previews an unsaved pick; the panel that opens from
-    that same thumb has to agree, or reopening shows the pre-pick composite and
-    outlines the cover the user just replaced as the one in use.
-    """
-    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
-    # showArtwork branches on the unsaved-pick flag rather than always
-    # requesting the server composite, which is built from saved state.
-    assert "if (t._art) {" in html
-    # ...and the server's `current` flag is only adopted when there is no pick.
-    assert "if (!t._art) {" in html
-    # The save payload carries a pick only for rows that have one: sending it
-    # for every row would re-pin art apply_track_edit() means to drop (#30).
-    assert "if (t._art) edit.coverart_url = t.coverart_url;" in html
-    assert "episode_cover: !!t.episode_cover" in html
-    # The picker searches the live text, not the saved identification.
-    assert "&artist=" in html and "&title=" in html
-
-
-# ---- timeline: the run's probes as evidence -------------------------------
 
 
 def _write_progress(path, probes, duration=900.0):
@@ -1257,10 +1229,3 @@ def test_timeline_script_is_served(sample_tracklist, tmp_path):
         with urllib.request.urlopen(base + "/timeline.js") as r:
             assert r.headers["Content-Type"].startswith("text/javascript")
             assert "findIssues" in r.read().decode()
-
-
-def test_page_loads_the_timeline():
-    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
-    assert '<script src="/timeline.js"></script>' in html
-    assert "/api/probes" in html
-    assert 'id="timeline"' in html

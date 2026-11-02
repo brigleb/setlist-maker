@@ -458,7 +458,7 @@ CLI application with the following modules:
 
 ### `setlist_maker/web_editor.py` - Browser tracklist editor
 - **run_web_editor():** Drop-in sibling of `editor.run_editor()` that serves a
-  single-page editor (`web_editor.html`) from a loopback `ThreadingHTTPServer`
+  single-page editor (`web_editor.html` + `web/`) from a loopback `ThreadingHTTPServer`
   on an ephemeral port and opens the browser. Reuses `Track`/`Tracklist`,
   `CorrectionsDB`, and the shared `save_tracklist()` / `resolve_audio_path()`
   helpers from `editor.py` so the TUI and web front ends never drift.
@@ -654,6 +654,31 @@ CLI application with the following modules:
   the editor's Embed agree. The page gets `episode` from `/api/tracklist` and always sends it
   back on Save; the fields are plain text inputs, like the description, so they are compared
   for dirtiness (`textState`) rather than recorded as undo steps, and ⌘Z in them is native.
+
+### `setlist_maker/web/` - The page's modules (#53)
+
+- `web_editor.html` is markup only. The stylesheet is `web/editor.css`, and the script is native ES
+  modules with no build step, served from the package at `/web/<name>.js` (a plain name and
+  `.js`/`.css` only, so a request can't leave the directory). `/timeline.js` is still a classic
+  script loaded first, because Node `require`s the same file in tests.
+- Modules: `state` (shared state), `dom` (element lookups, `el()`, `toast()`), `util`, `model`
+  (track windows, which track holds a moment), `history` (dirty, undo/redo), `list`, `player`,
+  `grid` (the timeline), `inspector` (plus sampling), `issues`, `edits` (merge, split, rename,
+  shared by every pane), `artwork` (thumbs, picker, uploads, episode cover, Embed), `keys` (the
+  keyboard map) and `main` (load, render, save, Done, the live poll). `main` is the entry and
+  imports the rest.
+- **State that more than one module reassigns lives on `S` in `state.js`**, because an imported
+  binding is read-only. A `let` that only its own module reassigns stays there, exported if
+  others read it. The modules import each other in cycles. That is safe only because the
+  top-level code in each module just registers listeners: calling into another module at load
+  time can hit its `let`s before they're initialized. Anything that must run at startup goes in
+  `main.js`, after the imports, or in a `queueMicrotask`.
+- **Module scripts run after the document has parsed**, unlike the inline script they replaced.
+  So `player.js` also runs its `loadedmetadata` handler when `audio.readyState` is already
+  ≥ 1. Without that, a quickly loaded `<audio>` fired the event before anything listened, the
+  player stayed disabled, and every playback key did nothing.
+- `test_every_module_import_is_exported` is the only check on the imports: with no bundler, a
+  bad import fails only in the browser and takes the whole page down.
 
 ### `setlist_maker/web_timeline.js` + the editor's timeline
 
