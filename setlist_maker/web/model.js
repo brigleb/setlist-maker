@@ -75,3 +75,16 @@ export function keptTrackAt(seconds) {
   const w = TL.keptWindows(S.tracks, setDuration()).find(x => seconds >= x.start && seconds < x.end);
   return w ? S.tracks[w.index] : null;
 }
+
+// Where track i may start: whole seconds, at least 1s after the row before it
+// and 1s before the row after it -- rejected rows included, so moving a start
+// never reorders the list (which would silently re-home merged rows, and give
+// two tracks one timestamp, which the sidecar's join by timestamp cannot tell
+// apart). The first track may start anywhere from 0. Every way of moving a
+// start goes through here: dragging a seam, [ and ], and the Start fields.
+export function clampStart(i, seconds) {
+  const prev = S.tracks[i - 1], next = S.tracks[i + 1];
+  const lo = prev ? prev.timestamp + 1 : 0;
+  const hi = next ? next.timestamp - 1 : Math.max(lo, Math.floor(setDuration()) - 1);
+  return Math.max(lo, Math.min(hi, Math.round(seconds)));
+}

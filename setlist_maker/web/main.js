@@ -82,7 +82,7 @@ export async function doSave() {
                     episode: { title: epTitle.value, artist: epArtist.value },
                     tracks: S.tracks.map(t => {
     if (t._new) return { artist: t.artist, title: t.title, timestamp: t.timestamp, rejected: !!t.rejected };
-    const edit = { index: t.index, artist: t.artist, title: t.title,
+    const edit = { index: t.index, artist: t.artist, title: t.title, timestamp: t.timestamp,
                    rejected: !!t.rejected, episode_cover: !!t.episode_cover };
     // Only rows whose artwork the user actually picked carry a coverart_url.
     // Sending it for every row would re-pin the art that apply_track_edit()
@@ -106,7 +106,9 @@ export async function doSave() {
       // than leave either lying.
       if (overlay.classList.contains("open")) closeArtwork();
       if (S.coverChoice !== undefined) { S.coverVersion = S.coverChoice ? Date.now() : null; S.coverChoice = undefined; }
-      if (hasNew) await load();  // inserted rows also need real indices
+      // Inserted rows need real indices, and a save that re-sorted the tracks
+      // (a moved start) bumped the revision: either way, reload first.
+      if (hasNew || res.revision !== revision) await load();
       else render();
       setDirty(false); resetHistory(); toast("Saved");
       return true;

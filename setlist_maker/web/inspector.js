@@ -2,12 +2,12 @@
 
 import { GRADS, S, TL } from "./state.js";
 import { audio, toast } from "./dom.js";
-import { trackName } from "./util.js";
+import { fmt, parseTime, trackName } from "./util.js";
 import { setDuration } from "./model.js";
 import { addBelow, renderList } from "./list.js";
 import { playAt, playFrom } from "./player.js";
 import { pendingSamples, renderTimeline } from "./grid.js";
-import { setNames, splitAtPlayhead, toggleMerge } from "./edits.js";
+import { moveStart, setNames, splitAtPlayhead, toggleMerge } from "./edits.js";
 import { artSrc, showArtwork } from "./artwork.js";
 import { render } from "./main.js";
 import { html, keyOf, render as paint, useEffect, useState } from "./ui.js";
@@ -39,6 +39,35 @@ function NameField({ t, field, label }) {
     <input class=${"in-" + field} value=${draft} placeholder=${label} aria-label=${label}
       readOnly=${S.liveMode} onInput=${e => setDraft(e.target.value)} onChange=${commit}
       onKeyDown=${onKeyDown} />`;
+}
+
+// The track's start (#55): typed as M:SS or H:MM:SS, kept between its
+// neighbours like a dragged boundary. Same draft pattern as NameField.
+function StartField({ t }) {
+  const shown = fmt(t.timestamp);
+  const [draft, setDraft] = useState(shown);
+  useEffect(() => setDraft(shown), [shown]);
+  const commit = e => {
+    const secs = parseTime(e.target.value);
+    if (secs === null) {
+      toast("Start times look like 4:05 or 1:04:05");
+      setDraft(shown);
+      return;
+    }
+    if (!moveStart(t, secs) && secs !== t.timestamp) toast("It can't start there: it would pass the track next to it");
+    setDraft(fmt(t.timestamp));
+  };
+  const onKeyDown = ev => {
+    if (ev.key === "Enter") { ev.preventDefault(); ev.target.blur(); }
+    if (ev.key === "Escape") { ev.target.value = shown; setDraft(shown); ev.target.blur(); }
+  };
+  return html`
+    <div class="in-lbl">Start</div>
+    <div class="in-start-row">
+      <input class="in-start" value=${draft} aria-label="Start" readOnly=${S.liveMode}
+        onInput=${e => setDraft(e.target.value)} onChange=${commit} onKeyDown=${onKeyDown} />
+      ${!S.liveMode && html`<span class="in-note">or drag the block's left edge · [ and ] nudge it</span>`}
+    </div>`;
 }
 
 function Inspector({ t, i }) {
@@ -98,6 +127,7 @@ function Inspector({ t, i }) {
     </div>
     <${NameField} t=${t} field="artist" label="Artist" />
     <${NameField} t=${t} field="title" label="Title" />
+    <${StartField} t=${t} />
     ${names.length > 0 && html`
       <div class="in-lbl">Shazam heard</div>
       ${names.map(v => {

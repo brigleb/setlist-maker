@@ -491,8 +491,12 @@ CLI application with the following modules:
   correction step; an edit with **no** `index` is a track inserted via the page's per-row
   "＋ Add below" control — it's appended with its own `timestamp` and the list is
   re-sorted into chronological position (inserts aren't corrections, so none is
-  recorded). The page sends existing rows by `index` (not array position, which
-  inserts shift) and reloads after saving new tracks so re-save can't duplicate.
+  recorded). An indexed edit's `timestamp` moves that track's start (#55): not a correction,
+  and a value that isn't a finite number of seconds >= 0 leaves the start alone rather than
+  defaulting to 0 as an insert does. Any moved start re-sorts the list, which bumps the
+  revision, and the save response carries `revision`. The page sends existing rows by `index`
+  (not array position, which inserts shift) and reloads after a save that added rows or changed
+  the revision, so a re-save can't duplicate or 409.
   Opened with `identify --web-edit` / `-w`; mutually exclusive with `--edit`.
 - **Saving is serialized and revisioned (#64).** `ctx.state_lock` is held by `/api/save` and
   around the embed in `/api/chapters`, and by `/api/tracklist` while it snapshots the tracks.
@@ -580,7 +584,8 @@ CLI application with the following modules:
   for a row's own ▶ button, since that row is already under the cursor.
   `render()` also calls `syncPlayerBar()` so the player bar's label, count and
   artwork stay correct after an edit or insert.
-  Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, all suppressed while focus is in an
+  Keyboard: Space, ←/→ ±15s, ↑/↓ prev/next, [ / ] nudge the selected track's start by 1s
+  (⇧ for 5s, which arrives as { / }), all suppressed while focus is in an
   input/textarea — except `#seek`, a range input that's deliberately exempted
   so the arrows still seek when the scrubber has focus.
 
@@ -742,7 +747,7 @@ CLI application with the following modules:
   flagged as a rival name: the merge settled it (on the real set, Parov Stelar twice at 0.99
   inside Computer Love's blips would otherwise appear the moment the blips were merged).
 - **Pure, and tested under Node.** `web_timeline.js` holds every derivation (`identity`,
-  `cleanTitle`, `joinProbes`, `variants`, `unheard`, `findIssues`) with no DOM, served at
+  `cleanTitle`, `joinProbes`, `variants`, `unheard`, `findIssues`, `snapPoints`) with no DOM, served at
   `/timeline.js` and `require`d by `tests/test_web_timeline.py`, which skips when `node` is
   missing. Issue rules: an **A x y A** run where every interloper is under `BLIP_SECONDS` is one
   merge (the real 09-23 set's *Computer Love* split by 11s/3s/8s blips); a lone track under
@@ -764,6 +769,26 @@ CLI application with the following modules:
   of it -- the textarea has its own undo, and the shortcut sits past the input guard so ⌘Z
   in a field stays the field's. Saving clears the history: inserted rows get real indices
   then, and undoing past that would re-send one as new.
+- **Moving a start (#55)** goes through `model.clampStart(i, seconds)`: whole seconds, at least
+  1s from the rows on either side, *rejected rows included*, so no move ever reorders the list.
+  A reorder would re-home merged rows silently, and two tracks sharing a timestamp would share
+  one sidecar entry, since the sidecar is joined to the `.md` by timestamp and the last match
+  wins. An existing row's typed start is clamped the same way; only an *inserted* row's is
+  sorted into place. `edits.moveStart()` is the one recorded move, used by the `[`/`]` keys,
+  the inspector's Start field and the end of a drag.
+  - **Dragging.** Each kept block has a `.tl-edge` handle on its left edge, drawn in the hour
+    that holds its start (`.tl-seam` is a merged row's marker and takes no pointer events).
+    `pointerdown` captures on `#tl-rows`, not the handle: the handle is re-created when the
+    boundary crosses into another hour, and capture would go with it. The time under the pointer
+    comes from `elementFromPoint`, so a drag can cross hours. The drag previews with
+    `previewStart()` (unrecorded) once per animation frame, then puts the start back and commits
+    with `moveStart()` on release, so one drag is one undo step. Escape cancels. Release plays
+    from 5s before the new cut.
+  - It snaps within 6px to `TL.snapPoints(probes)`: between two neighbouring identified probes
+    with different identities, the midpoint of the gap between their centred 10s excerpts. ⌥
+    turns snapping off, which is why the click handler ignores `.tl-edge`: otherwise a ⌥-drag
+    ends in a ⌥-click, which splits. Snapping to quiet points in the audio waits for the
+    waveform (#57).
 - **Splitting** is one function, `splitAt(track, seconds)`, reached three ways: the inspector's
   button (selected track, playhead), **S** (whichever kept track holds the playhead -- automatic
   advance does not select, so the selection may be elsewhere) and **Alt-click** on a block (that

@@ -265,8 +265,29 @@
     return issues;
   }
 
+  // Where a dragged boundary should snap: the moments the evidence changes from
+  // one identified track to another. Shazam fingerprints a centred 10s excerpt
+  // of each probe's window, so between two neighbouring probes the cut lies in
+  // the gap between the first one's excerpt and the second's; its midpoint is
+  // the best guess the probes can give. Unidentified probes are no evidence
+  // either way and are skipped over.
+  const EXCERPT = 10;
+  function snapPoints(probes) {
+    const heard = (probes || []).filter(p => p.artist || p.title).slice().sort((a, b) => a.t - b.t);
+    const out = [];
+    for (let k = 1; k < heard.length; k++) {
+      const p = heard[k - 1], q = heard[k];
+      if (identity(p.artist, p.title) === identity(q.artist, q.title)) continue;
+      const pEnd = p.t + Math.max(0, (p.window - EXCERPT) / 2) + Math.min(EXCERPT, p.window);
+      const qStart = q.t + Math.max(0, (q.window - EXCERPT) / 2);
+      out.push((pEnd + qStart) / 2);
+    }
+    return out;
+  }
+
   return {
     BLIP_SECONDS, SHORT_SECONDS, UNHEARD_SECONDS, HOUR,
     fmt, quarters, cleanTitle, identity, hue, windows, keptWindows, joinProbes, variants, unheard, findIssues,
+    snapPoints,
   };
 });
