@@ -5,12 +5,13 @@ import { audio, el, toast } from "./dom.js";
 import { trackName } from "./util.js";
 import { setDuration, splitWindow, trackIndexAt } from "./model.js";
 import { playAt } from "./player.js";
-import { renderList } from "./list.js";
+import { renderList, revealSelected } from "./list.js";
 import { splitAt } from "./edits.js";
 import { renderInspector, sampleAt } from "./inspector.js";
 import { renderIssues } from "./issues.js";
 import { artSrc } from "./artwork.js";
 import { html, keyOf, render as paint } from "./ui.js";
+import { showTab } from "./shell.js";
 import { load, refreshLiveTracks, setLive } from "./main.js";
 
 export let replayShown = null;  // during a replay, how many probes are visible
@@ -42,6 +43,7 @@ export async function loadProbes() {
   } catch (e) {
     S.probes = [];  // no evidence to draw; the tracklist alone still makes a timeline
   }
+  renderList();  // its Samples column counts them
   renderTimeline();
 }
 
@@ -188,12 +190,20 @@ export function timeAt(e) {
   return Math.min(setDuration(), +lanes.dataset.hour * TL.HOUR + f * TL.HOUR);
 }
 
+// Choosing a track shows it in the inspector's Track tab -- except from the
+// "Needs a look" tab (`keepTab`), where the list and the timeline already
+// show the selection and switching away would lose the user's place.
 export function selectTrack(t, opts) {
   if (!t) return;
   S.selectedTrack = t;
+  if (!(opts && opts.keepTab)) showTab("track");
   renderList();
   renderTimeline();
   if (replayShown !== null) renderInspector();  // renderTimeline() skips it mid-replay
+  // The list sits beside the timeline now, so its row follows the selection
+  // ("nearest": a row already in view stays put, so a click in the list
+  // doesn't jump it).
+  revealSelected();
   if (opts && opts.reveal) {
     const i = S.tracks.indexOf(t);
     const block = tlRows.querySelector('.tl-blocks [data-i="' + i + '"]');

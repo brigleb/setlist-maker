@@ -13,6 +13,7 @@ import "./edits.js";
 import "./inspector.js";
 import "./issues.js";
 import "./keys.js";
+import "./shell.js";
 
 export let revision = null;
 export async function load() {

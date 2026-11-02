@@ -18,7 +18,8 @@ export const S = {
   // model.playingIndex() derives the playing track's position when needed.
   playingTrack: null,
   selectedTrack: null,
-  editing: null,
+  editing: null,      // the track being edited in place in the list
+  editField: "artist", // ...and the cell that was clicked to start it
   // The run's probes, drawn as pins; the audio's length as the run saw it.
   probes: [],
   probeDuration: null,

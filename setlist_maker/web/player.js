@@ -58,7 +58,7 @@ export function playFrom(i, opts) {
   setPlayingIndex(i, { scroll });
   // Choosing to play a track is choosing to look at it; automatic advance
   // (setPlayingIndex from timeupdate) deliberately does not move the selection.
-  selectTrack(S.tracks[i]);
+  selectTrack(S.tracks[i], { keepTab: true });  // playing is not inspecting: ↑/↓ leave the tab alone
   // Capture the track now, not inside start(): if metadata is still
   // loading, start() runs later and a re-indexed `tracks[i]` at that point
   // could be a different track (or throw if tracks was replaced by load()).

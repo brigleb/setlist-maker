@@ -23,7 +23,7 @@ function Issue({ x }) {
   };
   const dismiss = e => { e.stopPropagation(); dismissedIssues.add(x.key); renderIssues(); };
   return html`
-    <div class="issue" onClick=${() => selectTrack(S.tracks[x.index], { reveal: true })}>
+    <div class="issue" onClick=${() => selectTrack(S.tracks[x.index], { reveal: true, keepTab: true })}>
       <div class="ico" style=${{ background: colour }}>${glyph}</div>
       <div class="txt"><div class="t1">${x.title}</div><div class="t2">${x.detail}</div></div>
       ${canFix && html`<button class="tbtn" onClick=${fix}>${x.fix.label}</button>`}

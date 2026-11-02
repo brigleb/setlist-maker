@@ -7,6 +7,7 @@ import { splitWindow } from "./model.js";
 import { setDirty } from "./history.js";
 import { sampleAt } from "./inspector.js";
 import { render } from "./main.js";
+import { showTab } from "./shell.js";
 
 // ---- inspector ----
 // Commits an artist/title change the same way the list's inline editor does,
@@ -43,6 +44,7 @@ export function splitAt(t, seconds) {
   S.tracks.splice(j, 0, row);
   setDirty(true);
   S.selectedTrack = row;
+  showTab("track");  // the new track's fields are where it gets named
   render();
   toast("Split at " + TL.fmt(at) + " — name the new track, or ⌘Z");
   return true;

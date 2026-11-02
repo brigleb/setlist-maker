@@ -6,7 +6,13 @@ export const pplayEl = document.getElementById("pplay");
 export const summaryEl = document.getElementById("summary");
 export const epTitle = document.getElementById("ep-title");
 export const epArtist = document.getElementById("ep-artist");
-export function autosizeSummary() { summaryEl.style.height = "auto"; summaryEl.style.height = summaryEl.scrollHeight + "px"; }
+// Grows to fit, from a three-line floor. Skipped while its tab is hidden: a
+// hidden textarea measures 0, which would collapse it to nothing.
+export function autosizeSummary() {
+  if (!summaryEl.offsetParent) return;
+  summaryEl.style.height = "auto";
+  summaryEl.style.height = summaryEl.scrollHeight + "px";
+}
 export function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); }
 
 // An element with a class and text; text via textContent, never innerHTML --
