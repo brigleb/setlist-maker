@@ -82,9 +82,11 @@ export function keptTrackAt(seconds) {
 // two tracks one timestamp, which the sidecar's join by timestamp cannot tell
 // apart). The first track may start anywhere from 0. Every way of moving a
 // start goes through here: dragging a seam, [ and ], and the Start fields.
+// A row already on its neighbour's second (a merge into the next track, saved
+// and reloaded, #56) may move away from it but is never pushed past it.
 export function clampStart(i, seconds) {
-  const prev = S.tracks[i - 1], next = S.tracks[i + 1];
-  const lo = prev ? prev.timestamp + 1 : 0;
-  const hi = next ? next.timestamp - 1 : Math.max(lo, Math.floor(setDuration()) - 1);
+  const t = S.tracks[i], prev = S.tracks[i - 1], next = S.tracks[i + 1];
+  const lo = prev ? Math.min(prev.timestamp + 1, t.timestamp) : 0;
+  const hi = next ? Math.max(next.timestamp - 1, t.timestamp) : Math.max(lo, Math.floor(setDuration()) - 1);
   return Math.max(lo, Math.min(hi, Math.round(seconds)));
 }

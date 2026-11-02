@@ -5,7 +5,7 @@ import { audio, playerEl, pplayEl, toast } from "./dom.js";
 import { keptTrackAt } from "./model.js";
 import { redo, undo } from "./history.js";
 import { SKIP_SECONDS, nextTrack, prevTrack, skip } from "./player.js";
-import { moveStart, splitAt } from "./edits.js";
+import { moveStart, splitAt, startOf } from "./edits.js";
 import { identifyAt } from "./inspector.js";
 import { overlay } from "./artwork.js";
 
@@ -40,7 +40,7 @@ document.addEventListener("keydown", (e) => {
     const t = S.selectedTrack;
     if (!t || S.liveMode) return;
     e.preventDefault();
-    if (!moveStart(t, t.timestamp + nudge)) toast("It can't move any further: it would pass the track next to it");
+    if (!moveStart(t, startOf(t) + nudge)) toast("It can't move any further: it would pass the track next to it");
     return;
   }
   if (playerEl.classList.contains("disabled")) return;

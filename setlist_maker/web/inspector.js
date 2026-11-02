@@ -7,7 +7,7 @@ import { setDuration } from "./model.js";
 import { addBelow, renderList } from "./list.js";
 import { playAt, playFrom } from "./player.js";
 import { pendingSamples, renderTimeline } from "./grid.js";
-import { moveStart, setNames, splitAtPlayhead, toggleMerge } from "./edits.js";
+import { moveStart, setNames, splitAtPlayhead, startOf, toggleMerge } from "./edits.js";
 import { artSrc, showArtwork } from "./artwork.js";
 import { render } from "./main.js";
 import { html, keyOf, render as paint, useEffect, useState } from "./ui.js";
@@ -44,7 +44,7 @@ function NameField({ t, field, label }) {
 // The track's start (#55): typed as M:SS or H:MM:SS, kept between its
 // neighbours like a dragged boundary. Same draft pattern as NameField.
 function StartField({ t }) {
-  const shown = fmt(t.timestamp);
+  const shown = fmt(startOf(t));
   const [draft, setDraft] = useState(shown);
   useEffect(() => setDraft(shown), [shown]);
   const commit = e => {
@@ -54,8 +54,8 @@ function StartField({ t }) {
       setDraft(shown);
       return;
     }
-    if (!moveStart(t, secs) && secs !== t.timestamp) toast("It can't start there: it would pass the track next to it");
-    setDraft(fmt(t.timestamp));
+    if (!moveStart(t, secs) && secs !== startOf(t)) toast("It can't start there: it would pass the track next to it");
+    setDraft(fmt(startOf(t)));
   };
   const onKeyDown = ev => {
     if (ev.key === "Enter") { ev.preventDefault(); ev.target.blur(); }
@@ -88,7 +88,10 @@ function Inspector({ t, i }) {
   const names = TL.variants(joined, neighbours);
   // What was merged into this track, one Unmerge each: the grid shows these
   // only as seams too close together to click.
-  const folded = k === -1 ? [] : S.tracks.slice(i + 1, kept[k + 1] ? kept[k + 1].index : S.tracks.length);
+  // Rows can be merged in from either side (#56), so this is by owner.
+  const owner = TL.owners(S.tracks, D);
+  const folded = k === -1 ? [] : S.tracks.filter((m, r) => r !== i && owner[r] === i);
+  const dir = owner[i] > i ? "next" : "previous";
 
   // The split and identify buttons also follow the playhead between renders:
   // grid.updatePlayhead() keeps their `disabled` current as it moves.
@@ -118,7 +121,7 @@ function Inspector({ t, i }) {
         <div class="in-when">${TL.fmt(w.start) + " – " + TL.fmt(w.end) + " · " + TL.fmt(w.end - w.start)}</div>
         <div class="in-when">${"track " + (i + 1) + " of " + S.tracks.length}</div>
         <div class="in-badges">
-          ${t.rejected && html`<span class="badge warn">merged into previous</span>`}
+          ${t.rejected && html`<span class="badge warn">${owner[i] === -1 ? "rejected" : "merged into " + dir}</span>`}
           ${t._new && html`<span class="badge">new — unsaved</span>`}
           ${t.episode_cover && html`<span class="badge">★ episode cover</span>`}
           <span class="badge">${joined.length + " sample" + (joined.length === 1 ? "" : "s")}</span>
@@ -158,11 +161,20 @@ function Inspector({ t, i }) {
         <button class="tbtn in-split" disabled=${cantSplit}
           title=${cantSplit ? "Play inside this track, then split where the next one starts" : "Start a new track at " + TL.fmt(now)}
           onClick=${splitAtPlayhead}>Split at playhead</button>
-        <button class="tbtn" onClick=${() => toggleMerge(t)}>${t.rejected ? "Unmerge" : (i === 0 ? "Reject" : "Merge into previous")}</button>
+        ${t.rejected
+          ? html`<button class="tbtn" onClick=${() => toggleMerge(t)}>${owner[i] === -1 ? "Bring back" : "Unmerge"}</button>`
+          : html`
+            ${k > 0 && html`<button class="tbtn" title="Its time goes to the track before"
+              onClick=${() => toggleMerge(t, "prev")}>Merge ← previous</button>`}
+            ${k < kept.length - 1 && html`<button class="tbtn" title="Its time goes to the track after, which starts here instead"
+              onClick=${() => toggleMerge(t, "next")}>Merge → next</button>`}
+            ${kept.length === 1 && html`<button class="tbtn" onClick=${() => toggleMerge(t)}>Reject</button>`}`}
         <button class="tbtn" onClick=${() => addBelow(i)}>＋ Add below</button>`}
       ${canArt && !S.liveMode && html`<button class="tbtn" onClick=${() => showArtwork(t)}>Artwork…</button>`}
     </div>
-    ${t.rejected && html`<div class="in-note">Merged tracks are left out of the tracklist when you save; their time goes to the track before.</div>`}
+    ${t.rejected && html`<div class="in-note">${owner[i] === -1
+      ? "Rejected tracks are left out of the tracklist when you save."
+      : "Merged tracks are left out of the tracklist when you save; their time goes to the track " + (dir === "next" ? "after, which starts here instead." : "before.")}</div>`}
     ${S.liveMode && html`<div class="in-note">Still identifying — this is the run's current answer, and it may change as the run narrows the boundaries. Editing opens when it finishes.</div>`}`;
 }
 

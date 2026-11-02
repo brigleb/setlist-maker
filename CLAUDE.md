@@ -746,8 +746,27 @@ CLI application with the following modules:
   merge looking undone. Evidence heard inside a merged *different* track's span is not then
   flagged as a rival name: the merge settled it (on the real set, Parov Stelar twice at 0.99
   inside Computer Love's blips would otherwise appear the moment the blips were merged).
+- **Merging into the next track (#56)** is a rejected row marked `merged: "next"`. The next kept
+  track's start is *derived*, not written into the page: `keptWindows` starts it at the first
+  such row in the run of rejected rows before it. In a mixed run, rows go to the earlier track up
+  to that row and to the later one from there, so both windows stay contiguous. A "next" row
+  with no kept track after it stays with the one before. Deriving the start, rather than
+  setting the next track's timestamp, keeps `clampStart`'s rule that no two rows share a second
+  inside the page, and makes Unmerge just clearing the flags. Everything that moves a start
+  (the dragged edge, `[`/`]`, both Start fields) moves `TL.startIndex()`'s row, the one holding
+  the visible start. The save sends each kept track's derived start, so the server moves it as
+  in #55, and the page reloads. After that reload the rejected row really does share the next
+  track's second, which is why `clampStart` never pushes a row past a neighbour it already ties,
+  and why `edits.mergeTrack()` refuses to bring that row back until the track has moved off it.
+  `mergeTrack()` is the one place a row is merged or brought back (the inspector, the list's ✕
+  and ↩, Needs a look), and `TL.owners()` says which kept track holds each row, for the
+  inspector's "Merged into this track" and the variant rule. The short-track issue offers Merge
+  down for the first track, Merge up for the last, and in between picks by evidence: the
+  neighbours' names heard inside the short window, plus its own name heard inside theirs. A tie
+  keeps Merge up, and the other direction is a second button.
 - **Pure, and tested under Node.** `web_timeline.js` holds every derivation (`identity`,
-  `cleanTitle`, `joinProbes`, `variants`, `unheard`, `findIssues`, `snapPoints`) with no DOM, served at
+  `cleanTitle`, `keptWindows`, `owners`, `startIndex`, `joinProbes`, `variants`, `unheard`, `findIssues`,
+  `snapPoints`) with no DOM, served at
   `/timeline.js` and `require`d by `tests/test_web_timeline.py`, which skips when `node` is
   missing. Issue rules: an **A x y A** run where every interloper is under `BLIP_SECONDS` is one
   merge (the real 09-23 set's *Computer Love* split by 11s/3s/8s blips); a lone track under

@@ -16,6 +16,7 @@ import { playFrom } from "./player.js";
 import { artSrc, showArtwork, whenVisible } from "./artwork.js";
 import { render } from "./main.js";
 import { selectTrack } from "./grid.js";
+import { previewStart, startOf, toggleMerge } from "./edits.js";
 import { html, keyOf, render as paint, useEffect, useRef, useState } from "./ui.js";
 
 const listEl = document.getElementById("list");
@@ -68,10 +69,14 @@ function EditFields({ t }) {
   const isNew = !!t._new;
   const [artist, setArtist] = useState(t.artist);
   const [title, setTitle] = useState(t.title);
-  const [time, setTime] = useState(t.time || fmt(t.timestamp));
+  // Where the track starts as written, which a merge into it from before
+  // moves back to that row's start (#56).
+  const start = startOf(t);
+  const startText = () => start === t.timestamp ? (t.time || fmt(start)) : fmt(start);
+  const [time, setTime] = useState(startText);
   // A start moved elsewhere while this is open (a drag, [ or ]) is the new
   // value; committing the one seeded at mount would move the track back.
-  useEffect(() => setTime(t.time || fmt(t.timestamp)), [t.timestamp]);
+  useEffect(() => setTime(startText()), [start]);
   const wrap = useRef(null), artistIn = useRef(null), titleIn = useRef(null), timeIn = useRef(null);
   // Closing runs once: Enter commits and unmounts the fields, and the
   // focusout that follows must not commit a second time.
@@ -101,12 +106,16 @@ function EditFields({ t }) {
         t.timestamp = secs; setDirty(true);
         S.tracks.sort((x, y) => x.timestamp - y.timestamp);
       }
-    } else if (secs !== null) {
-      const at = clampStart(S.tracks.indexOf(t), secs);
-      if (at !== t.timestamp) { t.timestamp = at; setDirty(true); }
+    } else if (secs !== null && secs !== start) {
+      // The row holding the start moves: the track's own, or the first one
+      // merged into it from before.
+      const i = TL.startIndex(S.tracks, S.tracks.indexOf(t));
+      const row = S.tracks[i];
+      const at = clampStart(i, secs);
+      if (at !== row.timestamp) { previewStart(row, at); setDirty(true); }
       if (at !== secs) toast("Kept between its neighbours: starts at " + fmt(at));
     }
-    t.time = fmt(t.timestamp);
+    if (isNew) t.time = fmt(t.timestamp);
     close();
   };
   // Escape used to rebuild the list, which removed the focused input; Chrome
@@ -136,17 +145,9 @@ function Row({ t, i, playing, span, samples }) {
   const cls = "row trow" + (t.rejected ? " rejected" : "") + (unknown ? " unknown" : "")
     + (t === S.selectedTrack ? " selected" : "") + (playing ? " playing" : "")
     + (editing ? " editing" : "");
-  const reject = e => {
-    e.stopPropagation();
-    t.rejected = !t.rejected;
-    // A rejected track is absent from the output entirely -- including from
-    // the sidecar, which is where the star is stored -- so it cannot be the
-    // episode cover. Clearing it here keeps the ★ from lingering on a row
-    // whose choice would silently vanish on the next reload.
-    if (t.rejected) t.episode_cover = false;
-    setDirty(true);
-    render();
-  };
+  // ✕ merges into the previous track, as it always has; ↩ brings back a row
+  // merged either way. edits.mergeTrack() owns the rules (the star, #56).
+  const reject = e => { e.stopPropagation(); toggleMerge(t); };
   // Clicking a row selects it; clicking its artist or title also edits it in
   // place. The .meta wrapper is display:contents, so its two cells sit in the
   // row's grid while still sharing one click handler.
@@ -160,7 +161,7 @@ function Row({ t, i, playing, span, samples }) {
             <div class="artist" onClick=${() => startEdit(t, "artist")}>${t.artist || (unknown ? "Unidentified" : "")}</div>
             <div class="title" onClick=${() => startEdit(t, "title")}>${t.title || (unknown ? "add a label" : "")}</div>
           </div>`}
-      ${!editing && html`<span class="c-num time" onClick=${() => startEdit(t, "time")}>${t.time}</span>`}
+      ${!editing && html`<span class="c-num time" onClick=${() => startEdit(t, "time")}>${startOf(t) === t.timestamp ? t.time : fmt(startOf(t))}</span>`}
       <span class="c-num len">${span === null ? "—" : fmt(span)}</span>
       <span class="c-num smp">${samples || ""}</span>
       <span class="star" title=${t.episode_cover ? "This track's artwork is the episode cover" : undefined}>${t.episode_cover ? "★" : ""}</span>
