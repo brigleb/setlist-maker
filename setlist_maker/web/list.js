@@ -69,6 +69,9 @@ function EditFields({ t }) {
   const [artist, setArtist] = useState(t.artist);
   const [title, setTitle] = useState(t.title);
   const [time, setTime] = useState(t.time || fmt(t.timestamp));
+  // A start moved elsewhere while this is open (a drag, [ or ]) is the new
+  // value; committing the one seeded at mount would move the track back.
+  useEffect(() => setTime(t.time || fmt(t.timestamp)), [t.timestamp]);
   const wrap = useRef(null), artistIn = useRef(null), titleIn = useRef(null), timeIn = useRef(null);
   // Closing runs once: Enter commits and unmounts the fields, and the
   // focusout that follows must not commit a second time.

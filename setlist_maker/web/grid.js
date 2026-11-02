@@ -29,7 +29,7 @@ export async function loadProbes() {
     S.canSample = !!data.can_sample;
     nextProbe = data.next || null;
     document.getElementById("tl-hint").textContent =
-      "click a track to inspect · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard"
+      "click a track to inspect · drag its left edge to move its start · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard"
       + (S.canSample ? " · I names the track at the playhead · click the pin lane to ask Shazam about any moment" : "");
     if (wasLive && !data.live) {
       // The run finished and this server is now its editor. Everything on
