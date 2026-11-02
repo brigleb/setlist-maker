@@ -21,6 +21,7 @@
       <button id="redo" class="histbtn" disabled title="Redo (⇧⌘Z)">Redo</button>
       <button id="save" disabled>Save</button>
       <button id="done">Done</button>
+      <button id="keys-btn" class="histbtn" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       <button id="side-toggle" class="histbtn" type="button" aria-controls="side" aria-expanded="false" title="Show the inspector">Inspector</button>
     </div>
   </header>
@@ -45,13 +46,13 @@
         <div class="tl-playhead" hidden></div>
       </div>
     </div>
-    <div class="tl-legend"><span><i></i>30s sample</span><span><i class="refine"></i>12s refine</span><span><i class="miss"></i>heard nothing</span><span><i class="manual"></i>you asked</span><span id="tl-hint">⌘-scroll or pinch to zoom · scroll to pan · Z fits the selected track, 0 the whole set · click a track to inspect · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard</span></div>
+    <div class="tl-legend"><span><i></i>30s sample</span><span><i class="refine"></i>12s refine</span><span><i class="miss"></i>heard nothing</span><span><i class="manual"></i>you asked</span></div>
   </section>
   <div id="split-tl" class="divider rows" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" tabindex="0"></div>
   <div id="work">
     <section id="listpane" class="pane" aria-label="Tracklist">
       <div id="list-head" class="trow"><span class="c-num">#</span><span></span><span>Artist</span><span>Title</span><span class="c-num">Start</span><span class="c-num len">Length</span><span class="c-num smp" title="Samples Shazam took inside this track">Samples</span><span class="star"></span><span></span></div>
-      <main id="list"></main>
+      <main id="list" role="listbox" aria-label="Tracks"></main>
     </section>
     <div id="split-side" class="divider cols" role="separator" aria-orientation="vertical" aria-label="Resize the inspector" tabindex="0"></div>
     <aside id="side" class="pane">
@@ -90,14 +91,15 @@
     <div id="pbody">
       <div id="ptop">
         <div id="ptransport">
-          <button id="pprev" title="Previous track (Up)">⏮</button>
-          <button id="pback15" title="Back 15 seconds (Left)">↺<span>15</span></button>
+          <button id="pprev" title="Previous track (⌥↑)">⏮</button>
+          <button id="pback15" title="Back 15 seconds (⇧←)">↺<span>15</span></button>
           <button id="pplay" title="Play/pause (Space)">▶</button>
-          <button id="pfwd15" title="Forward 15 seconds (Right)"><span>15</span>↻</button>
-          <button id="pnext" title="Next track (Down)">⏭</button>
+          <button id="pfwd15" title="Forward 15 seconds (⇧→)"><span>15</span>↻</button>
+          <button id="pnext" title="Next track (⌥↓)">⏭</button>
         </div>
         <div id="plabel">Nothing playing</div>
         <div id="pcount"></div>
+        <button id="pfollow" type="button" aria-pressed="false" title="Follow the playhead: the selection moves with the audio (F)">Follow</button>
       </div>
       <canvas id="seek-wave" aria-hidden="true" hidden></canvas>
       <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek within track">
@@ -109,6 +111,12 @@
   </div>
   <audio id="audio" src="/api/audio" preload="metadata"></audio>
   <div id="toast"></div>
+  <div id="keys-overlay" hidden>
+    <div id="keys-panel" role="dialog" aria-modal="true" aria-labelledby="keys-title" tabindex="-1">
+      <div id="keys-top"><h2 id="keys-title">Keyboard shortcuts</h2><button id="keys-close" class="tbtn" type="button" aria-label="Close">Esc</button></div>
+      <div id="keys-body"></div>
+    </div>
+  </div>
   <div id="artwork-overlay">
     <div id="artwork-panel">
       <img id="artwork-large" alt="Chapter artwork preview">

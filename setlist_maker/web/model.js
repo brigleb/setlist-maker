@@ -70,7 +70,7 @@ export function splitWindow(t) {
 }
 
 // The kept track whose span holds `seconds` -- what S splits while listening,
-// which need not be the selected track (automatic advance does not select).
+// which need not be the selected track (automatic advance selects only with Follow on).
 export function keptTrackAt(seconds) {
   const w = TL.keptWindows(S.tracks, setDuration()).find(x => seconds >= x.start && seconds < x.end);
   return w ? S.tracks[w.index] : null;

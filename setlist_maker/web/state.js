@@ -20,6 +20,8 @@ export const S = {
   selectedTrack: null,
   editing: null,      // the track being edited in place in the list
   editField: "artist", // ...and the cell that was clicked to start it
+  editSelect: false,  // ...and whether its text starts selected (from the keyboard)
+  follow: false,      // the selection follows the playing track (#58, F)
   // The run's probes, drawn as pins; the audio's length as the run saw it.
   probes: [],
   probeDuration: null,

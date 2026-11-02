@@ -62,16 +62,23 @@ function EditFields({ t }) {
   // focusout that follows must not commit a second time.
   const closed = useRef(false);
   // Into whichever cell was clicked.
+  // From the keyboard (Enter, F2) its text is selected, so typing replaces
+  // the name, as renaming does in a desktop list; a click puts the caret there.
   useEffect(() => {
-    ({ title: titleIn, time: timeIn }[S.editField] || artistIn).current.focus();
+    const field = ({ title: titleIn, time: timeIn }[S.editField] || artistIn).current;
+    field.focus();
+    if (S.editSelect) field.select();
   }, []);
 
-  const close = () => {
+  // Enter and Escape hand focus back to the row, so the arrows walk on from
+  // it; leaving the fields by clicking elsewhere leaves focus there.
+  const close = (refocus) => {
     closed.current = true;
     if (S.editing === t) S.editing = null;
     render();
+    if (refocus) focusRow(t);
   };
-  const commit = () => {
+  const commit = (refocus) => {
     if (closed.current) return;
     const na = artist.trim(), nt = title.trim();
     if (na !== t.artist || nt !== t.title) {
@@ -96,17 +103,17 @@ function EditFields({ t }) {
       if (at !== secs) toast("Kept between its neighbours: starts at " + fmt(at));
     }
     if (isNew) t.time = fmt(t.timestamp);
-    close();
+    close(refocus);
   };
   // Escape used to rebuild the list, which removed the focused input; Chrome
   // fires focusout for that, so the "cancel" committed what had been typed.
-  const cancel = () => { if (!closed.current) close(); };
+  const cancel = () => { if (!closed.current) close(true); };
   const keys = next => ev => {
     if (ev.key === "Escape") { ev.preventDefault(); cancel(); }
-    if (ev.key === "Enter") { ev.preventDefault(); if (next && next.current) next.current.focus(); else commit(); }
+    if (ev.key === "Enter") { ev.preventDefault(); if (next && next.current) { next.current.focus(); next.current.select(); } else commit(true); }
   };
   const onFocusOut = () => setTimeout(() => {
-    if (wrap.current && !wrap.current.contains(document.activeElement)) commit();
+    if (wrap.current && !wrap.current.contains(document.activeElement)) commit(false);
   }, 0);
   return html`
     <div class="editfields" ref=${wrap} onfocusout=${onFocusOut}>
@@ -119,11 +126,12 @@ function EditFields({ t }) {
     </div>`;
 }
 
-function Row({ t, i, playing, span, samples }) {
+function Row({ t, i, playing, span, samples, tab }) {
   const unknown = !t.artist && !t.title;
   const editing = S.editing === t;
+  const selected = t === S.selectedTrack;
   const cls = "row trow" + (t.rejected ? " rejected" : "") + (unknown ? " unknown" : "")
-    + (t === S.selectedTrack ? " selected" : "") + (playing ? " playing" : "")
+    + (selected ? " selected" : "") + (playing ? " playing" : "")
     + (editing ? " editing" : "");
   // ✕ merges into the previous track, as it always has; ↩ brings back a row
   // merged either way. edits.mergeTrack() owns the rules (the star, #56).
@@ -132,7 +140,8 @@ function Row({ t, i, playing, span, samples }) {
   // place. The .meta wrapper is display:contents, so its two cells sit in the
   // row's grid while still sharing one click handler.
   return html`
-    <div class=${cls} data-key=${keyOf(t)} onClick=${() => selectTrack(t)}>
+    <div class=${cls} data-key=${keyOf(t)} role="option" aria-selected=${selected ? "true" : "false"}
+      aria-label=${rowLabel(t, i)} tabindex=${tab ? 0 : -1} onClick=${() => selectTrack(t)}>
       <span class="c-num idx">${i + 1}</span>
       <${Thumb} t=${t} i=${i} />
       ${editing
@@ -146,16 +155,25 @@ function Row({ t, i, playing, span, samples }) {
       <span class="c-num smp">${samples || ""}</span>
       <span class="star" title=${t.episode_cover ? "This track's artwork is the episode cover" : undefined}>${t.episode_cover ? "★" : ""}</span>
       <span class="acts">
-        <button class="iconbtn play" title="Play from here" onClick=${e => { e.stopPropagation(); playFrom(i, { scroll: false }); }}>▶</button>
-        <button class="iconbtn reject" title=${t.rejected ? "Bring back" : "Reject"} onClick=${reject}>${t.rejected ? "↩" : "✕"}</button>
-        <button class="iconbtn add" title="Add a track below"
+        <button class="iconbtn play" tabindex="-1" title="Play from here" onClick=${e => { e.stopPropagation(); playFrom(i, { scroll: false }); }}>▶</button>
+        <button class="iconbtn reject" tabindex="-1" title=${t.rejected ? "Bring back" : "Reject"} onClick=${reject}>${t.rejected ? "↩" : "✕"}</button>
+        <button class="iconbtn add" tabindex="-1" title="Add a track below"
           onClick=${e => { e.stopPropagation(); addBelow(i); }}>＋</button>
       </span>
     </div>`;
 }
 
+// What a screen reader announces for a row: its place, name and start.
+function rowLabel(t, i) {
+  const name = t.artist || t.title ? (t.artist || "Unknown artist") + (t.title ? ", " + t.title : "") : "Unidentified";
+  return (i + 1) + ". " + name + ", " + fmt(startOf(t)) + (t.rejected ? ", merged" : "");
+}
+
 export function renderList() {
   const p = playingIndex();
+  // Roving tabindex (#58): the selected row is the list's one tab stop, or
+  // the first row while nothing is selected.
+  const tabAt = Math.max(0, S.tracks.indexOf(S.selectedTrack));
   const D = setDuration();
   // Length is what will be written: a kept track's kept window, which runs
   // over any rows merged into it. A merged row has none of its own.
@@ -164,7 +182,7 @@ export function renderList() {
   if (TL) for (const w of TL.keptWindows(S.tracks, D)) spans[w.index] = w.end - w.start;
   const joined = TL ? TL.joinProbes(S.tracks, S.probes, D) : null;
   paint(S.tracks.map((t, i) => html`<${Row} key=${keyOf(t)} t=${t} i=${i} playing=${i === p}
-    span=${spans[i]} samples=${joined ? joined[i].length : 0} />`), listEl);
+    tab=${i === tabAt} span=${spans[i]} samples=${joined ? joined[i].length : 0} />`), listEl);
 }
 
 // Bring the playing row into view (automatic advance, prev/next).
@@ -179,10 +197,19 @@ export function revealSelected() {
   if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
-export function startEdit(t, field) {
+// Keyboard selection moves focus with it, so the list keeps one tab stop
+// where the user is. Scrolling is revealSelected()'s ("nearest"), not focus's.
+export function focusSelected() { focusRow(S.selectedTrack); }
+function focusRow(t) {
+  const row = t && listEl.querySelector('.row[data-key="' + keyOf(t) + '"]');
+  if (row) row.focus({ preventScroll: true });
+}
+
+export function startEdit(t, field, opts) {
   if (S.liveMode || S.editing === t) return;
   S.editing = t;
   S.editField = field || "artist";
+  S.editSelect = !!(opts && opts.select);
   render();
 }
 
