@@ -32,11 +32,11 @@ uv run pytest
 **System dependency:** Requires ffmpeg installed (`brew install ffmpeg` / `apt install ffmpeg`).
 Its bundled `ffplay` also powers the editor's audio preview (macOS only).
 
-**CI (#66)** is `.github/workflows/ci.yml`: ruff, `ruff format --check .`, pyright, then pytest
-on Ubuntu and macOS with Python 3.10 and 3.13, with ffmpeg and Node installed. A test that
-needs a program is marked `@pytest.mark.requires_tool("ffprobe")` (or `"node"`), which
-`conftest.py`'s `pytest_runtest_setup` skips without it, **except under `CI`, where it fails**:
-the ffprobe round trips guard #17 and #33. Don't use a bare `skipif(shutil.which(...))`.
+**No CI workflow** (Ray, 2026-11-03: overkill for a side project; run checks locally). Before a
+PR, run ruff, `ruff format --check .`, pyright and pytest. A test that needs a program is marked
+`@pytest.mark.requires_tool("ffprobe")` (or `"node"`), which `conftest.py`'s
+`pytest_runtest_setup` skips without it, **except with `CI` set, where it fails**: the ffprobe
+round trips guard #17 and #33. Don't use a bare `skipif(shutil.which(...))`.
 Pyright is held at 0 errors. A `# pyright: ignore[rule]` names its rule and says why.
 
 ## Architecture
