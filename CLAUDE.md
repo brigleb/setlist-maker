@@ -37,7 +37,15 @@ CLI application with the following modules:
 - **Entry point:** `main()` with subcommand routing (`identify`, `chapters`)
 - **Backward compatible:** Running without subcommand defaults to `identify` behavior
 - **Thin layer:** Owns argparse setup and the `cmd_identify` / `cmd_chapters` handlers,
-  delegating real work to the modules below.
+  delegating real work to the modules below. No module in the package imports `cli`.
+- **Usage errors are argparse's** (#65): ranges are `type=` validators raising
+  `ArgumentTypeError` (any other exception prints only "invalid <name> value"), the editor
+  modes `--edit` / `--web-edit` / `--watch` are one mutually exclusive group, and the rules that
+  span two flags go through `parser.error()` in `_check_identify()`. All of those exit 2 on
+  stderr. A failure while running (`_fail()`) is exit 1, also on stderr. The no-subcommand shim
+  reads the subcommands and top-level flags from the parser.
+- Tests of a usage error go through `main()` with the `usage_error` fixture (`conftest.py`):
+  `cmd_identify()` is handed an already-parsed namespace, so it never sees one.
 
 ### `setlist_maker/help_format.py` - Colorized `--help`
 
@@ -124,6 +132,13 @@ CLI application with the following modules:
 - **Call log:** each sample is timed, its HTTP attempts drained from a `CallRecorder`, and one
   JSONL line written. Off unless `call_log=` is passed; the CLI resolves it (`_resolve_call_log`),
   so calling `process_single_file()` directly logs nothing. See `call_log.py`.
+
+### `setlist_maker/identity.py` - Which answers name the same track
+
+- `normalized_key()` (drops remix/feat/edit tags, brackets and punctuation) and
+  `assign_cluster()` (greedy fuzzy clustering on artist and title separately). Shared by the
+  sequential dedup and the adaptive engine; the thresholds stay in `identify.py`. Standard
+  library only, because `boundary.py` imports it.
 
 ### `setlist_maker/boundary.py` - Adaptive sampling engine (pure)
 
@@ -239,7 +254,8 @@ CLI application with the following modules:
   Its efficacy bound is deliberately loose (43 of 89 impostors survive, correctly — a
   per-probe contaminant mostly lands alone inside a long track, where the flanks stay coarse and
   A-B-A belongs to `singleton_confidence_keep`); efficacy is pinned by `tests/fixtures/*.json`.
-- Identity clustering is `identify.py`'s `_assign_cluster` / `_normalized_key` reused as-is, so
+- Identity clustering is `identity.py`'s `assign_cluster` / `normalized_key`, shared with
+  `identify.py`'s dedup and standard library only, which is what keeps this module pure, so
   the same track under two labels never manufactures a boundary. Note the corollary for
   fixtures: names like `Artist 1` / `Artist 11` score 0.94 and legitimately merge — see
   `tests/boundary_oracle.py`'s `assert_identities_distinct`.
@@ -294,7 +310,9 @@ CLI application with the following modules:
   moves, and any layout it doesn't expect (other version, tag/frame flags, short frame)
   leaves the file exactly as mutagen wrote it. Guarded by `TestChapterFrameOrder`, whose
   artwork *shrinks* per chapter so an unfixed embed writes them in exact reverse.
-- **embed_chapters_for_tracklist() / _episode_cover_image():** The episode cover comes from the
+- **embed_chapters_for_tracklist() / _episode_cover_image():** in `chapters.py`, beside
+  `embed_chapters()` (#65), so the CLI and the web editor's Embed import it the same way. Patch
+  `setlist_maker.chapters.embed_chapters` to intercept the write. The episode cover comes from the
   track starred in the web editor (`Track.is_episode_cover`), falling back to the original rule —
   the first track with *real* artwork — when nothing is starred **or** the starred track's lookup
   turns up nothing. `--cover` still outranks both, being seeded before the derivation runs.
@@ -349,12 +367,12 @@ CLI application with the following modules:
   regenerates structurally — there is no invalidation code path. Lives in
   `$XDG_CACHE_HOME/setlist-maker/artwork` (else `~/.cache/...`). Every loader that
   feeds the editor or `chapters` must supply `coverart_url` (the JSON sidecar's, via
-  `_load_tracklist_with_artwork_urls()`) — parsing markdown alone leaves it `None` and
+  `tracklist.load_tracklist()`) — parsing markdown alone leaves it `None` and
   silently keys the preview differently from the embed.
   Regeneration is necessary but **not sufficient** on a correction: `fetch_artwork()`
   tries `coverart_url` ahead of every search, so a corrected track whose stale Shazam
   URL survived would re-key, re-fetch, and composite the *same wrong cover* under the
-  new text. `editor.apply_track_edit()` clearing the URL is what makes the new key
+  new text. `tracklist.apply_track_edit()` clearing the URL is what makes the new key
   resolve to new art (#30).
 - **artwork_options():** The picker's cached fan-out. Keyed with `coverart_url` **omitted** —
   which alternates exist depends on artist/title/size, while a saved URL is one particular
@@ -368,9 +386,16 @@ CLI application with the following modules:
   is not capped). An unwritable cache degrades to in-memory generation rather than
   failing.
 
-### `setlist_maker/editor.py` - Interactive TUI editor
-- **TracklistEditor:** Textual app providing spreadsheet-like interface
-- **EditTrackScreen:** Modal dialog for editing artist/title fields
+### `setlist_maker/tracklist.py` - The tracklist model and its persistence
+- **The layer every front end shares** (#65): the identify run, the TUI, the web editor and
+  `chapters` all read and write sets through it, and it imports nothing past the standard
+  library and `fileio`. `tests/test_module_deps.py` checks that in a fresh interpreter.
+- **`Track` / `Tracklist`**, the markdown format below, and `find_audio_file()` /
+  `resolve_audio_path()` (the source audio beside a tracklist).
+- **load_tracklist():** the markdown joined to its JSON sidecar *by timestamp*, which sets
+  each track's `coverart_url`, `artwork_pinned` and `is_episode_cover`. A sidecar that won't
+  parse, or has the wrong shape, degrades to the markdown alone.
+- **save_tracklist():** see `fileio.py` for the write order.
 - **CorrectionsDB:** Persistent storage for user corrections, at
   `$XDG_CONFIG_HOME/setlist-maker/corrections.json` (else `~/.config/...`), via
   `fileio.config_dir()` like `episode.py`'s config, so the tests' `isolated_user_config` covers it.
@@ -441,6 +466,11 @@ CLI application with the following modules:
   **stripped** values, so a whitespace-only field is stored as the empty field it already is —
   untreated it survived one round trip (the reader strips) and was deleted by the next, putting
   the loss a save away from the edit that caused it.
+
+### `setlist_maker/editor.py` - Interactive TUI editor
+- Textual only; the model it edits is `tracklist.py`'s. Only `cli.py` imports it.
+- **TracklistEditor:** Textual app providing spreadsheet-like interface
+- **EditTrackScreen:** Modal dialog for editing artist/title fields
 - **Audio preview:** `p` previews the selected track's 30s window via `PlaybackController`
   (see `playback.py`). `_resolve_audio_path()` locates the source audio (threaded in from the
   CLI when known, else discovered beside the markdown). Playback stops on navigation/reject/edit
@@ -461,7 +491,7 @@ CLI application with the following modules:
   single-page editor (`web_editor.html` + `web/`) from a loopback `ThreadingHTTPServer`
   on an ephemeral port and opens the browser. Reuses `Track`/`Tracklist`,
   `CorrectionsDB`, and the shared `save_tracklist()` / `resolve_audio_path()`
-  helpers from `editor.py` so the TUI and web front ends never drift.
+  helpers from `tracklist.py` so the TUI and web front ends never drift.
 - **Endpoints:** `GET /` (page), `GET /api/tracklist`, `POST /api/save`
   (writes `.md` + `.json` + corrections via `save_tracklist`), `GET /api/audio`
   (HTTP Range streaming powering the in-browser scrubber), `GET /api/artwork?index=N`
@@ -490,7 +520,7 @@ CLI application with the following modules:
   A rebound request still carries the attacker's `Host`, which is what this rejects (#26).
 - **Pure helpers:** `tracklist_to_api()` and `apply_edits()` are socket-free and
   unit-tested directly. `apply_edits()` maps edits onto existing tracks by stable
-  `index` and puts each one through `editor.apply_track_edit()` — the TUI's own
+  `index` and puts each one through `tracklist.apply_track_edit()` — the TUI's own
   correction step; an edit with **no** `index` is a track inserted via the page's per-row
   "＋ Add below" control — it's appended with its own `timestamp` and the list is
   re-sorted into chronological position (inserts aren't corrections, so none is
@@ -677,7 +707,6 @@ CLI application with the following modules:
   anything is applied; so is its `episode` object (see `episode.py`). `POST /api/chapters` runs `embed_chapters_for_tracklist` on the *saved*
   tracklist (the page saves first), one at a time, never while live; the page pauses the
   `<audio>` around it and reloads it after, because mutagen rewrites the file it streams from.
-  The endpoint imports `cli` lazily -- `cli` imports this module.
 
 ### `setlist_maker/episode.py` - The episode's title and artist
 
@@ -1172,7 +1201,7 @@ Key classes:
 episode-cover choice is conceptually a property of the *set*, but it is stored as a flag on the
 one track whose art is used precisely so the top level never changes: wrapping the list in an
 object does not raise for existing readers, it degrades **silently** —
-`_load_tracklist_with_artwork_urls()` iterates the loaded JSON, iterating a dict yields its keys
+`load_tracklist()` iterates the loaded JSON, iterating a dict yields its keys
 as strings, `"timestamp" in "tracks"` is a false substring test rather than a `TypeError`, and
 the loader's `except` never fires. Every track would quietly lose its `coverart_url`, re-key the
 artwork cache and re-fetch. The list is also joined back to the markdown **by timestamp**, not
