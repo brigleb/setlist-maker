@@ -406,9 +406,47 @@
     return out;
   }
 
+
+  // ---- the command palette (#59) ----
+  // How well `query` matches `text`: -1 for no match, higher is better. Each
+  // space-separated word of the query must match on its own. A word found
+  // whole scores far above one found only as scattered letters, and more at
+  // the start of a word, so "luvm" ranks The Luvmenauts above a command whose
+  // label merely contains l, u, v and m in order. Case and accents are ignored.
+  function fold(s) {
+    return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  }
+  function fuzzy(query, text) {
+    const words = fold(query).split(/\s+/).filter(Boolean);
+    if (!words.length) return 0;
+    const t = fold(text);
+    const startsWord = i => i === 0 || !/[a-z0-9]/.test(t[i - 1]);
+    let total = 0;
+    for (const w of words) {
+      let best = -1;
+      for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + 1)) {
+        const s = 1000 + (startsWord(i) ? 500 : 0) - Math.min(i, 200);
+        if (s > best) best = s;
+      }
+      if (best === -1) {
+        // Scattered letters, in order: a weak match, docked for every gap.
+        let at = -1, s = 100;
+        for (const ch of w) {
+          const j = t.indexOf(ch, at + 1);
+          if (j === -1) return -1;
+          s += j === at + 1 ? 10 : (startsWord(j) ? 4 : -2);
+          at = j;
+        }
+        best = s;
+      }
+      total += best;
+    }
+    return total;
+  }
+
   return {
     BLIP_SECONDS, SHORT_SECONDS, UNHEARD_SECONDS, HOUR,
     fmt, quarters, cleanTitle, identity, hue, windows, keptWindows, owners, startIndex, joinProbes, variants, unheard, findIssues,
-    snapPoints, MIN_SPP, clampView, zoomAt, tickStep, peakLevels, peakColumns,
+    snapPoints, MIN_SPP, clampView, zoomAt, tickStep, peakLevels, peakColumns, fuzzy,
   };
 });

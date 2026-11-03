@@ -84,6 +84,9 @@ def test_page_wiring():
         "split-side",
         "keys-dialog",  # the shortcut sheet (#58)
         "ask",  # ask(), the in-app confirm (#61)
+        "palette",  # ⌘K (#59)
+        "menu",  # the one context menu (#59)
+        "pal-btn",
         "keys-btn",
         "pfollow",
     ):
@@ -107,7 +110,7 @@ def test_page_wiring():
     # Dialogs are native <dialog>s opened modally (#61): the browser traps focus
     # and handles Escape. The keyboard map stands down while one is open, and
     # the page asks its questions in-app, never with the browser's dialogs.
-    assert html.count("<dialog id=") == 3 and "showModal()" in src
+    assert html.count("<dialog id=") == 5 and "showModal()" in src
     assert "if (dialogOpen()) return;" in src
     for native in ("confirm(", "alert(", "prompt("):
         assert native not in src, native
@@ -120,6 +123,19 @@ def test_page_wiring():
     assert "if (t._art) edit.coverart_url = t.coverart_url;" in src
     assert "episode_cover: !!t.episode_cover" in src
     assert "&artist=" in src and "&title=" in src  # the picker searches the live text
+
+
+def test_every_menu_item_is_a_command():
+    """The context menus name commands by id (#59); a typo would silently drop
+    an item from every menu, since an unknown id has nothing to offer."""
+    src = (WEB / "commands.js").read_text()
+    ids = set(re.findall(r'\{ id: "([a-z-]+)"', src))
+    menus = src[src.index("const MENUS = {") : src.index("export const MENU_IDS")]
+    named = set(re.findall(r'"([a-z-]+)"', menus)) - {"-"}
+    assert named and named <= ids, named - ids
+    # The page's own menu replaces the browser's over the timeline and list,
+    # but never inside a text field, where copy and paste live.
+    assert 'closest("#tl-rows, #list")' in src and 'closest("input, textarea")) return;' in src
 
 
 def test_every_module_import_is_exported():

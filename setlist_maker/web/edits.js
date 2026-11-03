@@ -56,6 +56,32 @@ export function toggleMerge(t, dir = "prev") {
   if (mergeTrack(t, t.rejected ? null : dir)) render();
 }
 
+// Why track t can't be merged that way right now, or "" when it can. The
+// first kept track has nothing before it to merge into, the last nothing
+// after. ⌫ / ⇧⌫ and the menus share these gates; the inspector shows only
+// the buttons that apply.
+export function mergeBlocked(t, dir) {
+  if (S.liveMode) return "Editing opens when the run finishes";
+  const kept = S.tracks.filter(x => !x.rejected), k = kept.indexOf(t);
+  if (k === -1 || kept.length === 1) return "";
+  if (dir === "prev" && k === 0) return "Nothing before it to merge into";
+  if (dir === "next" && k === kept.length - 1) return "Nothing after it to merge into";
+  return "";
+}
+
+// ⌫ and the menus: merge t that way, bring a merged row back, or reject the
+// only track there is (what the inspector's Reject does).
+export function mergeInto(t, dir) {
+  if (!t || S.liveMode) return;
+  if (t.rejected || S.tracks.filter(x => !x.rejected).length === 1) { toggleMerge(t); return; }
+  const why = mergeBlocked(t, dir);
+  if (why) {
+    toast(why + (dir === "prev" ? ". ⇧⌫ merges it into the next track" : ". ⌫ merges it into the previous track"));
+    return;
+  }
+  toggleMerge(t, dir);
+}
+
 // Cut track t at `seconds`: the new row starts there, blank, and is selected
 // so it can be named straight away. The Split button and S cut at the
 // playhead; Alt-click cuts wherever the pointer is, with no need to play.

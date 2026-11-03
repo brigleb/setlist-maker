@@ -707,7 +707,8 @@ CLI application with the following modules:
   (track windows, which track holds a moment), `history` (dirty, undo/redo), `list`, `player`,
   `grid` (the timeline), `inspector` (plus sampling), `issues`, `edits` (merge, split, rename,
   shared by every pane), `artwork` (thumbs, picker, uploads, episode cover, Embed), `dialog`
-  (the dialogs' shared behaviour and `ask()`), `keys` (the
+  (the dialogs' shared behaviour and `ask()`), `commands` (every action, for the menus and
+  ⌘K), `menu` (the context menu), `palette` (⌘K), `keys` (the
   keyboard map) and `main` (load, render, save, Done, the live poll). `main` is the entry and
   imports the rest.
 - **State that more than one module reassigns lives on `S` in `state.js`**, because an imported
@@ -766,6 +767,35 @@ CLI application with the following modules:
   `stopPropagation()` or the document handler, finding no dialog open, acts on it too; and the
   top layer covers any `z-index`, so `#toast` is a `popover="manual"` shown afresh for every
   message, which puts it above a dialog opened before it.
+- **Context menus and ⌘K (#59).** `commands.js`'s `COMMANDS` is every action the page offers,
+  each `{ id, group, label, menu, keys, playhead, when, run }`, and `run` calls the same function
+  the action's button, gesture or key already calls, so the three can't drift. `when(c)` returns
+  `true` (offer it), `false` (leave it out: Unmerge on a kept track) or a string, which greys it
+  out and is shown as the reason. The context `c` is `{ track, at, pointer, probe }`; `MENUS` lists
+  which commands each surface offers (`block`, `row`, `pin`, `moment`), and a test checks every id
+  there is a command.
+  - **The menu** (`menu.js`) is a modal `<dialog>` with a clear `::backdrop`, so a click outside
+    closes it without landing on the page, and the keymap stands down (`dialogOpen()`). The
+    browser's own menu is prevented over `#tl-rows` and `#list` only, and never inside a text
+    field (copy and paste). A right-click on the backdrop closes the menu and re-sends the
+    `contextmenu` to `elementFromPoint()`, which reopens it there, as a desktop menu does.
+    Right-clicking a row or block selects it and focuses its row first, so focus returns there
+    when the menu closes, and the keys shown beside items apply. ⇧F10 and the menu key open the
+    selected track's menu under its row (`selectedMenu()`); the menu key also fires a
+    `contextmenu` afterwards, ignored for 400ms after a *keyboard* open (`menuJustOpened()`) and
+    not after a mouse open, or a quick second right-click elsewhere would be swallowed.
+  - Picks run in the dialog's `close` listener, after focus has gone back, so Rename and Insert
+    keep the focus they move. `close` arrives a task after `close()`, by which time a right-click
+    outside may already have opened the next menu, so the listener touches nothing but the pick.
+  - In a row menu the moment is the playhead (Split, Identify), and Copy copies it while it's
+    inside the track, else the track's start (`copyAt`).
+  - **⌘K** (`palette.js`) lists every command, a track by artist or title, and "Go to" for a typed
+    `1:23:45` or `75:30` (which seeks and selects the track there). Ranking is `TL.fuzzy`
+    (Node-tested): a query word found whole scores far above the same letters scattered, so
+    "luvm" puts The Luvmenauts above a command that only contains l…u…v…m. Commands marked
+    `playhead` (S, I) act on the track under the playhead, as their keys do. ⌘K opens from
+    inside a text field and does nothing while another dialog (the picker) is open; ⌘K again
+    closes it, stopped from bubbling as the `?` sheet's `?` is.
 - **The keyboard map (#58).** `keys.js`'s `KEYMAP` is one table of `{ group, keys, label, match,
   need, run }`, and both the dispatcher and the `?` sheet (`#keys-dialog`, built on first open)
   read it, so the sheet can't drift; mouse gestures are the static `MOUSE` list beside it, which
@@ -775,7 +805,7 @@ CLI application with the following modules:
   previous / next track with the inspector's gates (on a merged row, ⌫ brings it back), ←/→ seek
   5s (⇧ 15s, ⌥ 1s), J/K/L shuttle (no reverse in a browser, so J slows a fast shuttle or steps
   back 5s; any pause drops to 1x), F follows the playhead.
-  - The guard order matters: any open dialog owns the keyboard (`dialogOpen()`); then
+  - The guard order matters: any open dialog owns the keyboard (`dialogOpen()`); then ⌘K and
     ⌘S, *before* the input guard, since a field holds a draft until it blurs (the list commits on
     a timeout), so ⌘S blurs it and saves on the next tick; then the guard, which checks the
     event's **target** as well as the focus, because a field's Enter can move focus to its row
