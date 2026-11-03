@@ -11,26 +11,72 @@
 </script>
 </head>
 <body>
+  <!-- #62: the page's icons, one stroke and one grid (Lucide's shapes, ISC licence; see web/LICENSES.md).
+       Used as <svg class="ic"><use href="#i-name"/></svg>, from markup and from icon() / Icon in JS. -->
+  <svg id="icons" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4.8v14.4a1 1 0 0 0 1.5.86l12-7.2a1 1 0 0 0 0-1.72l-12-7.2A1 1 0 0 0 6 4.8Z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
+    <symbol id="i-skip-back" viewBox="0 0 24 24"><path d="M19 20 9 12l10-8v16Z"/><path d="M5 19V5"/></symbol>
+    <symbol id="i-skip-forward" viewBox="0 0 24 24"><path d="m5 4 10 8-10 8V4Z"/><path d="M19 5v14"/></symbol>
+    <symbol id="i-rotate-ccw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+    <symbol id="i-rotate-cw" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
+    <symbol id="i-bring-back" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M11.52 2.3a.53.53 0 0 1 .95 0l2.31 4.68a2.12 2.12 0 0 0 1.6 1.16l5.16.76a.53.53 0 0 1 .3.9l-3.74 3.64a2.12 2.12 0 0 0-.61 1.88l.88 5.14a.53.53 0 0 1-.77.56l-4.62-2.43a2.12 2.12 0 0 0-1.97 0L6.4 21.01a.53.53 0 0 1-.77-.56l.88-5.13a2.12 2.12 0 0 0-.61-1.88L2.16 9.8a.53.53 0 0 1 .29-.9l5.17-.76a2.12 2.12 0 0 0 1.6-1.16Z"/></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M8 13h.01M12 13h.01M16 13h.01M7 16h10"/></symbol>
+    <symbol id="i-panel-right" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></symbol>
+    <symbol id="i-waveform" viewBox="0 0 24 24"><path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"/></symbol>
+    <symbol id="i-merge" viewBox="0 0 24 24"><path d="m8 6 4-4 4 4"/><path d="M12 2v10.3a4 4 0 0 1-1.17 2.87L4 22"/><path d="m20 22-5-5"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-diff" viewBox="0 0 24 24"><path d="M12 3v14"/><path d="M5 10h14"/><path d="M5 21h14"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-eraser" viewBox="0 0 24 24"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></symbol>
+    <symbol id="i-ear" viewBox="0 0 24 24"><path d="M6 8.5a6.5 6.5 0 1 1 13 0c0 6-6 6-6 10a3.5 3.5 0 1 1-7 0"/><path d="M15 8.5a2.5 2.5 0 0 0-5 0v1a2 2 0 1 1 0 4"/></symbol>
+    <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></symbol>
+    <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+    <symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></symbol>
+    <symbol id="i-list-music" viewBox="0 0 24 24"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></symbol>
+    <symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><path d="M6 12a6 6 0 0 1 6-6"/></symbol>
+    <symbol id="i-locate" viewBox="0 0 24 24"><path d="M2 12h3M19 12h3M12 2v3M12 19v3"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></symbol>
+  </svg>
   <header id="toolbar">
-    <div>
-      <div class="file"><span id="file">—</span><span id="livepill" title="Following the run as it samples; editing opens when it finishes">identifying</span></div>
-      <div class="counts" id="counts"></div>
+    <div class="brand">
+      <div class="appmark"><svg class="ic" aria-hidden="true"><use href="#i-waveform"/></svg></div>
+      <div class="brand-text">
+        <div class="file"><span id="file">—</span><span id="savestate"></span><span id="livepill" title="Following the run as it samples; editing opens when it finishes">identifying</span></div>
+        <div class="counts" id="counts"></div>
+      </div>
     </div>
+    <!-- #62: what is running now (Shazam lookups, Save, Embed, uploads). -->
+    <div id="activity" role="status" aria-label="In progress" hidden></div>
     <div class="actions">
-      <button id="undo" class="histbtn" disabled title="Undo (⌘Z)">Undo</button>
-      <button id="redo" class="histbtn" disabled title="Redo (⇧⌘Z)">Redo</button>
-      <button id="save" disabled>Save</button>
-      <button id="done">Done</button>
-      <button id="pal-btn" class="histbtn" type="button" title="Find a command, a track or a time (⌘K)" aria-label="Find a command, a track or a time">⌘K</button>
-      <button id="keys-btn" class="histbtn" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
-      <button id="side-toggle" class="histbtn" type="button" aria-controls="side" aria-expanded="false" title="Show the inspector">Inspector</button>
+      <button id="pal-btn" class="tool findbtn histbtn" type="button" title="Find a command, a track or a time (⌘K)" aria-label="Find a command, a track or a time"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg><span class="find-text">Find</span><kbd>⌘K</kbd></button>
+      <button id="keys-btn" class="tool icbtn histbtn" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><svg class="ic" aria-hidden="true"><use href="#i-keyboard"/></svg></button>
+      <div class="seg histbtn" role="group" aria-label="History">
+        <button id="undo" class="tool icbtn" type="button" disabled title="Undo (⌘Z)" aria-label="Undo"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg></button>
+        <button id="redo" class="tool icbtn" type="button" disabled title="Redo (⇧⌘Z)" aria-label="Redo"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg></button>
+      </div>
+      <button id="side-toggle" class="tool icbtn" type="button" aria-controls="side" aria-expanded="false" title="Show the inspector" aria-label="Inspector"><svg class="ic" aria-hidden="true"><use href="#i-panel-right"/></svg></button>
+      <button id="done" class="tool" type="button">Done</button>
+      <button id="save" class="tool primary" type="button" disabled title="Save (⌘S)">Save</button>
     </div>
   </header>
   <section id="timeline" class="pane" aria-label="Timeline">
     <div id="tl-head">
       <div class="tl-title">Timeline</div>
       <div class="tl-stats" id="tl-stats"></div>
-      <button id="tl-replay" class="tbtn" type="button" title="Drop the samples in again, in the order the run asked for them">▶ Replay the run</button>
+      <button id="tl-replay" class="tbtn" type="button" title="Drop the samples in again, in the order the run asked for them"><svg class="ic" aria-hidden="true"><use href="#i-history"/></svg>Replay the run</button>
     </div>
     <div id="tl-rows">
       <div id="tl-mini" title="The whole set: drag the box to move the view, double-click to see it all">
@@ -69,7 +115,7 @@
         <div class="in-lbl">Podcast episode</div>
         <section id="episode" aria-label="Podcast episode">
           <div class="ep-row">
-            <div id="ep-thumb" class="empty" title="Episode cover — drop an image here"></div>
+            <div id="ep-thumb" class="empty" title="Episode cover — drop an image here"><svg class="ic" aria-hidden="true"><use href="#i-image"/></svg></div>
             <div class="ep-text">
               <input id="ep-title" class="ep-field ep-title" type="text" maxlength="200" aria-label="Episode title" placeholder="Episode title" spellcheck="false">
               <input id="ep-artist" class="ep-field ep-artist" type="text" maxlength="200" aria-label="Episode artist" placeholder="Artist" spellcheck="false">
@@ -77,7 +123,7 @@
           </div>
           <div id="ep-note" class="ep-note"></div>
           <div class="in-btns">
-            <button id="ep-upload" class="tbtn" type="button">Upload cover…</button>
+            <button id="ep-upload" class="tbtn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>Upload cover…</button>
             <button id="ep-remove" class="tbtn" type="button" hidden>Remove cover</button>
             <input id="ep-file" type="file" accept="image/*" hidden>
             <button id="embed" class="tbtn primary" type="button" hidden title="Write the title, artist, chapter markers, chapter artwork and episode cover into the MP3 (saves first)">Embed chapters in MP3</button>
@@ -87,20 +133,20 @@
       <div id="panel-queue" class="panel" role="tabpanel" aria-labelledby="tab-queue" hidden><div id="issues"></div></div>
     </aside>
   </div>
-  <div id="player" class="disabled">
-    <div id="pthumb"></div>
+  <div id="player" class="disabled idle">
+    <div id="pthumb"><svg class="ic" aria-hidden="true"><use href="#i-disc"/></svg></div>
     <div id="pbody">
       <div id="ptop">
         <div id="ptransport">
-          <button id="pprev" title="Previous track (⌥↑)">⏮</button>
-          <button id="pback15" title="Back 15 seconds (⇧←)">↺<span>15</span></button>
-          <button id="pplay" title="Play/pause (Space)">▶</button>
-          <button id="pfwd15" title="Forward 15 seconds (⇧→)"><span>15</span>↻</button>
-          <button id="pnext" title="Next track (⌥↓)">⏭</button>
+          <button id="pprev" type="button" title="Previous track (⌥↑)" aria-label="Previous track"><svg class="ic fill" aria-hidden="true"><use href="#i-skip-back"/></svg></button>
+          <button id="pback15" class="skip" type="button" title="Back 15 seconds (⇧←)" aria-label="Back 15 seconds"><svg class="ic" aria-hidden="true"><use href="#i-rotate-ccw"/></svg><span>15</span></button>
+          <button id="pplay" type="button" title="Play/pause (Space)" aria-label="Play"><svg class="ic fill" aria-hidden="true"><use href="#i-play"/></svg></button>
+          <button id="pfwd15" class="skip" type="button" title="Forward 15 seconds (⇧→)" aria-label="Forward 15 seconds"><svg class="ic" aria-hidden="true"><use href="#i-rotate-cw"/></svg><span>15</span></button>
+          <button id="pnext" type="button" title="Next track (⌥↓)" aria-label="Next track"><svg class="ic fill" aria-hidden="true"><use href="#i-skip-forward"/></svg></button>
         </div>
         <div id="plabel">Nothing playing</div>
         <div id="pcount"></div>
-        <button id="pfollow" type="button" aria-pressed="false" title="Follow the playhead: the selection moves with the audio (F)">Follow</button>
+        <button id="pfollow" type="button" aria-pressed="false" title="Follow the playhead: the selection moves with the audio (F)"><svg class="ic" aria-hidden="true"><use href="#i-locate"/></svg>Follow</button>
       </div>
       <canvas id="seek-wave" aria-hidden="true" hidden></canvas>
       <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek within track">
@@ -111,24 +157,25 @@
     </div>
   </div>
   <audio id="audio" src="/api/audio" preload="metadata"></audio>
-  <div id="toast" popover="manual" role="status"></div>
+  <!-- #62: toasts stack, newest at the bottom, each on its own timer. -->
+  <div id="toast" popover="manual" role="status" aria-live="polite"></div>
   <!-- Dialogs (#61): native <dialog>s opened with showModal(); see web/dialog.js. -->
   <dialog id="keys-dialog" class="sheet" aria-labelledby="keys-title">
-    <div class="sheet-head"><h2 id="keys-title">Keyboard shortcuts</h2><button class="xbtn" type="button" data-close aria-label="Close" title="Close (Esc)">✕</button></div>
+    <div class="sheet-head"><h2 id="keys-title">Keyboard shortcuts</h2><button class="xbtn" type="button" data-close aria-label="Close" title="Close (Esc)"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button></div>
     <div id="keys-body"></div>
   </dialog>
   <dialog id="art-dialog" class="sheet" aria-labelledby="art-title">
     <div class="sheet-head">
-      <button id="art-prev" class="xbtn" type="button" aria-label="Previous track" title="Previous track (⌘[)">‹</button>
-      <button id="art-next" class="xbtn" type="button" aria-label="Next track" title="Next track (⌘])">›</button>
+      <button id="art-prev" class="xbtn" type="button" aria-label="Previous track" title="Previous track (⌘[)"><svg class="ic" aria-hidden="true"><use href="#i-chevron-left"/></svg></button>
+      <button id="art-next" class="xbtn" type="button" aria-label="Next track" title="Next track (⌘])"><svg class="ic" aria-hidden="true"><use href="#i-chevron-right"/></svg></button>
       <div class="sheet-titles"><h2 id="art-title"></h2><div id="art-sub"></div></div>
-      <button class="xbtn" type="button" data-close aria-label="Close" title="Close (Esc)">✕</button>
+      <button class="xbtn" type="button" data-close aria-label="Close" title="Close (Esc)"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button>
     </div>
     <div id="art-body">
       <div id="art-left">
         <img id="artwork-large" alt="Chapter artwork preview">
         <div id="art-left-foot">
-          <button id="art-cover" class="artbtn" type="button">☆ Episode cover</button>
+          <button id="art-cover" class="artbtn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-star"/></svg><span>Episode cover</span></button>
           <div id="artwork-note" hidden></div>
         </div>
       </div>
@@ -141,7 +188,7 @@
           <button id="art-auto" class="artbtn" type="button" title="Go back to the artwork found automatically">Automatic</button>
         </div>
         <div id="artwork-upload">
-          <button id="art-upload" class="artbtn" type="button">Upload image…</button>
+          <button id="art-upload" class="artbtn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>Upload image…</button>
           <span>or drop an image anywhere on this window</span>
           <input id="art-file" type="file" accept="image/*" hidden>
         </div>
@@ -149,14 +196,14 @@
     </div>
   </dialog>
   <dialog id="ask" class="sheet" aria-labelledby="ask-title">
-    <div class="sheet-head"><h2 id="ask-title"></h2><button class="xbtn" type="button" data-close aria-label="Close" title="Close (Esc)">✕</button></div>
+    <div class="sheet-head"><h2 id="ask-title"></h2><button class="xbtn" type="button" data-close aria-label="Close" title="Close (Esc)"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button></div>
     <div id="ask-body"></div>
     <div id="ask-buttons"></div>
   </dialog>
   <!-- #59: the ⌘K palette, and the one context menu (web/palette.js, web/menu.js). -->
   <dialog id="palette" class="sheet" aria-label="Find a command, a track or a time">
-    <input id="pal-q" type="text" role="combobox" aria-expanded="true" aria-controls="pal-list" aria-autocomplete="list"
-      autocomplete="off" spellcheck="false" placeholder="A command, a track, or a time like 1:23:45">
+    <div id="pal-search"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg><input id="pal-q" type="text" role="combobox" aria-expanded="true" aria-controls="pal-list" aria-autocomplete="list"
+      autocomplete="off" spellcheck="false" placeholder="A command, a track, or a time like 1:23:45"></div>
     <div id="pal-list" role="listbox" aria-label="Results"></div>
     <div id="pal-foot"><span><kbd>↑</kbd> <kbd>↓</kbd> to move</span><span><kbd>Enter</kbd> to run</span><span><kbd>Esc</kbd> to close</span></div>
   </dialog>

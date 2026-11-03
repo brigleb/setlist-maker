@@ -1,5 +1,6 @@
 // The timeline grid: blocks, seams, pins, the playhead, selection.
 
+import { begin } from "./activity.js";
 import { S, TL } from "./state.js";
 import { audio, el, toast } from "./dom.js";
 import { trackName } from "./util.js";
@@ -275,8 +276,7 @@ let peaksAsked = false;
 export async function loadPeaks() {
   if (peaksAsked) return;
   peaksAsked = true;
-  S.peaksPending = true;
-  renderStats();
+  const job = begin("peaks", "Reading the waveform…");
   try {
     const r = await fetch("/api/peaks");
     if (!r.ok) throw new Error(r.status);
@@ -289,8 +289,7 @@ export async function loadPeaks() {
   } catch (e) {
     S.peaks = null;
   }
-  S.peaksPending = false;
-  renderStats();
+  job.end();
   paintMini();
   requestPaint();
   syncPlayerUI();
@@ -301,8 +300,7 @@ function renderStats() {
   const identified = S.tracks.filter(t => !t.rejected && (t.artist || t.title)).length;
   document.getElementById("tl-stats").textContent =
     TL.fmt(D) + " · " + S.tracks.filter(t => !t.rejected).length + " tracks (" + identified + " identified)"
-    + (S.probes.length ? " · " + S.probes.length + " samples" : " · no samples saved for this set")
-    + (S.peaksPending ? " · reading the waveform…" : "");
+    + (S.probes.length ? " · " + S.probes.length + " samples" : " · no samples saved for this set");
 }
 
 // The tracklist is the truth about which tracks exist; the run's probes are

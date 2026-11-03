@@ -13,6 +13,8 @@ export const TL = window.Timeline;
 export const S = {
   tracks: [],
   dirty: false,
+  fileName: "",       // the set's audio file, for the toolbar and the tab title
+  savedAt: null,      // when this page last saved (Date.now()), for "Saved 2 min ago"
   // The playing, selected and inline-edited tracks, all held as object
   // references: an insert or a re-sort moves array positions, never objects.
   // model.playingIndex() derives the playing track's position when needed.
@@ -28,7 +30,6 @@ export const S = {
   canSample: false,  // the server has the audio and a sampler
   // The waveform (#57): { rate, levels } from /api/peaks, null until it arrives.
   peaks: null,
-  peaksPending: false,
   liveMode: false,   // `identify --watch` and the run has not finished
   livePoll: null,
   artVersion: 0,  // bumped on save so re-requested thumbs bypass the decoded-image cache

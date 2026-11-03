@@ -116,13 +116,45 @@ def test_page_wiring():
         assert native not in src, native
     assert "[hidden] { display:none !important; }" in src  # beats author display rules
     # The toast is a popover, so it is shown above a modal dialog opened earlier.
-    assert '<div id="toast" popover="manual"' in html and "t.showPopover()" in src
+    assert '<div id="toast" popover="manual"' in html and "box.showPopover()" in src
     # An unsaved pick wins over saved state in the panel, and is the only reason
     # a row sends coverart_url -- sending it for every row re-pins art (#30).
     assert "if (t._art) {" in src and "if (!t._art) {" in src
     assert "if (t._art) edit.coverart_url = t.coverart_url;" in src
     assert "episode_cover: !!t.episode_cover" in src
     assert "&artist=" in src and "&title=" in src  # the picker searches the live text
+
+
+# Characters the page used to draw as icons, at whatever size and baseline the
+# font that had them chose (#62). The shortcut symbols (⌘ ⇧ ⌥ ⌫ and the
+# arrows) are text in <kbd>s, not icons, and stay.
+GLYPH_ICONS = "▶⏸⏮⏭↺↻✕↩＋☆★≡≠✂↕‹›🎚●"
+
+
+def test_icons_are_drawn_from_the_sprite():
+    """No glyph stands in for an icon, and every icon named in the markup or
+    a module is a <symbol> in the sprite: a missing one draws nothing at all."""
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    symbols = set(re.findall(r'<symbol id="i-([\w-]+)"', html))
+    markup = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    used = set(re.findall(r'href="#i-([\w-]+)"', markup))
+    for f in sorted(WEB.glob("*.js")):
+        if f.name in VENDORED:
+            continue
+        code = f.read_text(encoding="utf-8")
+        used |= set(re.findall(r'\bicon\("([\w-]+)"', code))
+        used |= set(re.findall(r'Icon\} name="([\w-]+)"', code))
+        for pair in re.findall(r'name=\$\{[^}]*\? "([\w-]+)" : "([\w-]+)"', code):
+            used |= set(pair)
+        # Strip comments, which may name a glyph to say what replaced it.
+        live = re.sub(r"(^|\s)//.*", "", code)
+        for ch in GLYPH_ICONS:
+            assert ch not in live, f"{f.name} draws {ch!r} as an icon"
+    assert used and used <= symbols, f"no symbol for {sorted(used - symbols)}"
+    issue_icons = re.findall(r'(\w+): \["([\w-]+)", "var', (WEB / "issues.js").read_text())
+    assert issue_icons and {n for _, n in issue_icons} <= symbols
+    for ch in GLYPH_ICONS:
+        assert ch not in markup, f"the page draws {ch!r} as an icon"
 
 
 def test_every_menu_item_is_a_command():

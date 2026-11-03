@@ -17,7 +17,7 @@ import { artFor, showArtwork, whenVisible } from "./artwork.js";
 import { render } from "./main.js";
 import { selectTrack } from "./grid.js";
 import { previewStart, startOf, toggleMerge } from "./edits.js";
-import { html, keyOf, render as paint, useEffect, useRef, useState } from "./ui.js";
+import { html, Icon, keyOf, render as paint, useEffect, useRef, useState } from "./ui.js";
 
 const listEl = document.getElementById("list");
 
@@ -36,7 +36,7 @@ function Thumb({ t, i }) {
   const bg = artFor(t, i, near);
   const open = hasIndex && !unknown ? e => { e.stopPropagation(); showArtwork(t); } : undefined;
   return html`<div class="thumb" ref=${ref} style=${{ backgroundImage: bg }} onClick=${open}>
-    ${unknown ? "?" : ""}</div>`;
+    ${unknown && html`<${Icon} name="help" />`}</div>`;
 }
 
 // Inline artist, title and start fields. The typed text lives in component
@@ -153,12 +153,14 @@ function Row({ t, i, playing, span, samples, tab }) {
       ${!editing && html`<span class="c-num time" onClick=${() => startEdit(t, "time")}>${startOf(t) === t.timestamp ? t.time : fmt(startOf(t))}</span>`}
       <span class="c-num len">${span === null ? "—" : fmt(span)}</span>
       <span class="c-num smp">${samples || ""}</span>
-      <span class="star" title=${t.episode_cover ? "This track's artwork is the episode cover" : undefined}>${t.episode_cover ? "★" : ""}</span>
+      <span class="star" title=${t.episode_cover ? "This track's artwork is the episode cover" : undefined}>${t.episode_cover && html`<${Icon} name="star" cls="fill" />`}</span>
       <span class="acts">
-        <button class="iconbtn play" tabindex="-1" title="Play from here" onClick=${e => { e.stopPropagation(); playFrom(i, { scroll: false }); }}>▶</button>
-        <button class="iconbtn reject" tabindex="-1" title=${t.rejected ? "Bring back" : "Reject"} onClick=${reject}>${t.rejected ? "↩" : "✕"}</button>
-        <button class="iconbtn add" tabindex="-1" title="Add a track below"
-          onClick=${e => { e.stopPropagation(); addBelow(i); }}>＋</button>
+        <button class="iconbtn play" tabindex="-1" title="Play from here" aria-label="Play from here"
+          onClick=${e => { e.stopPropagation(); playFrom(i, { scroll: false }); }}><${Icon} name="play" cls="fill" /></button>
+        <button class="iconbtn reject" tabindex="-1" title=${t.rejected ? "Bring back" : "Reject"} aria-label=${t.rejected ? "Bring back" : "Reject"}
+          onClick=${reject}><${Icon} name=${t.rejected ? "bring-back" : "x"} /></button>
+        <button class="iconbtn add" tabindex="-1" title="Add a track below" aria-label="Add a track below"
+          onClick=${e => { e.stopPropagation(); addBelow(i); }}><${Icon} name="plus" /></button>
       </span>
     </div>`;
 }

@@ -8,6 +8,10 @@ import htm from "htm";
 export const html = htm.bind(h);
 export { render, useEffect, useRef, useState };
 
+// An icon from the page's sprite (#62), as dom.icon() is outside Preact.
+export const Icon = ({ name, cls }) =>
+  html`<svg class=${"ic" + (cls ? " " + cls : "")} aria-hidden="true"><use href=${"#i-" + name} /></svg>`;
+
 // A stable key per track *object*. Rows, blocks and seams are keyed by the track
 // itself, so an insert or a re-sort moves DOM nodes instead of rebuilding them
 // (and an input inside one keeps its focus and its half-typed text). load()

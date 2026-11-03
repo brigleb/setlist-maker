@@ -98,7 +98,7 @@ dlg.addEventListener("keydown", e => {
     // Type-ahead: the next item starting with that letter.
     const k = e.key.toLowerCase();
     const order = [...all.slice(at + 1), ...all.slice(0, at + 1)];
-    const hit = order.find(b => b.textContent.trim().replace(/^[☆★]\s*/, "").toLowerCase().startsWith(k));
+    const hit = order.find(b => b.textContent.trim().toLowerCase().startsWith(k));
     if (hit) { e.preventDefault(); focusItem(hit); }
   } else return;
   e.stopPropagation();

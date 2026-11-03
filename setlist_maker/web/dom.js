@@ -13,18 +13,49 @@ export function autosizeSummary() {
   summaryEl.style.height = "auto";
   summaryEl.style.height = summaryEl.scrollHeight + "px";
 }
-// The toast is a manual popover (#61): shown afresh for each message, which
-// puts it at the top of the top layer, above any modal dialog opened since.
-let toastTimer = null;
-export function toast(msg) {
-  const t = document.getElementById("toast");
-  t.textContent = msg;
-  if (t.showPopover) {
-    try { if (t.matches(":popover-open")) t.hidePopover(); t.showPopover(); } catch (e) {}
+// Toasts (#62) stack instead of overwriting one another, newest at the
+// bottom, each on its own timer, so "Saved" no longer wipes a sample's answer.
+// They are for things that finished; work still running shows in the
+// toolbar's activity area (activity.js). The stack is a manual popover (#61):
+// shown afresh for each message, which puts it at the top of the top layer,
+// above any modal dialog opened since. `kind` "error" draws the alert icon.
+const TOAST_MAX = 4;
+export function toast(msg, opts) {
+  const box = document.getElementById("toast");
+  const kind = (opts && opts.kind) || "";
+  const item = el("div", "toast" + (kind ? " " + kind : ""));
+  if (kind === "error") item.append(icon("alert"));
+  item.append(el("span", null, msg));
+  box.append(item);
+  // Just above the player bar, whose height depends on the waveform strip.
+  box.style.bottom = (playerEl.offsetHeight || 0) + 14 + "px";
+  while (box.children.length > TOAST_MAX) box.firstElementChild.remove();
+  if (box.showPopover) {
+    try { if (box.matches(":popover-open")) box.hidePopover(); box.showPopover(); } catch (e) {}
   }
-  t.classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 1800);
+  // Long enough to read: a short "Saved" goes quickly, a sentence stays.
+  const ms = Math.min(7000, 2200 + 45 * msg.length) + (kind === "error" ? 2000 : 0);
+  setTimeout(() => {
+    item.classList.add("out");
+    setTimeout(() => {
+      item.remove();
+      if (!box.children.length && box.hidePopover) { try { box.hidePopover(); } catch (e) {} }
+    }, 200);
+  }, ms);
+}
+
+// An icon from the page's sprite (#62): <svg class="ic"><use href="#i-name">.
+// `cls` adds classes, e.g. "fill" for a solid shape. Decorative: the button
+// or text beside it carries the name.
+const SVG = "http://www.w3.org/2000/svg";
+export function icon(name, cls) {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("class", "ic" + (cls ? " " + cls : ""));
+  svg.setAttribute("aria-hidden", "true");
+  const use = document.createElementNS(SVG, "use");
+  use.setAttribute("href", "#i-" + name);
+  svg.append(use);
+  return svg;
 }
 
 // An element with a class and text; text via textContent, never innerHTML --
