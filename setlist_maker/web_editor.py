@@ -419,7 +419,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The page gave up waiting: the artwork picker aborts the cover
+            # lookup for a track it has stepped past (#61). Not an error.
+            pass
 
     def _reject_foreign_host(self) -> bool:
         """Send 403 and return True unless the Host header names this server.

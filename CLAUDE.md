@@ -521,17 +521,24 @@ CLI application with the following modules:
   round-trip lossless; since #16 fenced the description the round-trip is lossless for *any*
   text, so it is now only house style — whatever the user types, including a numbered line
   that looks exactly like a track, comes back verbatim.
-- **Artwork curation (#20):** clicking a row's thumbnail opens `#artwork-overlay`, which is
-  no longer just an enlarger — the composite sits above an **☆ Episode cover** toggle and a
-  **Choose artwork…** button that reveals a candidate grid, a paste-a-URL box and **Automatic**.
-  Consequences of it becoming interactive: only a click whose `e.target` *is* the backdrop
-  dismisses it; the global keydown handler returns early while it is open (its tiles are
-  `BUTTON`s, and the focus guard exempts only inputs, so the arrows would seek the audio while
-  the user browses covers); the ★ toggle is disabled for a rejected track, which the sidecar does
+- **Artwork curation (#20, #61):** clicking a row's thumbnail opens `#art-dialog` (see
+  **Dialogs** under `setlist_maker/web/`): a header with the track and ‹ › (⌘[ / ⌘] step to the
+  previous / next track with art, skipping rejected ones, without closing, and the selection
+  follows), the composite with the **☆ Episode cover** toggle on the left, and the candidate grid,
+  a paste-a-URL box, upload and **Automatic** on the right. Only the grid scrolls. Candidates
+  load when the dialog opens (they used to wait for a *Choose artwork…* click); the server caches
+  each track's answer. The arrows walk the tiles and Enter is the tile's own click. Stepping
+  re-renders the grid, which drops a focused tile, and at either end of the set the ‹/› just
+  pressed turns disabled, which drops focus too; `stepArtwork()` / `keepFocus()` put it back on
+  an enabled button or the tile in use, since a dialog without focus never sees its own keys. A
+  step waits 250ms before looking up its covers, and leaving a track aborts its lookup: the
+  browser allows six connections to this server, and lookups queued behind the network held them
+  all, so a Save sat waiting (measured: >15s after walking the set). `_send_json` treats the
+  aborted client's broken pipe as ordinary. The ★ toggle is
+  disabled for a rejected track, which the sidecar does
   not carry (the server refuses the star for one too, so a stale client cannot clear a valid choice
-  and store nothing in its place); `#toast` needs `z-index:60` or a toast raised over it renders behind
-  the backdrop; and `[hidden] { display:none !important; }` is required because the panel's
-  author `display:flex` otherwise beats the UA stylesheet's `[hidden]` rule.
+  and store nothing in its place); and `[hidden] { display:none !important; }` is required because
+  author `display` rules otherwise beat the UA stylesheet's `[hidden]` rule.
   It lives in the static markup **outside `#list`**, which Preact owns, and it holds the open
   track as an **object reference** (`artTrack`) for the same reason `playingTrack` exists — a
   re-sort or insert moves array positions underneath it.
@@ -571,7 +578,7 @@ CLI application with the following modules:
   controls — seek slider, buttons, textarea, scrollbars — follow the OS. The player bar
   and toast share `--player-*`: dark chrome on the light page, an elevated hairlined
   surface on the dark one so they still read as bars. The only scheme-free literals
-  are the artwork overlay backdrop, the thumb placeholder gradients (`GRADS`), and
+  are the dialogs' `::backdrop`, the thumb placeholder gradients (`GRADS`), and
   white text on the accent button / those gradients. Light mode is pixel-identical
   to the pre-theming page (#34).
 - **Track-focused player:** the scrubber spans the *current track's window*
@@ -699,7 +706,8 @@ CLI application with the following modules:
 - Modules: `state` (shared state), `dom` (element lookups, `el()`, `toast()`), `util`, `model`
   (track windows, which track holds a moment), `history` (dirty, undo/redo), `list`, `player`,
   `grid` (the timeline), `inspector` (plus sampling), `issues`, `edits` (merge, split, rename,
-  shared by every pane), `artwork` (thumbs, picker, uploads, episode cover, Embed), `keys` (the
+  shared by every pane), `artwork` (thumbs, picker, uploads, episode cover, Embed), `dialog`
+  (the dialogs' shared behaviour and `ask()`), `keys` (the
   keyboard map) and `main` (load, render, save, Done, the live poll). `main` is the entry and
   imports the rest.
 - **State that more than one module reassigns lives on `S` in `state.js`**, because an imported
@@ -744,8 +752,22 @@ CLI application with the following modules:
   and Escape hand focus back to the row.
   It used to commit: the old Escape rebuilt the list, Chrome fires `focusout` when the focused
   input is removed, and the commit-on-leave handler then saved what had been typed.
+- **Dialogs (#61).** Every dialog is a native `<dialog>` opened with `showModal()`, which gives
+  the focus trap, Escape, `::backdrop` and an inert page behind it; nothing on the page uses the
+  browser's `confirm`/`alert`/`prompt` (a wiring test checks). `dialog.js`'s `sheet(dlg)` adds the
+  shared behaviour to a static one: `[data-close]` buttons and a backdrop click (tested by the
+  pointer's position, since a click on the dialog's own padding also targets the `<dialog>`)
+  close it, and Tab **wraps** at either end, because Chrome otherwise lets Tab leave a modal for
+  its own toolbar, where keys never reach the dialog. Clean-up goes in the dialog's `close`
+  listener, the one path every way of closing takes. `ask({title, body, buttons})` is the in-app
+  confirm, resolving to the button's `value` or `null`. Done uses it for **Save & close /
+  Discard / Cancel**, then shows a styled closed screen. Two traps: a key handled inside a dialog
+  still bubbles to the document, so one that closes the dialog (the sheet's `?`) must
+  `stopPropagation()` or the document handler, finding no dialog open, acts on it too; and the
+  top layer covers any `z-index`, so `#toast` is a `popover="manual"` shown afresh for every
+  message, which puts it above a dialog opened before it.
 - **The keyboard map (#58).** `keys.js`'s `KEYMAP` is one table of `{ group, keys, label, match,
-  need, run }`, and both the dispatcher and the `?` sheet (`#keys-overlay`, built on first open)
+  need, run }`, and both the dispatcher and the `?` sheet (`#keys-dialog`, built on first open)
   read it, so the sheet can't drift; mouse gestures are the static `MOUSE` list beside it, which
   replaced the prose hint under the timeline. The first entry that matches wins (⇧Space above
   Space), `need` gates on the player or a selection, and a `run` returning `false` lets the key
@@ -753,7 +775,7 @@ CLI application with the following modules:
   previous / next track with the inspector's gates (on a merged row, ⌫ brings it back), ←/→ seek
   5s (⇧ 15s, ⌥ 1s), J/K/L shuttle (no reverse in a browser, so J slows a fast shuttle or steps
   back 5s; any pause drops to 1x), F follows the playhead.
-  - The guard order matters: the sheet and the artwork panel own the keyboard while open; then
+  - The guard order matters: any open dialog owns the keyboard (`dialogOpen()`); then
     ⌘S, *before* the input guard, since a field holds a draft until it blurs (the list commits on
     a timeout), so ⌘S blurs it and saves on the next tick; then the guard, which checks the
     event's **target** as well as the focus, because a field's Enter can move focus to its row
@@ -903,8 +925,10 @@ CLI application with the following modules:
   `sampleAt()` centred on the playhead, then `setNames()` -- an ordinary, undoable edit. The track
   is captured by reference *before* the request, since the answer can wait out a pacing
   interval. Unidentified: filled in. Same `identity()`: "Shazam agrees", no edit. Named
-  otherwise: `confirm()` first, because Shazam is often wrong mid-mix and the name may be the
-  user's own correction; declining leaves the answer in "Shazam heard" with its Use button.
+  otherwise: an `ask()` first (`confirmReplace()`: both names, the time, the confidence, and ▶
+  Listen to hear the fingerprinted ten seconds; closing stops it and puts the playhead back),
+  because Shazam is often wrong mid-mix and the name may be the user's own correction; declining
+  leaves the answer in "Shazam heard" with its Use button.
   Live mode only samples: nothing may be edited under the run.
 - Selection is an object reference (`selectedTrack`), like `playingTrack`/`artTrack`. Choosing
   to play a track selects it; automatic advance does not, unless **Follow** is on (`S.follow`, F,

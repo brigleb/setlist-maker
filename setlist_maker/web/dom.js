@@ -13,7 +13,19 @@ export function autosizeSummary() {
   summaryEl.style.height = "auto";
   summaryEl.style.height = summaryEl.scrollHeight + "px";
 }
-export function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1800); }
+// The toast is a manual popover (#61): shown afresh for each message, which
+// puts it at the top of the top layer, above any modal dialog opened since.
+let toastTimer = null;
+export function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  if (t.showPopover) {
+    try { if (t.matches(":popover-open")) t.hidePopover(); t.showPopover(); } catch (e) {}
+  }
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 1800);
+}
 
 // An element with a class and text; text via textContent, never innerHTML --
 // artist and title come from Shazam and from whatever the user typed.

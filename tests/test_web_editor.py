@@ -22,6 +22,17 @@ def _page_source():
     return "\n".join(parts)
 
 
+def test_every_element_lookup_exists():
+    """A module that looks up an id the markup no longer has fails only in the
+    browser, often inside a try that swallows it: #58 removed #tl-hint while
+    loadProbes() still wrote to it, which emptied the timeline's pins."""
+    html = (files("setlist_maker") / "web_editor.html").read_text(encoding="utf-8")
+    ids = set(re.findall(r'\bid="([^"]+)"', html))
+    for f in sorted(WEB.glob("*.js")):
+        for name in re.findall(r'getElementById\("([^"]+)"\)', f.read_text(encoding="utf-8")):
+            assert name in ids, f"{f.name} looks up #{name}, which the page does not have"
+
+
 def test_page_wiring():
     """Substring-level guards for decisions a refactor could silently undo."""
     src = _page_source()
@@ -41,11 +52,11 @@ def test_page_wiring():
         assert endpoint in src
     for element_id in (
         "timeline",
-        "artwork-overlay",
-        "artwork-panel",
+        "art-dialog",
         "artwork-grid",
-        "art-choose",
         "art-cover",
+        "art-prev",
+        "art-next",
         "art-url",
     ):
         assert f'id="{element_id}"' in html, f"missing #{element_id}"
@@ -71,7 +82,8 @@ def test_page_wiring():
         "panel-queue",
         "split-tl",
         "split-side",
-        "keys-overlay",  # the shortcut sheet (#58)
+        "keys-dialog",  # the shortcut sheet (#58)
+        "ask",  # ask(), the in-app confirm (#61)
         "keys-btn",
         "pfollow",
     ):
@@ -92,12 +104,16 @@ def test_page_wiring():
     assert "return () => { artObserver.unobserve(node)" in src
     # 0 is a real index; an unsaved row has none and must not request art.
     assert "t.index !== undefined && t.index !== null" in src
-    # The panel is full of controls: only the backdrop dismisses it, and it owns
-    # the keyboard while open (its tiles are BUTTONs the input guard exempts).
-    assert "if (e.target === overlay) closeArtwork()" in src
-    assert 'if (overlay.classList.contains("open")) return;' in src
+    # Dialogs are native <dialog>s opened modally (#61): the browser traps focus
+    # and handles Escape. The keyboard map stands down while one is open, and
+    # the page asks its questions in-app, never with the browser's dialogs.
+    assert html.count("<dialog id=") == 3 and "showModal()" in src
+    assert "if (dialogOpen()) return;" in src
+    for native in ("confirm(", "alert(", "prompt("):
+        assert native not in src, native
     assert "[hidden] { display:none !important; }" in src  # beats author display rules
-    assert "z-index:60" in src  # the toast outranks the overlay
+    # The toast is a popover, so it is shown above a modal dialog opened earlier.
+    assert '<div id="toast" popover="manual"' in html and "t.showPopover()" in src
     # An unsaved pick wins over saved state in the panel, and is the only reason
     # a row sends coverart_url -- sending it for every row re-pins art (#30).
     assert "if (t._art) {" in src and "if (!t._art) {" in src

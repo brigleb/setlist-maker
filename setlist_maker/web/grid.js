@@ -28,9 +28,6 @@ export async function loadProbes() {
     S.probeDuration = data.duration || null;
     S.canSample = !!data.can_sample;
     nextProbe = data.next || null;
-    document.getElementById("tl-hint").textContent =
-      "⌘-scroll or pinch to zoom · scroll to pan · Z fits the selected track, 0 the whole set · click a track to inspect · drag its left edge to move its start · double-click to play from there · alt-click to split it there · S splits at the playhead · click a pin to hear what Shazam heard"
-      + (S.canSample ? " · I names the track at the playhead · click the pin lane to ask Shazam about any moment" : "");
     if (wasLive && !data.live) {
       // The run finished and this server is now its editor. Everything on
       // the page was a live guess; start over from the saved tracklist.

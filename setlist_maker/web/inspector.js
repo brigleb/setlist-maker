@@ -1,11 +1,12 @@
 // The selected track's inspector, and asking Shazam about a moment.
 
 import { S, TL } from "./state.js";
-import { audio, toast } from "./dom.js";
+import { audio, el, toast } from "./dom.js";
+import { ask } from "./dialog.js";
 import { fmt, parseTime, trackName } from "./util.js";
 import { setDuration } from "./model.js";
 import { addBelow, renderList } from "./list.js";
-import { playAt, playFrom } from "./player.js";
+import { playAt, playFrom, seekTo } from "./player.js";
 import { pendingSamples, renderTimeline } from "./grid.js";
 import { moveStart, setNames, splitAtPlayhead, startOf, toggleMerge } from "./edits.js";
 import { artFor, showArtwork } from "./artwork.js";
@@ -220,6 +221,48 @@ export async function sampleAt(t, opts) {
   return got;
 }
 
+// "Replace the name?" as an in-app dialog (#61): both names side by side, the
+// moment and the sample's confidence, and a ▶ to hear the ten seconds Shazam
+// fingerprinted (the sample is centred on the moment) before deciding.
+// Listening stops when the dialog closes and the playhead goes back to where
+// it was; without a listen, playback already running is left alone.
+function confirmReplace(t, p, at) {
+  const body = el("div");
+  const dl = el("dl", "ask-compare");
+  dl.append(el("dt", null, "Now"), el("dd", null, trackName(t)),
+    el("dt", null, "Shazam heard"), el("dd", null, (p.artist || "?") + " — " + (p.title || "?")));
+  const meta = el("div", "ask-meta");
+  const listen = el("button", "artbtn", "▶ Listen");
+  listen.type = "button";
+  let started = false, from = 0;
+  const sync = () => { listen.textContent = started && !audio.paused ? "⏸ Pause" : "▶ Listen"; };
+  listen.onclick = () => {
+    if (started && !audio.paused) { audio.pause(); sync(); return; }
+    if (!started) from = audio.currentTime || 0;
+    started = true;
+    playAt(Math.max(0, at - 5));
+    sync();
+  };
+  audio.addEventListener("play", sync);
+  audio.addEventListener("pause", sync);
+  meta.append(listen, el("span", null, "at " + TL.fmt(at)
+    + (typeof p.confidence === "number" ? " · confidence " + p.confidence.toFixed(2) : "")));
+  body.append(dl, meta);
+  return ask({
+    title: "Replace this track's name?",
+    body,
+    buttons: [
+      { label: "Keep the current name", value: false },
+      { label: "Replace", value: true, primary: true },
+    ],
+    onClose: () => {
+      audio.removeEventListener("play", sync);
+      audio.removeEventListener("pause", sync);
+      if (started) { audio.pause(); seekTo(from); }  // back where the user was
+    },
+  }).then(v => v === true);
+}
+
 // Ask Shazam what is playing at `seconds` and name `t` with the answer: a
 // sample centred on the moment (so the fingerprinted ten seconds are the
 // ones around the playhead), then an ordinary edit -- undoable, unsaved until
@@ -241,8 +284,7 @@ export async function identifyAt(t, seconds) {
     toast("Shazam agrees: " + heard);
     return;
   }
-  if ((t.artist || t.title)
-      && !confirm("Shazam heard “" + heard + "” at " + TL.fmt(at) + ".\n\nReplace “" + trackName(t) + "”?")) {
+  if ((t.artist || t.title) && !(await confirmReplace(t, p, at))) {
     return;  // still in "Shazam heard", with a Use button
   }
   if (setNames(t, p.artist || "", p.title || "")) {
