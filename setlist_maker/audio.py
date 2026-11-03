@@ -1,5 +1,6 @@
 """Audio file discovery, loading, and slicing helpers."""
 
+import sys
 from pathlib import Path
 
 from pydub import AudioSegment
@@ -42,18 +43,18 @@ def get_audio_file(path_str: str) -> Path | None:
     Validate a single audio file path.
 
     Returns the Path if it is an existing, supported audio file; otherwise
-    prints an error and returns None.
+    prints an error to stderr and returns None.
     """
     path = Path(path_str)
     if not path.exists():
-        print(f"Error: Path not found: {path}")
+        print(f"Error: Path not found: {path}", file=sys.stderr)
         return None
     if not path.is_file():
-        print(f"Error: Not a file: {path}")
+        print(f"Error: Not a file: {path}", file=sys.stderr)
         return None
     if path.suffix.lower() not in AUDIO_EXTENSIONS:
-        print(f"Error: Not a supported audio file: {path}")
-        print(f"Supported formats: {', '.join(sorted(AUDIO_EXTENSIONS))}")
+        print(f"Error: Not a supported audio file: {path}", file=sys.stderr)
+        print(f"Supported formats: {', '.join(sorted(AUDIO_EXTENSIONS))}", file=sys.stderr)
         return None
     return path
 

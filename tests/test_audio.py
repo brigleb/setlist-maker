@@ -64,7 +64,7 @@ class TestGetAudioFile:
         """A directory is not a file and is rejected."""
         result = get_audio_file(str(temp_dir))
         assert result is None
-        assert "Not a file" in capsys.readouterr().out
+        assert "Not a file" in capsys.readouterr().err
 
     def test_non_audio_rejected(self, temp_dir, capsys):
         """A non-audio file is rejected with a clear message."""
@@ -74,14 +74,14 @@ class TestGetAudioFile:
         result = get_audio_file(str(txt_file))
 
         assert result is None
-        assert "Not a supported audio file" in capsys.readouterr().out
+        assert "Not a supported audio file" in capsys.readouterr().err
 
     def test_nonexistent_path(self, capsys):
         """Test handling of a nonexistent path."""
         result = get_audio_file("/nonexistent/path.mp3")
 
         assert result is None
-        assert "Path not found" in capsys.readouterr().out
+        assert "Path not found" in capsys.readouterr().err
 
     def test_supported_extensions(self):
         """Test that AUDIO_EXTENSIONS includes common formats."""

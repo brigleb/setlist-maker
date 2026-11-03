@@ -11,7 +11,7 @@ from mutagen.mp3 import MP3
 from PIL import Image
 
 from setlist_maker.chapters import _remove_existing_chapters, embed_chapters
-from setlist_maker.editor import Track
+from setlist_maker.tracklist import Track
 
 
 def _make_test_jpeg(size: int = 100) -> bytes:

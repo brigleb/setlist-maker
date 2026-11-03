@@ -41,28 +41,19 @@ Usage:
 
 import argparse
 import asyncio
-import json
 import re
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 from setlist_maker import __version__
 from setlist_maker.adaptive import load_probes, process_single_file_adaptive
-from setlist_maker.artwork import CoverImageError, create_chapter_image, load_cover_image
-from setlist_maker.artwork_cache import chapter_image, source_artwork
+from setlist_maker.artwork import CoverImageError, load_cover_image
 from setlist_maker.audio import get_audio_file
 from setlist_maker.boundary import BoundaryEngine, EngineConfig
 from setlist_maker.call_log import LOG_FILENAME, call_log_path
-from setlist_maker.chapters import embed_chapters
-from setlist_maker.editor import (
-    CorrectionsDB,
-    Track,
-    Tracklist,
-    find_audio_file,
-    parse_markdown_tracklist,
-    run_editor,
-)
-from setlist_maker.episode import episode_tags
+from setlist_maker.chapters import embed_chapters_for_tracklist
+from setlist_maker.editor import run_editor
 from setlist_maker.help_format import ColorHelpParser
 from setlist_maker.identify import (
     ARTIST_SIMILARITY_THRESHOLD,
@@ -73,7 +64,7 @@ from setlist_maker.identify import (
     process_single_file,
     tracklist_output_path,
 )
-from setlist_maker.uploads import artwork_dir_for, cover_path_for
+from setlist_maker.tracklist import CorrectionsDB, Tracklist, find_audio_file, load_tracklist
 from setlist_maker.web_editor import WatchSession, run_web_editor
 
 # Sourced from EngineConfig so the flags, their help text and the epilog can
@@ -95,6 +86,56 @@ def parse_budget(text: str) -> float:
     return value * {"h": 3600.0, "m": 60.0, "s": 1.0}.get(unit or "m")
 
 
+# argparse `type=` callables. Raising ArgumentTypeError is what makes argparse
+# print the message itself ("argument --stride: must be greater than 0 ...") and
+# exit 2; any other exception becomes a bare "invalid <name> value".
+
+
+def _budget(text: str) -> float:
+    try:
+        return parse_budget(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+
+
+def _number(text: str) -> float:
+    try:
+        return float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+
+
+def _unit_interval(text: str) -> float:
+    value = _number(text)
+    if not 0.0 <= value <= 1.0:
+        raise argparse.ArgumentTypeError(f"must be between 0.0 and 1.0 (got {value})")
+    return value
+
+
+def _positive(text: str) -> float:
+    value = _number(text)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be greater than 0 (got {value})")
+    return value
+
+
+def _fail(message: str) -> NoReturn:
+    """A runtime failure, as opposed to a usage error: stderr and exit 1."""
+    print(f"Error: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _check_identify(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """The usage rules that span two flags, which argparse can't express itself."""
+    if args.cover and not args.chapters:
+        parser.error("--cover sets the episode cover for chapter embedding; add --chapters")
+    if args.stride <= args.refine_window:
+        parser.error(
+            f"--stride ({args.stride}) must exceed --refine-window "
+            f"({args.refine_window}); coverage has to be coarser than refinement"
+        )
+
+
 def _chain_chapters_after_identify(
     output_path: Path,
     audio_path: Path | None,
@@ -107,7 +148,7 @@ def _chain_chapters_after_identify(
     Reloads the tracklist from its saved files so any edits made in the
     editor (and the JSON sidecar's cover-art URLs) are picked up.
     """
-    tracklist, _urls = _load_tracklist_with_artwork_urls(output_path)
+    tracklist = load_tracklist(output_path)
     if audio_path is None or not audio_path.exists():
         audio_path = find_audio_file(output_path)
 
@@ -147,13 +188,11 @@ def _resolve_cover(cover_arg: str | None) -> bytes | None:
         return None
     cover_path = Path(cover_arg)
     if not cover_path.exists():
-        print(f"Error: Cover image not found: {cover_path}")
-        sys.exit(1)
+        _fail(f"Cover image not found: {cover_path}")
     try:
         data = load_cover_image(cover_path)
     except CoverImageError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        _fail(str(e))
     print(f"  Cover image: {cover_path.name}")
     return data
 
@@ -239,17 +278,8 @@ def cmd_identify(args: argparse.Namespace) -> None:
     """Handle the 'identify' subcommand (default behavior)."""
     input_path = Path(args.path)
 
-    if args.edit and args.web_edit:
-        print("Error: choose either --edit (terminal) or --web-edit (browser), not both.")
-        sys.exit(1)
-    if args.edit and args.watch:
-        print("Error: --watch opens the browser editor; it cannot be combined with --edit.")
-        sys.exit(1)
-
-    if args.cover and not args.chapters:
-        print("Error: --cover sets the episode cover for chapter embedding; add --chapters.")
-        sys.exit(1)
-
+    # Flag combinations and ranges were checked while parsing (_check_identify,
+    # the type= validators and the editor-mode group), so they fail before here.
     # Resolve up front so a bad path fails before a long identification pass,
     # not after it
     cover_image = _resolve_cover(args.cover) if args.chapters else None
@@ -261,10 +291,9 @@ def cmd_identify(args: argparse.Namespace) -> None:
         # structure *and* picks up the JSON sidecar's coverart_url. Parsing the
         # markdown alone would leave coverart_url None, so the editor would
         # preview a differently-keyed composite than `chapters` embeds.
-        tracklist, _urls = _load_tracklist_with_artwork_urls(input_path)
+        tracklist = load_tracklist(input_path)
         if not tracklist.tracks:
-            print("Error: Could not parse tracklist from markdown file.")
-            sys.exit(1)
+            _fail("Could not parse tracklist from markdown file.")
         print(f"Loaded {len(tracklist.tracks)} tracks from {tracklist.source_file}")
         # --watch on a finished tracklist has no run to watch: it is --web-edit.
         editor_fn = run_web_editor if (args.web_edit or args.watch) else run_editor
@@ -276,39 +305,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
             )
         return
 
-    # Validate deduplication tuning flags up front so a bad value fails fast
-    for name, value in (
-        ("--title-threshold", args.title_threshold),
-        ("--artist-threshold", args.artist_threshold),
-        ("--singleton-confidence", args.singleton_confidence),
-    ):
-        if not 0.0 <= value <= 1.0:
-            print(f"Error: {name} must be between 0.0 and 1.0 (got {value}).")
-            sys.exit(1)
-
-    # Adaptive sampling flags, validated up front for the same reason.
-    for name, value in (
-        ("--precision", args.precision),
-        ("--stride", args.stride),
-        ("--refine-window", args.refine_window),
-    ):
-        if value <= 0:
-            print(f"Error: {name} must be greater than 0 (got {value}).")
-            sys.exit(1)
-    if args.stride <= args.refine_window:
-        print(
-            f"Error: --stride ({args.stride}) must exceed --refine-window "
-            f"({args.refine_window}); coverage has to be coarser than refinement."
-        )
-        sys.exit(1)
-
-    budget_seconds = None
-    if args.budget:
-        try:
-            budget_seconds = parse_budget(args.budget)
-        except ValueError as e:
-            print(f"Error: {e}")
-            sys.exit(1)
+    budget_seconds = args.budget
 
     # Identify a single audio file
     audio_path = get_audio_file(args.path)
@@ -324,7 +321,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
     tracklist = None
     watch = None
     if output_path.exists() and not args.reidentify:
-        existing, _urls = _load_tracklist_with_artwork_urls(output_path)
+        existing = load_tracklist(output_path)
         if existing.tracks:
             print(
                 f"Found existing tracklist: {output_path.name} "
@@ -387,8 +384,8 @@ def cmd_identify(args: argparse.Namespace) -> None:
         if not result:
             if watch is not None:
                 watch.stop()
-            print(f"\nError: Failed to process {audio_path.name}")
-            sys.exit(1)
+            print()
+            _fail(f"Failed to process {audio_path.name}")
 
         tracklist, output_path = result
 
@@ -467,221 +464,20 @@ def _run_identification(
     )
 
 
-def _load_tracklist_with_artwork_urls(
-    tracklist_path: Path,
-) -> tuple[Tracklist, dict[int, str]]:
-    """
-    Load a tracklist and extract any saved cover art URLs.
-
-    Tries the JSON sidecar file first (has coverart_url), falls back to
-    parsing the markdown.
-
-    Args:
-        tracklist_path: Path to the markdown tracklist file.
-
-    Returns:
-        Tuple of (Tracklist, dict mapping track index to coverart_url).
-    """
-    coverart_urls: dict[int, str] = {}
-
-    # Try loading from JSON sidecar for richer metadata
-    json_path = tracklist_path.with_suffix(".json")
-    if json_path.exists():
-        try:
-            with open(json_path) as f:
-                json_tracks = json.load(f)
-
-            # Parse markdown for the canonical tracklist structure
-            with open(tracklist_path) as f:
-                tracklist = parse_markdown_tracklist(f.read())
-
-            # Map coverart URLs from JSON to tracklist tracks by timestamp
-            # (index mapping breaks when rejected tracks are excluded from JSON)
-            json_by_timestamp = {jt["timestamp"]: jt for jt in json_tracks if "timestamp" in jt}
-            for i, track in enumerate(tracklist.tracks):
-                jt = json_by_timestamp.get(track.timestamp)
-                if jt:
-                    url = jt.get("coverart_url")
-                    # isinstance, not truthiness: a hand-edited sidecar holding
-                    # a number here would reach cache_key's str join and
-                    # resize_cover_art_url's re.sub, both outside this try.
-                    if url and isinstance(url, str):
-                        track.coverart_url = url
-                        coverart_urls[i] = url
-                        track.artwork_pinned = bool(jt.get("artwork_pinned"))
-                    # Curated in the editor: whose art becomes the episode cover.
-                    track.is_episode_cover = bool(jt.get("episode_cover"))
-
-            return tracklist, coverart_urls
-        except (json.JSONDecodeError, IOError, TypeError):
-            # TypeError covers a sidecar that is valid JSON but the wrong shape
-            # (null, a number, a list of scalars): iterating it, or testing
-            # membership in its elements, raises rather than failing to parse.
-            # Any such sidecar degrades to markdown-only, as an unreadable one does.
-            pass
-
-    # Fallback: parse markdown only (no coverart URLs available)
-    with open(tracklist_path) as f:
-        tracklist = parse_markdown_tracklist(f.read())
-
-    return tracklist, coverart_urls
-
-
-def _episode_cover_image(
-    tracklist: Tracklist, chapter_tracks: list[Track], uploads_dir: Path | None = None
-) -> bytes | None:
-    """Build the episode-level cover from one track's artwork, relabelled for the set.
-
-    Prefers the track the user starred in the editor; otherwise falls back to
-    the original rule, the first track with *real* artwork. The starred track
-    is only a preference, not a guarantee -- if its lookup turns up nothing the
-    search continues down the list, because a set with a usable cover somewhere
-    should get one rather than none.
-
-    ``source_artwork()`` returns the same fetched image that track's chapter
-    composite already used (a cache hit, no network) or None when nothing was
-    findable, so one call answers both "is there art here" and "which art".
-    None must keep meaning *skip*: handing it to ``create_chapter_image`` would
-    produce a gradient card and, being truthy bytes, permanently block every
-    later track from supplying a real cover.
-    """
-    identified = [t for t in chapter_tracks if not t.is_unidentified]
-    starred = next((t for t in identified if t.is_episode_cover), None)
-    if starred is not None:
-        identified = [starred] + [t for t in identified if t is not starred]
-
-    for track in identified:
-        src = source_artwork(track.artist, track.title, track.coverart_url, uploads_dir=uploads_dir)
-        if src:
-            return create_chapter_image(
-                artwork_bytes=src,
-                artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
-                title="Tracklist",
-            )
-    return None
-
-
-def embed_chapters_for_tracklist(
-    tracklist: Tracklist,
-    audio_path: Path,
-    fetch_art: bool = True,
-    cover_image: bytes | None = None,
-    tracklist_path: Path | None = None,
-) -> tuple[int, int, bool]:
-    """
-    Embed chapter markers (and, optionally, artwork) into an MP3 for a tracklist.
-
-    Shared by the `chapters` command and the `identify --chapters` chain.
-    Assumes audio_path is a validated, existing MP3 and the tracklist has at
-    least one identified track.
-
-    ``cover_image`` (from --cover) becomes the episode cover verbatim, replacing
-    the one normally derived from the first track's art. It is independent of
-    ``fetch_art``, so a hand-picked cover can be embedded with or without
-    per-track chapter images.
-
-    ``tracklist_path`` locates what the web editor stores beside the tracklist
-    (``uploads.py``): uploaded track artwork, and an uploaded episode cover,
-    which ranks below ``--cover`` and above the starred track -- and, like
-    ``--cover``, is embedded whether or not ``fetch_art`` is on. Every caller
-    must pass it: without it an uploaded image is simply not found, and the
-    chapter gets the gradient card with nothing said.
-
-    It also supplies the episode's title and artist (``episode.py``): what the
-    editor saved for the set, else the defaults.
-
-    Returns ``(chapters, chapter images, whether an episode cover was embedded)``.
-    """
-    # Get all non-rejected tracks (including unidentified) for chapter timing
-    chapter_tracks = [t for t in tracklist.tracks if not t.rejected]
-
-    # Fetch artwork and generate chapter images
-    chapter_images: dict[int, bytes] = {}
-    # Seeding with the supplied cover both uses it and short-circuits the
-    # first-track derivation below, which is already guarded on "still None"
-    episode_image: bytes | None = cover_image
-    uploads_dir = artwork_dir_for(tracklist_path) if tracklist_path else None
-    if episode_image is None and tracklist_path is not None:
-        saved_cover = cover_path_for(tracklist_path)
-        if saved_cover.exists():
-            try:
-                episode_image = load_cover_image(saved_cover)
-                print(f"  Cover image: {saved_cover.name}")
-            except CoverImageError as e:
-                print(f"  Warning: ignoring the saved episode cover: {e}")
-
-    if fetch_art:
-        print(f"\n{'─' * 60}")
-        print("Fetching artwork...")
-
-        for i, track in enumerate(chapter_tracks):
-            if track.is_unidentified:
-                print(f"  [{i + 1}/{len(chapter_tracks)}] {track.time_str} - Skipping unidentified")
-                continue
-
-            label = f"{track.artist} - {track.title}"
-            print(f"  [{i + 1}/{len(chapter_tracks)}] {track.time_str} - {label}")
-
-            # One cached path shared with the editor's preview, so the image
-            # embedded here is byte-identical to the one the user approved.
-            chapter_images[i] = chapter_image(
-                artist=track.artist,
-                title=track.title,
-                coverart_url=track.coverart_url,
-                uploads_dir=uploads_dir,
-            )
-
-        print(f"  Generated {len(chapter_images)} chapter image(s)")
-
-        if episode_image is None:
-            episode_image = _episode_cover_image(tracklist, chapter_tracks, uploads_dir)
-
-    tags = episode_tags(tracklist_path) if tracklist_path else {"title": "", "artist": ""}
-
-    # Embed chapters into MP3
-    print(f"\n{'─' * 60}")
-    print("Embedding chapter markers...")
-    if tags["title"] or tags["artist"]:
-        print(f"  Episode: {' - '.join(v for v in (tags['artist'], tags['title']) if v)}")
-
-    embed_chapters(
-        audio_path=audio_path,
-        tracks=chapter_tracks,
-        chapter_images=chapter_images if fetch_art else None,
-        # Not gated on fetch_art: --cover --no-artwork embeds just the cover
-        episode_image=episode_image,
-        title=tags["title"],
-        artist=tags["artist"],
-    )
-
-    print(f"\n  Embedded {len(chapter_tracks)} chapter(s) into {audio_path.name}")
-    if chapter_images:
-        print(f"  Embedded {len(chapter_images)} chapter image(s)")
-    if episode_image:
-        print("  Embedded episode cover art")
-
-    print(f"\n{'=' * 60}")
-    print("Done! Chapter markers embedded successfully.")
-    print(f"{'=' * 60}")
-    return len(chapter_tracks), len(chapter_images), episode_image is not None
-
-
 def cmd_chapters(args: argparse.Namespace) -> None:
     """Handle the 'chapters' subcommand for embedding chapter markers."""
     tracklist_path = Path(args.tracklist)
 
     if not tracklist_path.exists():
-        print(f"Error: Tracklist file not found: {tracklist_path}")
-        sys.exit(1)
+        _fail(f"Tracklist file not found: {tracklist_path}")
 
     # Load tracklist with any saved artwork URLs
     print(f"Loading tracklist: {tracklist_path.name}")
-    tracklist, _coverart_urls = _load_tracklist_with_artwork_urls(tracklist_path)
+    tracklist = load_tracklist(tracklist_path)
 
     # Require at least one identified track to build a meaningful chapter list
     if not any(not t.is_unidentified for t in tracklist.tracks if not t.rejected):
-        print("Error: No identified tracks found in tracklist.")
-        sys.exit(1)
+        _fail("No identified tracks found in tracklist.")
 
     chapter_count = len([t for t in tracklist.tracks if not t.rejected])
     print(f"  Found {chapter_count} tracks")
@@ -693,13 +489,10 @@ def cmd_chapters(args: argparse.Namespace) -> None:
         audio_path = find_audio_file(tracklist_path)
 
     if not audio_path or not audio_path.exists():
-        print("Error: Could not find the audio file.")
-        print("  Use --audio to specify the MP3 file path.")
-        sys.exit(1)
+        _fail("Could not find the audio file.\n  Use --audio to specify the MP3 file path.")
 
     if audio_path.suffix.lower() != ".mp3":
-        print(f"Error: Chapter markers require an MP3 file, got: {audio_path.suffix}")
-        sys.exit(1)
+        _fail(f"Chapter markers require an MP3 file, got: {audio_path.suffix}")
 
     print(f"  Audio file: {audio_path.name}")
 
@@ -847,7 +640,9 @@ Examples:
         help=f"Delay in seconds between API calls (default: {DEFAULT_DELAY_SECONDS})",
     )
 
-    identify_parser.add_argument(
+    # One editor per run: --watch already opens the browser editor at the end.
+    editor_mode = identify_parser.add_mutually_exclusive_group()
+    editor_mode.add_argument(
         "-e",
         "--edit",
         action="store_true",
@@ -855,16 +650,15 @@ Examples:
         "tracklist for this audio, if one is found",
     )
 
-    identify_parser.add_argument(
+    editor_mode.add_argument(
         "-w",
         "--web-edit",
         action="store_true",
         dest="web_edit",
-        help="Open the editor in your browser instead of the terminal "
-        "(cannot be combined with --edit)",
+        help="Open the editor in your browser instead of the terminal",
     )
 
-    identify_parser.add_argument(
+    editor_mode.add_argument(
         "--watch",
         action="store_true",
         help="Follow the run on a timeline in your browser -- click it to ask Shazam "
@@ -955,7 +749,7 @@ Examples:
     )
     adaptive_group.add_argument(
         "--precision",
-        type=float,
+        type=_positive,
         default=_D_PRECISION,
         metavar="SECONDS",
         help=f"How tightly to pin each track boundary (default: {_D_PRECISION}); "
@@ -963,6 +757,7 @@ Examples:
     )
     adaptive_group.add_argument(
         "--budget",
+        type=_budget,
         metavar="DURATION",
         help="Stop after roughly this long and write what has been found "
         "(e.g. 45m, 2h, 90s; a bare number means minutes). The result is always "
@@ -970,7 +765,7 @@ Examples:
     )
     adaptive_group.add_argument(
         "--stride",
-        type=float,
+        type=_positive,
         default=_D_STRIDE,
         metavar="SECONDS",
         help=f"Longest stretch left unprobed between samples (default: {_D_STRIDE}); "
@@ -979,7 +774,7 @@ Examples:
     )
     adaptive_group.add_argument(
         "--refine-window",
-        type=float,
+        type=_positive,
         default=_D_REFINE,
         dest="refine_window",
         metavar="SECONDS",
@@ -991,7 +786,7 @@ Examples:
     tuning_group = identify_parser.add_argument_group("detection tuning")
     tuning_group.add_argument(
         "--title-threshold",
-        type=float,
+        type=_unit_interval,
         default=SIMILARITY_THRESHOLD,
         metavar="0.0-1.0",
         help="Title similarity (0-1) required to merge two matches as the same "
@@ -999,7 +794,7 @@ Examples:
     )
     tuning_group.add_argument(
         "--artist-threshold",
-        type=float,
+        type=_unit_interval,
         default=ARTIST_SIMILARITY_THRESHOLD,
         metavar="0.0-1.0",
         help="Artist similarity (0-1) required to merge two matches as the same "
@@ -1007,7 +802,7 @@ Examples:
     )
     tuning_group.add_argument(
         "--singleton-confidence",
-        type=float,
+        type=_unit_interval,
         default=SINGLETON_CONFIDENCE_KEEP,
         metavar="0.0-1.0",
         help="Min Shazam confidence (0-1) to keep a track seen in only one sample "
@@ -1063,13 +858,12 @@ Examples:
     # Parse and route
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Handle backward compatibility: if first arg is not a subcommand, treat as 'identify'
-    # Check sys.argv to detect if user passed a file path directly
-    if len(sys.argv) > 1:
-        first_arg = sys.argv[1]
-        # If first arg is not a known subcommand and not a flag, insert 'identify'
-        if first_arg not in ("identify", "chapters", "-h", "--help", "-v", "--version"):
-            sys.argv.insert(1, "identify")
+    # Backward compatibility: no subcommand means 'identify', so `setlist-maker
+    # set.mp3 --edit` and `setlist-maker --edit set.mp3` both work. Both lists
+    # come from the parser, so a new subcommand or top-level flag needs no edit here.
+    top_level_flags = {flag for action in parser._actions for flag in action.option_strings}
+    if len(sys.argv) > 1 and sys.argv[1] not in {*subparsers.choices, *top_level_flags}:
+        sys.argv.insert(1, "identify")
 
     args = parser.parse_args()
 
@@ -1080,6 +874,7 @@ Examples:
 
     # Route to appropriate handler
     if args.command == "identify":
+        _check_identify(identify_parser, args)
         cmd_identify(args)
     elif args.command == "chapters":
         cmd_chapters(args)

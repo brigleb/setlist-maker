@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import re
 import shutil
 import sys
 import tempfile
@@ -10,7 +9,6 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
-from difflib import SequenceMatcher
 from pathlib import Path
 
 from shazamio import Shazam
@@ -22,11 +20,12 @@ from setlist_maker.audio import (
     slice_audio,
 )
 from setlist_maker.call_log import CallLog, CallRecorder, describe_error
-from setlist_maker.editor import CorrectionsDB, Track, Tracklist, save_tracklist
 from setlist_maker.fileio import atomic_write_text
+from setlist_maker.identity import assign_cluster, normalized_key
 from setlist_maker.progress import RunState, live_display
 from setlist_maker.shazam_client import MAX_RETRIES, identify_sample_with_retry
 from setlist_maker.summary import generate_summary
+from setlist_maker.tracklist import CorrectionsDB, Track, Tracklist, save_tracklist
 
 DEFAULT_DELAY_SECONDS = 15  # Pause between API calls
 
@@ -67,60 +66,6 @@ class DedupConfig:
     artist_threshold: float = ARTIST_SIMILARITY_THRESHOLD
     singleton_confidence_keep: float = SINGLETON_CONFIDENCE_KEEP
     smoothing: bool = True
-
-
-# Tokens that describe a *version* of a track rather than its identity. Stripped
-# before comparison so "Song" and "Song - Radio Edit" cluster together.
-_VERSION_TOKENS_RE = re.compile(
-    r"\b(radio edit|original mix|extended mix|club mix|remaster(?:ed)?|remix|"
-    r"re-?edit|edit|version|vip|bootleg|mono|stereo|live|acoustic|instrumental)\b",
-    re.IGNORECASE,
-)
-_FEAT_RE = re.compile(r"\b(feat\.?|ft\.?|featuring|with)\b.*", re.IGNORECASE)
-_BRACKETED_RE = re.compile(r"[(\[{].*?[)\]}]")
-_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
-
-
-def _normalize_text(text: str) -> str:
-    """Lowercase and strip version/feature tags and punctuation for matching."""
-    text = text.lower()
-    text = _BRACKETED_RE.sub(" ", text)
-    text = _FEAT_RE.sub(" ", text)
-    text = _VERSION_TOKENS_RE.sub(" ", text)
-    text = _NON_ALNUM_RE.sub(" ", text)
-    return " ".join(text.split())
-
-
-def _normalized_key(track_info: dict) -> tuple[str, str]:
-    """Build a normalized (artist, title) key for fuzzy comparison."""
-    return (
-        _normalize_text(track_info.get("artist", "")),
-        _normalize_text(track_info.get("title", "")),
-    )
-
-
-def _assign_cluster(
-    key: tuple[str, str],
-    clusters: list[tuple[str, str]],
-    title_threshold: float,
-    artist_threshold: float,
-) -> tuple[str, str]:
-    """Return the representative key for `key`, fuzzily matched against clusters.
-
-    Greedy and order-preserving: a cluster matches when the artist is within
-    `artist_threshold` and the title is within `title_threshold`; the first such
-    cluster wins, otherwise `key` becomes a new cluster representative.
-    """
-    artist, title = key
-    for representative in clusters:
-        rep_artist, rep_title = representative
-        if (
-            SequenceMatcher(None, artist, rep_artist).ratio() >= artist_threshold
-            and SequenceMatcher(None, title, rep_title).ratio() >= title_threshold
-        ):
-            return representative
-    clusters.append(key)
-    return key
 
 
 def _smooth_sequence(
@@ -183,8 +128,8 @@ def deduplicate_tracklist(
             confidences.append(0.0)
             continue
 
-        representative = _assign_cluster(
-            _normalized_key(track_info),
+        representative = assign_cluster(
+            normalized_key(track_info),
             clusters,
             config.title_threshold,
             config.artist_threshold,

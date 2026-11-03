@@ -14,8 +14,8 @@ import urllib.request
 import pytest
 
 from setlist_maker import fileio
-from setlist_maker.editor import CorrectionsDB, Track, Tracklist, save_tracklist
 from setlist_maker.fileio import atomic_write_text
+from setlist_maker.tracklist import CorrectionsDB, Track, Tracklist, save_tracklist
 from tests.test_web_editor import _ctx, running_server
 
 

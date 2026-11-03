@@ -213,13 +213,13 @@ def assert_identities_distinct(tracks) -> None:
     Run through the engine's real clustering, so this tracks the thresholds
     rather than restating them."""
     from setlist_maker.boundary import EngineConfig
-    from setlist_maker.identify import _assign_cluster, _normalized_key
+    from setlist_maker.identity import assign_cluster, normalized_key
 
     cfg = EngineConfig()
     clusters: list[tuple[str, str]] = []
     for tr in tracks:
-        _assign_cluster(
-            _normalized_key({"artist": tr.artist, "title": tr.title}),
+        assign_cluster(
+            normalized_key({"artist": tr.artist, "title": tr.title}),
             clusters,
             cfg.title_threshold,
             cfg.artist_threshold,

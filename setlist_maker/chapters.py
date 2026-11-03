@@ -15,7 +15,11 @@ from pathlib import Path
 from mutagen.id3 import APIC, CHAP, CTOC, TALB, TIT2, TPE1, CTOCFlags, Encoding, PictureType
 from mutagen.mp3 import MP3
 
-from setlist_maker.editor import Track
+from setlist_maker.artwork import CoverImageError, create_chapter_image, load_cover_image
+from setlist_maker.artwork_cache import chapter_image, source_artwork
+from setlist_maker.episode import episode_tags
+from setlist_maker.tracklist import Track, Tracklist
+from setlist_maker.uploads import artwork_dir_for, cover_path_for
 
 
 def embed_chapters(
@@ -233,3 +237,142 @@ def _remove_existing_chapters(audio: MP3) -> None:
     to_delete = [key for key in audio.tags if key.startswith(("CHAP:", "CTOC:"))]
     for key in to_delete:
         del audio.tags[key]
+
+
+def _episode_cover_image(
+    tracklist: Tracklist, chapter_tracks: list[Track], uploads_dir: Path | None = None
+) -> bytes | None:
+    """Build the episode-level cover from one track's artwork, relabelled for the set.
+
+    Prefers the track the user starred in the editor; otherwise falls back to
+    the original rule, the first track with *real* artwork. The starred track
+    is only a preference, not a guarantee -- if its lookup turns up nothing the
+    search continues down the list, because a set with a usable cover somewhere
+    should get one rather than none.
+
+    ``source_artwork()`` returns the same fetched image that track's chapter
+    composite already used (a cache hit, no network) or None when nothing was
+    findable, so one call answers both "is there art here" and "which art".
+    None must keep meaning *skip*: handing it to ``create_chapter_image`` would
+    produce a gradient card and, being truthy bytes, permanently block every
+    later track from supplying a real cover.
+    """
+    identified = [t for t in chapter_tracks if not t.is_unidentified]
+    starred = next((t for t in identified if t.is_episode_cover), None)
+    if starred is not None:
+        identified = [starred] + [t for t in identified if t is not starred]
+
+    for track in identified:
+        src = source_artwork(track.artist, track.title, track.coverart_url, uploads_dir=uploads_dir)
+        if src:
+            return create_chapter_image(
+                artwork_bytes=src,
+                artist=tracklist.source_file.replace("_tracklist", "").rsplit(".", 1)[0],
+                title="Tracklist",
+            )
+    return None
+
+
+def embed_chapters_for_tracklist(
+    tracklist: Tracklist,
+    audio_path: Path,
+    fetch_art: bool = True,
+    cover_image: bytes | None = None,
+    tracklist_path: Path | None = None,
+) -> tuple[int, int, bool]:
+    """
+    Embed chapter markers (and, optionally, artwork) into an MP3 for a tracklist.
+
+    Shared by the `chapters` command and the `identify --chapters` chain.
+    Assumes audio_path is a validated, existing MP3 and the tracklist has at
+    least one identified track.
+
+    ``cover_image`` (from --cover) becomes the episode cover verbatim, replacing
+    the one normally derived from the first track's art. It is independent of
+    ``fetch_art``, so a hand-picked cover can be embedded with or without
+    per-track chapter images.
+
+    ``tracklist_path`` locates what the web editor stores beside the tracklist
+    (``uploads.py``): uploaded track artwork, and an uploaded episode cover,
+    which ranks below ``--cover`` and above the starred track -- and, like
+    ``--cover``, is embedded whether or not ``fetch_art`` is on. Every caller
+    must pass it: without it an uploaded image is simply not found, and the
+    chapter gets the gradient card with nothing said.
+
+    It also supplies the episode's title and artist (``episode.py``): what the
+    editor saved for the set, else the defaults.
+
+    Returns ``(chapters, chapter images, whether an episode cover was embedded)``.
+    """
+    # Get all non-rejected tracks (including unidentified) for chapter timing
+    chapter_tracks = [t for t in tracklist.tracks if not t.rejected]
+
+    # Fetch artwork and generate chapter images
+    chapter_images: dict[int, bytes] = {}
+    # Seeding with the supplied cover both uses it and short-circuits the
+    # first-track derivation below, which is already guarded on "still None"
+    episode_image: bytes | None = cover_image
+    uploads_dir = artwork_dir_for(tracklist_path) if tracklist_path else None
+    if episode_image is None and tracklist_path is not None:
+        saved_cover = cover_path_for(tracklist_path)
+        if saved_cover.exists():
+            try:
+                episode_image = load_cover_image(saved_cover)
+                print(f"  Cover image: {saved_cover.name}")
+            except CoverImageError as e:
+                print(f"  Warning: ignoring the saved episode cover: {e}")
+
+    if fetch_art:
+        print(f"\n{'─' * 60}")
+        print("Fetching artwork...")
+
+        for i, track in enumerate(chapter_tracks):
+            if track.is_unidentified:
+                print(f"  [{i + 1}/{len(chapter_tracks)}] {track.time_str} - Skipping unidentified")
+                continue
+
+            label = f"{track.artist} - {track.title}"
+            print(f"  [{i + 1}/{len(chapter_tracks)}] {track.time_str} - {label}")
+
+            # One cached path shared with the editor's preview, so the image
+            # embedded here is byte-identical to the one the user approved.
+            chapter_images[i] = chapter_image(
+                artist=track.artist,
+                title=track.title,
+                coverart_url=track.coverart_url,
+                uploads_dir=uploads_dir,
+            )
+
+        print(f"  Generated {len(chapter_images)} chapter image(s)")
+
+        if episode_image is None:
+            episode_image = _episode_cover_image(tracklist, chapter_tracks, uploads_dir)
+
+    tags = episode_tags(tracklist_path) if tracklist_path else {"title": "", "artist": ""}
+
+    # Embed chapters into MP3
+    print(f"\n{'─' * 60}")
+    print("Embedding chapter markers...")
+    if tags["title"] or tags["artist"]:
+        print(f"  Episode: {' - '.join(v for v in (tags['artist'], tags['title']) if v)}")
+
+    embed_chapters(
+        audio_path=audio_path,
+        tracks=chapter_tracks,
+        chapter_images=chapter_images if fetch_art else None,
+        # Not gated on fetch_art: --cover --no-artwork embeds just the cover
+        episode_image=episode_image,
+        title=tags["title"],
+        artist=tags["artist"],
+    )
+
+    print(f"\n  Embedded {len(chapter_tracks)} chapter(s) into {audio_path.name}")
+    if chapter_images:
+        print(f"  Embedded {len(chapter_images)} chapter image(s)")
+    if episode_image:
+        print("  Embedded episode cover art")
+
+    print(f"\n{'=' * 60}")
+    print("Done! Chapter markers embedded successfully.")
+    print(f"{'=' * 60}")
+    return len(chapter_tracks), len(chapter_images), episode_image is not None

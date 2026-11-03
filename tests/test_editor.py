@@ -2,14 +2,14 @@
 
 import pytest
 
-from setlist_maker.editor import (
+from setlist_maker.editor import TracklistEditor
+from setlist_maker.tracklist import (
     SUMMARY_CLOSE_MARKER,
     SUMMARY_OPEN_MARKER,
     UNIDENTIFIED_MARKER,
     CorrectionsDB,
     Track,
     Tracklist,
-    TracklistEditor,
     _escape_summary_line,
     _unescape_summary_line,
     apply_track_edit,
@@ -894,7 +894,7 @@ class TestCorrectionsDB:
 
 def test_save_tracklist_writes_markdown_and_json(tmp_path):
     """save_tracklist writes both the .md and the .json sidecar."""
-    from setlist_maker.editor import save_tracklist
+    from setlist_maker.tracklist import save_tracklist
 
     tl = Tracklist(
         source_file="set.mp3",
@@ -918,7 +918,7 @@ def test_save_tracklist_writes_markdown_and_json(tmp_path):
 
 def test_resolve_audio_path_prefers_explicit(tmp_path):
     """An explicit, existing audio path wins over sibling discovery."""
-    from setlist_maker.editor import resolve_audio_path
+    from setlist_maker.tracklist import resolve_audio_path
 
     audio = tmp_path / "given.mp3"
     audio.write_bytes(b"x")
@@ -928,7 +928,7 @@ def test_resolve_audio_path_prefers_explicit(tmp_path):
 
 def test_resolve_audio_path_falls_back_to_sibling(tmp_path):
     """With no explicit path, it discovers a sibling of the markdown file."""
-    from setlist_maker.editor import resolve_audio_path
+    from setlist_maker.tracklist import resolve_audio_path
 
     sibling = tmp_path / "set.mp3"
     sibling.write_bytes(b"x")
@@ -938,7 +938,7 @@ def test_resolve_audio_path_falls_back_to_sibling(tmp_path):
 
 def test_resolve_audio_path_none_when_missing(tmp_path):
     """Returns None when nothing resolves."""
-    from setlist_maker.editor import resolve_audio_path
+    from setlist_maker.tracklist import resolve_audio_path
 
     assert resolve_audio_path(None, tmp_path / "set_tracklist.md") is None
 

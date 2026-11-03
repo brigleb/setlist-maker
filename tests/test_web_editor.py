@@ -242,7 +242,7 @@ def test_tracklist_to_api_shape(sample_tracklist):
 
 
 def test_apply_edits_updates_and_records_correction(sample_tracklist, tmp_path):
-    from setlist_maker.editor import CorrectionsDB
+    from setlist_maker.tracklist import CorrectionsDB
     from setlist_maker.web_editor import apply_edits
 
     db = CorrectionsDB(db_path=tmp_path / "corrections.json")
@@ -356,7 +356,7 @@ def test_apply_edits_mixes_new_track_with_existing_index_edits(sample_tracklist)
 
 def test_apply_edits_new_track_records_no_correction(sample_tracklist, tmp_path):
     """Inserting a track is not a Shazam correction; nothing is learned."""
-    from setlist_maker.editor import CorrectionsDB
+    from setlist_maker.tracklist import CorrectionsDB
     from setlist_maker.web_editor import apply_edits
 
     db = CorrectionsDB(db_path=tmp_path / "corrections.json")
@@ -433,7 +433,7 @@ def test_apply_edits_normalizes_summary_whitespace(sample_tracklist):
 
 
 def test_summary_round_trips_through_markdown(sample_tracklist):
-    from setlist_maker.editor import parse_markdown_tracklist
+    from setlist_maker.tracklist import parse_markdown_tracklist
     from setlist_maker.web_editor import apply_edits
 
     apply_edits(sample_tracklist, [], None, summary="A sweaty warehouse set.")
@@ -443,7 +443,7 @@ def test_summary_round_trips_through_markdown(sample_tracklist):
 
 def test_inserted_track_round_trips_through_markdown(sample_tracklist):
     """Insert -> to_markdown -> parse re-produces the track in chronological order."""
-    from setlist_maker.editor import parse_markdown_tracklist
+    from setlist_maker.tracklist import parse_markdown_tracklist
     from setlist_maker.web_editor import apply_edits
 
     apply_edits(
@@ -504,7 +504,7 @@ def test_get_tracklist_returns_json(sample_tracklist, tmp_path):
 
 
 def test_post_save_writes_files_and_records_correction(sample_tracklist, tmp_path):
-    from setlist_maker.editor import CorrectionsDB
+    from setlist_maker.tracklist import CorrectionsDB
     from setlist_maker.web_editor import EditorContext
 
     db = CorrectionsDB(db_path=tmp_path / "corrections.json")
@@ -649,7 +649,7 @@ def test_post_save_survives_a_track_shaped_description(sample_tracklist, tmp_pat
         with urllib.request.urlopen(req) as r:
             assert json.loads(r.read())["ok"] is True
 
-    from setlist_maker.editor import SUMMARY_OPEN_MARKER, parse_markdown_tracklist
+    from setlist_maker.tracklist import SUMMARY_OPEN_MARKER, parse_markdown_tracklist
 
     md = (tmp_path / "set_tracklist.md").read_text()
     reopened = parse_markdown_tracklist(md)
@@ -695,7 +695,7 @@ def test_post_save_keeps_an_inserted_row_that_has_only_a_title(sample_tracklist,
         with urllib.request.urlopen(req) as r:
             assert json.loads(r.read())["ok"] is True
 
-    from setlist_maker.editor import parse_markdown_tracklist
+    from setlist_maker.tracklist import parse_markdown_tracklist
 
     md = (tmp_path / "set_tracklist.md").read_text()
     reopened = parse_markdown_tracklist(md)
@@ -910,7 +910,7 @@ def test_apply_edits_pins_a_chosen_cover_after_the_correction(sample_tracklist, 
     both intentions survive -- and the pin is what protects the art from the
     *next* correction, in a later session.
     """
-    from setlist_maker.editor import CorrectionsDB
+    from setlist_maker.tracklist import CorrectionsDB
     from setlist_maker.web_editor import apply_edits
 
     db = CorrectionsDB(db_path=tmp_path / "corrections.json")
@@ -1128,7 +1128,7 @@ def test_a_track_with_no_art_anywhere_404s_only_from_the_source(
 def test_save_round_trips_curation_into_the_sidecar(sample_tracklist, tmp_path):
     """The choices have to survive into a later, separate `chapters` process,
     which reads them back off disk by timestamp."""
-    from setlist_maker.cli import _load_tracklist_with_artwork_urls
+    from setlist_maker.tracklist import load_tracklist
     from setlist_maker.web_editor import EditorContext
 
     ctx = EditorContext(
@@ -1163,7 +1163,7 @@ def test_save_round_trips_curation_into_the_sidecar(sample_tracklist, tmp_path):
         with urllib.request.urlopen(req) as r:
             assert json.loads(r.read())["ok"] is True
 
-    reloaded, _urls = _load_tracklist_with_artwork_urls(tmp_path / "set_tracklist.md")
+    reloaded = load_tracklist(tmp_path / "set_tracklist.md")
     starred = [t for t in reloaded.tracks if t.is_episode_cover]
     assert [t.title for t in starred] == ["Block Rockin' Beats"]
     assert starred[0].coverart_url == "https://itunes/discovery.jpg"
@@ -1401,8 +1401,7 @@ def test_a_moved_track_keeps_its_art_pin_and_star_through_save_and_reload(
 ):
     """The sidecar is joined to the markdown by timestamp: both are rewritten
     on save, so a moved start must carry its pinned art and its star along."""
-    from setlist_maker.cli import _load_tracklist_with_artwork_urls
-    from setlist_maker.editor import save_tracklist
+    from setlist_maker.tracklist import load_tracklist, save_tracklist
     from setlist_maker.web_editor import apply_edits
 
     track = sample_tracklist.tracks[1]
@@ -1417,7 +1416,7 @@ def test_a_moved_track_keeps_its_art_pin_and_star_through_save_and_reload(
     path = tmp_path / "set_tracklist.md"
     save_tracklist(sample_tracklist, path, None)
 
-    reloaded, _ = _load_tracklist_with_artwork_urls(path)
+    reloaded = load_tracklist(path)
     moved = reloaded.tracks[1]
     assert (moved.timestamp, moved.title) == (200, "Block Rockin' Beats")
     assert moved.coverart_url == "https://example.com/picked.jpg"
@@ -1430,8 +1429,7 @@ def test_a_merge_into_the_next_track_saves_one_track_at_the_merged_start(
     """#56: the page rejects the merged row and sends the next track's start as
     the merged row's. The two share a second in memory, but the rejected row is
     in neither file, so the reload has one track there, with its art."""
-    from setlist_maker.cli import _load_tracklist_with_artwork_urls
-    from setlist_maker.editor import save_tracklist
+    from setlist_maker.tracklist import load_tracklist, save_tracklist
     from setlist_maker.web_editor import apply_edits
 
     blip, nxt = sample_tracklist.tracks[1], sample_tracklist.tracks[2]
@@ -1448,7 +1446,7 @@ def test_a_merge_into_the_next_track_saves_one_track_at_the_merged_start(
     path = tmp_path / "set_tracklist.md"
     save_tracklist(sample_tracklist, path, None)
 
-    reloaded, _ = _load_tracklist_with_artwork_urls(path)
+    reloaded = load_tracklist(path)
     assert [(t.timestamp, t.title) for t in reloaded.tracks] == [
         (0, sample_tracklist.tracks[0].title),
         (180, nxt.title),

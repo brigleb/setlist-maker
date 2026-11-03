@@ -24,7 +24,6 @@ from shazamio import Shazam
 from setlist_maker.audio import extract_window, format_timestamp, load_audio
 from setlist_maker.boundary import BoundaryEngine, EngineConfig, Probe, ProbePlan
 from setlist_maker.call_log import CallLog, CallRecorder, describe_error
-from setlist_maker.editor import CorrectionsDB, Tracklist
 from setlist_maker.identify import (
     finalize_outputs,
     load_progress,
@@ -34,6 +33,7 @@ from setlist_maker.identify import (
 from setlist_maker.progress import AdaptiveRunState, live_display, render_adaptive_panel
 from setlist_maker.sampler import SAMPLE_WINDOW, SampleRequests, sample_window_start
 from setlist_maker.shazam_client import MAX_RETRIES, identify_sample_with_retry
+from setlist_maker.tracklist import CorrectionsDB, Tracklist
 
 PROGRESS_VERSION = 2
 

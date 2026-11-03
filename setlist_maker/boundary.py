@@ -15,7 +15,7 @@ import math
 from dataclasses import dataclass
 from statistics import median
 
-from setlist_maker.identify import _assign_cluster, _normalized_key
+from setlist_maker.identity import assign_cluster, normalized_key
 
 # Virtual identities for the recording's edges. Real identities are
 # (artist, title) cluster keys or None (an unidentified probe), so these
@@ -114,8 +114,8 @@ class BoundaryEngine:
         """Assign a probe result to a fuzzy identity cluster (or None)."""
         if not result:
             return None
-        key = _assign_cluster(
-            _normalized_key(result),
+        key = assign_cluster(
+            normalized_key(result),
             self._clusters,
             self.cfg.title_threshold,
             self.cfg.artist_threshold,
@@ -143,8 +143,8 @@ class BoundaryEngine:
         # Peek at cluster novelty without mutating (real assignment below).
         is_new = False
         if probe.result:
-            peek = _assign_cluster(
-                _normalized_key(probe.result),
+            peek = assign_cluster(
+                normalized_key(probe.result),
                 list(self._clusters),
                 self.cfg.title_threshold,
                 self.cfg.artist_threshold,

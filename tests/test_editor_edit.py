@@ -18,7 +18,8 @@ import asyncio
 
 from textual.widgets import Input
 
-from setlist_maker.editor import EditTrackScreen, Track, Tracklist, TracklistEditor
+from setlist_maker.editor import EditTrackScreen, TracklistEditor
+from setlist_maker.tracklist import Track, Tracklist
 
 
 def _build_app(tmp_path):

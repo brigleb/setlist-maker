@@ -5,7 +5,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from setlist_maker.call_log import LOG_FILENAME
-from setlist_maker.editor import CorrectionsDB
 from setlist_maker.identify import (
     deduplicate_tracklist,
     format_progress_line,
@@ -15,6 +14,7 @@ from setlist_maker.identify import (
     save_progress,
     tracklist_output_path,
 )
+from setlist_maker.tracklist import CorrectionsDB
 
 
 class TestTracklistOutputPath:
