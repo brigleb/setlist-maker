@@ -72,6 +72,15 @@ function StartField({ t }) {
     </div>`;
 }
 
+// One of the inspector's actions (#62 follow-up): an icon over a short label,
+// in rows that always fill the panel's width, at the top where they're reached
+// without scrolling. The full description and the key are in the tooltip.
+function Tile({ cls, icon, fill, label, title, disabled, onClick }) {
+  return html`<button type="button" class=${"act-tile" + (cls ? " " + cls : "")} disabled=${disabled}
+    title=${title} aria-label=${title ? label + ": " + title : label} onClick=${onClick}>
+    <${Icon} name=${icon} cls=${fill ? "fill" : ""} /><span>${label}</span></button>`;
+}
+
 function Inspector({ t, i }) {
   const D = setDuration();
   // A kept track owns everything merged into it, so its span and its samples
@@ -130,6 +139,31 @@ function Inspector({ t, i }) {
         </div>
       </div>
     </div>
+    <div class="in-acts" role="group" aria-label="Play, identify or split">
+      <${Tile} cls="primary" icon="play" fill label="Play" title="Play from its start (⇧Space)"
+        onClick=${() => playFrom(i, { scroll: false })} />
+      ${!S.liveMode && !t.rejected && html`<${Tile} cls="in-identify" icon="scan" label="Identify"
+        disabled=${cantIdentify} title=${identTitle} onClick=${() => identifyAt(t, audio.currentTime || 0)} />`}
+      ${!S.liveMode && html`<${Tile} cls="in-split" icon="scissors" label="Split" disabled=${cantSplit}
+        title=${cantSplit ? "Play inside this track, then split where the next one starts (S)" : "Start a new track at " + TL.fmt(now) + " (S)"}
+        onClick=${splitAtPlayhead} />`}
+    </div>
+    ${!S.liveMode && html`
+      <div class="in-acts" role="group" aria-label="Track actions">
+        ${t.rejected
+          ? html`<${Tile} icon="bring-back" label=${owner[i] === -1 ? "Bring back" : "Unmerge"}
+              title=${owner[i] === -1 ? "Put it back in the tracklist (⌫)" : "Give it its own time again (⌫)"} onClick=${() => toggleMerge(t)} />`
+          : html`
+            ${k > 0 && html`<${Tile} icon="merge-up" label="Merge up"
+              title="Merge into the previous track: its time goes to the track before (⌫)" onClick=${() => toggleMerge(t, "prev")} />`}
+            ${k < kept.length - 1 && html`<${Tile} icon="merge-down" label="Merge down"
+              title="Merge into the next track, which starts here instead (⇧⌫)" onClick=${() => toggleMerge(t, "next")} />`}
+            ${kept.length === 1 && html`<${Tile} icon="x" label="Reject" title="Leave it out of the tracklist" onClick=${() => toggleMerge(t)} />`}`}
+        <${Tile} icon="list-plus" label="Add below" title="Add a track after this one" onClick=${() => addBelow(i)} />
+        ${canArt && html`<${Tile} icon="image" label="Artwork" title="Artwork and episode cover" onClick=${() => showArtwork(t)} />`}
+      </div>
+      <div class="in-note in-hint" hidden=${!(cantSplit && (cantIdentify || t.rejected))}>${t.rejected ? "Split acts at the playhead. Play inside this track to use it."
+        : "Identify and Split act at the playhead. Play inside this track to use them."}</div>`}
     <${NameField} t=${t} field="artist" label="Artist" />
     <${NameField} t=${t} field="title" label="Title" />
     <${StartField} t=${t} />
@@ -155,25 +189,6 @@ function Inspector({ t, i }) {
           <div class="nm" title=${trackName(m)}>${TL.fmt(m.timestamp) + " " + trackName(m)}</div>
           <button class="tbtn" disabled=${S.liveMode} onClick=${() => toggleMerge(m)}>Unmerge</button>
         </div>`)}`}
-    <div class="in-btns">
-      <button class="tbtn primary" onClick=${() => playFrom(i, { scroll: false })}><${Icon} name="play" cls="fill" />Play</button>
-      ${!S.liveMode && html`
-        <button class="tbtn in-identify" disabled=${cantIdentify} title=${identTitle}
-          hidden=${!!t.rejected} onClick=${() => identifyAt(t, audio.currentTime || 0)}>Identify at playhead</button>
-        <button class="tbtn in-split" disabled=${cantSplit}
-          title=${cantSplit ? "Play inside this track, then split where the next one starts" : "Start a new track at " + TL.fmt(now)}
-          onClick=${splitAtPlayhead}>Split at playhead</button>
-        ${t.rejected
-          ? html`<button class="tbtn" onClick=${() => toggleMerge(t)}>${owner[i] === -1 ? "Bring back" : "Unmerge"}</button>`
-          : html`
-            ${k > 0 && html`<button class="tbtn" title="Its time goes to the track before"
-              onClick=${() => toggleMerge(t, "prev")}><${Icon} name="arrow-left" />Merge into previous</button>`}
-            ${k < kept.length - 1 && html`<button class="tbtn" title="Its time goes to the track after, which starts here instead"
-              onClick=${() => toggleMerge(t, "next")}>Merge into next<${Icon} name="arrow-right" /></button>`}
-            ${kept.length === 1 && html`<button class="tbtn" onClick=${() => toggleMerge(t)}>Reject</button>`}`}
-        <button class="tbtn" onClick=${() => addBelow(i)}><${Icon} name="plus" />Add below</button>`}
-      ${canArt && !S.liveMode && html`<button class="tbtn" onClick=${() => showArtwork(t)}>Artwork…</button>`}
-    </div>
     ${t.rejected && html`<div class="in-note">${owner[i] === -1
       ? "Rejected tracks are left out of the tracklist when you save."
       : "Merged tracks are left out of the tracklist when you save; their time goes to the track " + (dir === "next" ? "after, which starts here instead." : "before.")}</div>`}
