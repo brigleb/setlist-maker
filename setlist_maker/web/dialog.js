@@ -25,16 +25,21 @@ export function sheet(dlg) {
   dlg.addEventListener("click", e => {
     if (onBackdrop(dlg, e) || e.target.closest("[data-close]")) dlg.close();
   });
-  // showModal() keeps focus out of the page, but Chrome lets Tab carry on
-  // into its own toolbar, and keys pressed there never reach the dialog. So
-  // Tab wraps at either end, as a desktop sheet's does.
+  // The dialog moves Tab focus itself, through every control in order and
+  // wrapping at either end, as a desktop sheet does. It can't leave that to the
+  // browser. Chrome lets Tab carry on past the last control into its own
+  // toolbar, where keys never reach the dialog. WebKit (Safari, and the Tauri
+  // window) skips buttons on Tab by default, so in the artwork picker Tab went
+  // URL field -> <body> -> dialog and never reached a button.
   dlg.addEventListener("keydown", e => {
     if (e.key !== "Tab" || e.altKey || e.metaKey || e.ctrlKey) return;
     const all = focusables(dlg);
     if (!all.length) return;
-    const first = all[0], last = all[all.length - 1], at = document.activeElement;
-    if (e.shiftKey && (at === first || !dlg.contains(at))) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && (at === last || !dlg.contains(at))) { e.preventDefault(); first.focus(); }
+    e.preventDefault();
+    const i = all.indexOf(document.activeElement);
+    const n = all.length;
+    const next = i < 0 ? (e.shiftKey ? n - 1 : 0) : (i + (e.shiftKey ? n - 1 : 1)) % n;
+    all[next].focus();
   });
   return dlg;
 }
