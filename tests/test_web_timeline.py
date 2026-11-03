@@ -379,3 +379,22 @@ def test_peak_levels_halve_and_columns_take_the_extremes():
         0,
         0,
     ]
+
+
+def test_palette_ranks_a_whole_word_above_scattered_letters():
+    """⌘K → "luvm" must land on the track, not on a command that happens to
+    contain l, u, v and m in order (#59)."""
+    pairs = [
+        ("luvm", "The Luvmenauts — Hey"),
+        ("luvm", "Play the selected track from its start"),
+        ("beyonce", "Beyoncé — Crazy"),
+        ("parov comp", "Parov Stelar — Computer Love"),
+        ("spth", "Split at the playhead"),
+        ("zz", "Split at the playhead"),
+        ("", "x"),
+    ]
+    scores = js("pairs.map(([q, t]) => T.fuzzy(q, t))", pairs=pairs)
+    whole, nothing, accent, two_words, scattered, miss, empty = scores
+    assert whole > 1000 and nothing == -1 and miss == -1 and empty == 0
+    assert accent > 1000 and two_words > 2000  # accents folded; every word must match
+    assert 0 < scattered < whole

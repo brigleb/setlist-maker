@@ -183,17 +183,18 @@ export function syncCoverButton() {
 // Exactly one track can be the episode cover, so starring one clears the
 // rest. The server re-applies the same rule on save, so a stale page cannot
 // leave two starred in the sidecar.
-artCoverBtn.onclick = () => {
-  if (!artTrack || artTrack.rejected) return;
-  const on = !artTrack.episode_cover;
-  S.tracks.forEach(t => { t.episode_cover = false; });
-  artTrack.episode_cover = on;
+// The picker's button and the menus' "Set as episode cover" both come here.
+export function setEpisodeCover(t, on) {
+  if (!t || t.rejected || S.liveMode) return;
+  S.tracks.forEach(x => { x.episode_cover = false; });
+  t.episode_cover = on;
   // One episode cover: starring a track replaces an uploaded one.
   if (on && hasUploadedCover()) S.coverChoice = null;
   setDirty(true);
   syncCoverButton();
   render();
-};
+}
+artCoverBtn.onclick = () => { if (artTrack) setEpisodeCover(artTrack, !artTrack.episode_cover); };
 
 // Lazy and per-track: the server asks every source here instead of stopping
 // at the first that answers, so this costs a handful of third-party requests

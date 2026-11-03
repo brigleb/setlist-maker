@@ -13,12 +13,14 @@ import { audio, el, playerEl, pplayEl, toast } from "./dom.js";
 import { keptTrackAt } from "./model.js";
 import { redo, undo } from "./history.js";
 import { nextTrack, playSelected, prevTrack, shuttle, skip, toggleFollow } from "./player.js";
-import { moveStart, splitAt, startOf, toggleMerge } from "./edits.js";
+import { mergeInto, moveStart, splitAt, startOf } from "./edits.js";
 import { identifyAt } from "./inspector.js";
 import { dialogOpen, sheet } from "./dialog.js";
 import { selectTrack, zoomAll, zoomBy, zoomToTrack } from "./grid.js";
 import { focusSelected, startEdit } from "./list.js";
 import { save } from "./main.js";
+import { openPalette } from "./palette.js";
+import { selectedMenu } from "./commands.js";
 
 // Matches a key with exactly these modifiers. ⌘ and Ctrl count as one.
 const key = (names, mods = {}) => e => [].concat(names).includes(e.key)
@@ -44,9 +46,12 @@ export const KEYMAP = [
     match: key(["Enter", "F2"]), need: "select",
     run: e => { if (e.key === "Enter" && onButton()) return false; startEdit(S.selectedTrack, "artist", { select: true }); } },
   { group: "Tracks", keys: ["⇧⌫"], label: "Merge the selected track into the next one",
-    match: key(["Backspace", "Delete"], { shift: true }), need: "select", run: () => mergeSelected("next") },
+    match: key(["Backspace", "Delete"], { shift: true }), need: "select", run: () => mergeInto(S.selectedTrack, "next") },
   { group: "Tracks", keys: ["⌫"], label: "Merge the selected track into the previous one; on a merged track, bring it back",
-    match: key(["Backspace", "Delete"]), need: "select", run: () => mergeSelected("prev") },
+    match: key(["Backspace", "Delete"]), need: "select", run: () => mergeInto(S.selectedTrack, "prev") },
+  { group: "Tracks", keys: ["⇧F10"], label: "The selected track's actions (the menu key too)",
+    match: e => e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey),
+    need: "select", run: () => { selectedMenu(); } },
   { group: "Tracks", keys: ["[", "]"], label: "Move the selected track's start 1s earlier / later (⇧ for 5s)",
     match: punct(["[", "]", "{", "}"]), need: "select", run: e => nudge({ "[": -1, "]": 1, "{": -5, "}": 5 }[e.key]) },
   { group: "Tracks", keys: ["S"], label: "Split at the playhead",
@@ -82,8 +87,9 @@ export const KEYMAP = [
   { group: "Timeline", keys: ["=", "-"], label: "Zoom in / out",
     match: punct(["=", "+", "-"]), run: e => zoomBy(e.key === "-" ? 2 : 0.5) },
   // ---- the set ----
-  // ⌘S and ⌘Z are handled ahead of the table (see the handler); they are
+  // ⌘K, ⌘S and ⌘Z are handled ahead of the table (see the handler); they are
   // listed here so the sheet shows them.
+  { group: "Set", keys: ["⌘K"], label: "Find a command, a track, or a time like 1:23:45", match: () => false },
   { group: "Set", keys: ["⌘S"], label: "Save", match: () => false },
   { group: "Set", keys: ["⌘Z", "⇧⌘Z"], label: "Undo / redo", match: () => false },
   { group: "Set", keys: ["?"], label: "Show these shortcuts", match: punct(["?"]), run: () => openSheet() },
@@ -103,6 +109,7 @@ export const MOUSE = [
   ["Click a pin", "Hear what Shazam heard"],
   ["Click the empty pin lane", "Ask Shazam about that moment"],
   ["Click a thumbnail", "Artwork and episode cover"],
+  ["Right-click a track, a sample or the timeline", "Its actions"],
 ];
 
 function moveSelection(d) {
@@ -114,19 +121,6 @@ function moveSelection(d) {
     : cur === -1 ? from : Math.max(0, Math.min(S.tracks.length - 1, cur + d));
   selectTrack(S.tracks[i]);
   focusSelected();
-}
-
-// ⌫ is the list's ✕ and ↩, with the inspector's gates: the first kept track
-// has nothing before it to merge into, the last nothing after.
-function mergeSelected(dir) {
-  const t = S.selectedTrack;
-  if (S.liveMode) return;
-  if (t.rejected) { toggleMerge(t); return; }
-  const kept = S.tracks.filter(x => !x.rejected), k = kept.indexOf(t);
-  if (kept.length === 1) { toggleMerge(t); return; }  // the only track: the inspector's Reject
-  if (dir === "prev" && k === 0) { toast("Nothing before it to merge into. ⇧⌫ merges it into the next track"); return; }
-  if (dir === "next" && k === kept.length - 1) { toast("Nothing after it to merge into. ⌫ merges it into the previous track"); return; }
-  toggleMerge(t, dir);
 }
 
 function nudge(by) {
@@ -182,7 +176,8 @@ document.getElementById("keys-btn").onclick = () => openSheet();
 // ---- the handler ----
 document.addEventListener("keydown", (e) => {
   // A dialog owns the keyboard while it is open (#61): the shortcut sheet, the
-  // artwork picker and ask()'s questions handle their own keys, and the
+  // artwork picker, ask()'s questions, the palette and the context menu (#59)
+  // handle their own keys (so ⌘K does nothing over the picker), and the
   // focus trap means a key pressed there still bubbles up to here.
   if (dialogOpen()) return;
   // Never steal keys from an editor: artist/title/time fields and the summary
@@ -200,6 +195,13 @@ document.addEventListener("keydown", (e) => {
   const isField = n => !!n && (n.tagName === "TEXTAREA" || (n.tagName === "INPUT" && n.type !== "range"));
   const f = document.activeElement;
   const typing = isField(f) || isField(e.target);
+  // ⌘K opens the palette from anywhere, a text field included (#59). A field
+  // being edited commits as focus leaves it for the palette, as on any blur.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    openPalette();
+    return;
+  }
   // ⌘S saves from anywhere, a text field included: the browser's own ⌘S
   // saves the page. A field holds its text as a draft until it loses focus
   // (the list's commits on a timeout), so blur it and save after that.

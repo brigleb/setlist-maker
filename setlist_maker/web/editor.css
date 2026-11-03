@@ -360,3 +360,39 @@ body.closed { display:flex; align-items:center; justify-content:center; }
 #closed-screen h1 { font-size:20px; margin:0 0 8px; }
 #closed-screen p { color:var(--muted); font-size:14px; line-height:1.5; margin:6px 0; }
 #closed-screen code { white-space:nowrap; font-size:13px; background:var(--card); border:1px solid var(--line); border-radius:5px; padding:1px 6px; }
+
+/* ---- the ⌘K palette (#59) ---- */
+/* Near the top, as palettes are, so the list grows down without moving the box. */
+#palette { width:620px; margin-top:12vh; padding:0; gap:0; max-height:min(560px, calc(100dvh - 24vh)); overflow:hidden; }
+#pal-q { font:inherit; font-size:16px; padding:14px 18px; border:0; border-bottom:1px solid var(--line); background:transparent;
+  color:var(--text); outline:none; flex:none; }
+#pal-list { overflow:auto; min-height:0; flex:1; padding:6px; }
+.pal-item { display:grid; grid-template-columns:86px minmax(0,1fr) auto; gap:10px; align-items:center; padding:5px 10px; min-height:33px;
+  border-radius:7px; cursor:pointer; font-size:13px; }
+.pal-item.on { background:var(--sel-active); }
+.pal-item.off { cursor:default; }
+.pal-item.off .pal-label { color:var(--text-faint); }
+.pal-kind { color:var(--muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pal-label { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pal-hint { color:var(--muted); font-size:12px; white-space:nowrap; display:flex; gap:4px; }
+.pal-none { color:var(--muted); font-size:13px; padding:14px 10px; }
+#pal-foot { display:flex; gap:16px; padding:8px 16px; border-top:1px solid var(--line); color:var(--muted); font-size:11px; flex:none; }
+#pal-foot kbd { font-size:10px; padding:0 4px; }
+
+/* ---- the context menu (#59): a modal <dialog> with a clear backdrop ---- */
+#menu { position:fixed; inset:auto; margin:0; padding:5px; border:1px solid var(--btn-border); border-radius:9px;
+  background:var(--card); color:var(--text); box-shadow:0 8px 28px rgba(0,0,0,.28); min-width:220px; max-width:min(380px, calc(100vw - 16px));
+  max-height:calc(100dvh - 16px); overflow:auto; font-size:13px; }
+#menu::backdrop { background:transparent; }
+#menu-items { outline:none; display:flex; flex-direction:column; }
+.menu-head { color:var(--muted); font-size:11px; padding:4px 10px 5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.menu-sep { height:1px; background:var(--line); margin:4px 6px; }
+.mi { font:inherit; display:flex; align-items:center; gap:16px; text-align:left; background:none; border:0; color:inherit;
+  padding:6px 10px; border-radius:6px; cursor:default; outline:none; }
+.mi-label { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mi kbd { font-size:11px; color:var(--muted); background:none; border:0; padding:0; }
+.mi:focus { background:var(--accent); color:#fff; }
+.mi:focus kbd { color:rgba(255,255,255,.8); }
+.mi.off { color:var(--text-faint); }
+.mi.off:focus { background:var(--hairline); color:var(--text-faint); }
+#menu-why { color:var(--muted); font-size:11px; padding:5px 10px 3px; border-top:1px solid var(--line); margin-top:4px; max-width:340px; }

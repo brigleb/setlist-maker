@@ -21,6 +21,7 @@
       <button id="redo" class="histbtn" disabled title="Redo (⇧⌘Z)">Redo</button>
       <button id="save" disabled>Save</button>
       <button id="done">Done</button>
+      <button id="pal-btn" class="histbtn" type="button" title="Find a command, a track or a time (⌘K)" aria-label="Find a command, a track or a time">⌘K</button>
       <button id="keys-btn" class="histbtn" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       <button id="side-toggle" class="histbtn" type="button" aria-controls="side" aria-expanded="false" title="Show the inspector">Inspector</button>
     </div>
@@ -151,6 +152,17 @@
     <div class="sheet-head"><h2 id="ask-title"></h2><button class="xbtn" type="button" data-close aria-label="Close" title="Close (Esc)">✕</button></div>
     <div id="ask-body"></div>
     <div id="ask-buttons"></div>
+  </dialog>
+  <!-- #59: the ⌘K palette, and the one context menu (web/palette.js, web/menu.js). -->
+  <dialog id="palette" class="sheet" aria-label="Find a command, a track or a time">
+    <input id="pal-q" type="text" role="combobox" aria-expanded="true" aria-controls="pal-list" aria-autocomplete="list"
+      autocomplete="off" spellcheck="false" placeholder="A command, a track, or a time like 1:23:45">
+    <div id="pal-list" role="listbox" aria-label="Results"></div>
+    <div id="pal-foot"><span><kbd>↑</kbd> <kbd>↓</kbd> to move</span><span><kbd>Enter</kbd> to run</span><span><kbd>Esc</kbd> to close</span></div>
+  </dialog>
+  <dialog id="menu" aria-label="Actions">
+    <div id="menu-items" role="menu" tabindex="-1"></div>
+    <div id="menu-why" hidden></div>
   </dialog>
 <script src="/timeline.js"></script>
 <script type="module" src="/web/main.js"></script>
