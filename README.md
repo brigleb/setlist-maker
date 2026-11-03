@@ -430,7 +430,7 @@ uv sync --extra dev
 
 # Lint, type-check and test: what CI runs
 uv run ruff check .
-uv run ruff format --check setlist_maker tests
+uv run ruff format --check .
 uv run pyright
 uv run pytest
 ```

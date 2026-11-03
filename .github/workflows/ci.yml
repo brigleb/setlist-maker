@@ -24,8 +24,7 @@ jobs:
           enable-cache: true
       - run: uv sync --locked --extra dev
       - run: uv run ruff check .
-      # Python only: ruff would otherwise also format code blocks in the .md files.
-      - run: uv run ruff format --check setlist_maker tests
+      - run: uv run ruff format --check .
       # Checked against Python 3.10 (pyproject's [tool.pyright]), the floor.
       - run: uv run pyright
 
