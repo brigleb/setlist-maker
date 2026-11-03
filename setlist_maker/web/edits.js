@@ -8,6 +8,8 @@ import { setDirty } from "./history.js";
 import { sampleAt } from "./inspector.js";
 import { render } from "./main.js";
 import { showTab } from "./shell.js";
+import { focusSelected } from "./list.js";
+import { isMulti, selection } from "./selection.js";
 
 // ---- inspector ----
 // Commits an artist/title change the same way the list's inline editor does,
@@ -82,6 +84,88 @@ export function mergeInto(t, dir) {
   toggleMerge(t, dir);
 }
 
+// ---- a multiple selection (#77) ----
+// The selection's kept tracks in runs (TL.selectionRuns), as track objects.
+function selectedRuns() {
+  return TL.selectionRuns(S.tracks, selection().map(t => S.tracks.indexOf(t))).map(r => r.map(i => S.tracks[i]));
+}
+
+// What ⌫ (prev) or ⇧⌫ (next) does to the selection, in words for the menus
+// and the inspector.
+export function mergeWords(dir) {
+  const runs = selectedRuns();
+  const n = runs.reduce((a, r) => a + r.length, 0);
+  if (runs.length === 1 && n > 1) return "Merge the " + n + " tracks into the " + (dir === "prev" ? "first" : "last");
+  if (runs.every(r => r.length === 1)) return "Merge each into the track " + (dir === "prev" ? "before" : "after") + " it";
+  return "Merge the selected tracks " + (dir === "prev" ? "up" : "down") + ": each run into its " + (dir === "prev" ? "first" : "last");
+}
+
+// The same, as one line under the inspector's tiles.
+export function mergeNote() {
+  const runs = selectedRuns();
+  const n = runs.reduce((a, r) => a + r.length, 0);
+  if (runs.length === 1 && n > 1) return "⌫ merges them into the first track, ⇧⌫ into the last.";
+  if (runs.every(r => r.length === 1)) return "⌫ merges each into the track before it, ⇧⌫ into the one after.";
+  return "⌫ merges each run into its first track, ⇧⌫ into its last. A track on its own goes to its neighbour.";
+}
+
+// ⌫ and ⇧⌫ with several tracks selected. A run of selected tracks becomes one
+// track: ⌫ keeps its first, ⇧⌫ its last, and the rest are merged into it. A
+// selected track on its own merges into its neighbour as ⌫ does for one. When
+// every selected track is already merged, ⌫ brings them all back. It is one
+// synchronous pass, so setDirty()'s microtask makes it one undo step.
+export function mergeSelection(dir) {
+  if (!isMulti()) { mergeInto(S.selectedTrack, dir); return; }
+  if (S.liveMode) return;
+  const sel = selection();
+  if (sel.every(t => t.rejected)) { restoreSelection(); return; }
+  const kept = S.tracks.filter(x => !x.rejected);
+  const edge = dir === "prev" ? kept[0] : kept[kept.length - 1];
+  const keepers = [];
+  let blocked = false;
+  for (const run of selectedRuns()) {
+    if (run.length > 1) {
+      const keep = dir === "prev" ? run[0] : run[run.length - 1];
+      for (const t of run) if (t !== keep) mergeTrack(t, dir);
+      keepers.push(keep);
+    } else if (run[0] === edge) {
+      blocked = true;
+    } else {
+      mergeTrack(run[0], dir);
+    }
+  }
+  // A collapsed run is selected as the one track it now is.
+  if (keepers.length) {
+    S.selected = keepers.length > 1 ? new Set(keepers) : new Set();
+    S.selectedTrack = S.anchor = keepers[0];
+  }
+  if (blocked) toast(dir === "prev" ? "The first track has nothing before it to merge into" : "The last track has nothing after it to merge into");
+  render();
+  // Focus goes with the selection, or ↑/↓ would carry on from a merged row.
+  if (document.activeElement && document.activeElement.closest("#list")) focusSelected();
+}
+
+// Bring back every merged track in the selection.
+export function restoreSelection() {
+  if (S.liveMode) return;
+  for (const t of selection()) if (t.rejected) mergeTrack(t, null);
+  render();
+}
+
+// The selected titles Tidy would change: their reissue tags, as the "Needs a
+// look" Tidy removes them (TL.cleanTitle).
+export function tidyable(tracks) {
+  return tracks.filter(t => t.title && TL.cleanTitle(t.title) !== t.title);
+}
+
+export function tidyTitles(tracks) {
+  if (S.liveMode) return;
+  const changed = tidyable(tracks).filter(t => setNames(t, t.artist, TL.cleanTitle(t.title)));
+  if (!changed.length) return;
+  render();
+  toast("Tidied " + (changed.length === 1 ? "1 title" : changed.length + " titles"));
+}
+
 // Cut track t at `seconds`: the new row starts there, blank, and is selected
 // so it can be named straight away. The Split button and S cut at the
 // playhead; Alt-click cuts wherever the pointer is, with no need to play.
@@ -104,6 +188,7 @@ export function splitAt(t, seconds) {
   S.tracks.splice(j, 0, row);
   setDirty(true);
   S.selectedTrack = row;
+  S.selected = new Set();
   showTab("track");  // the new track's fields are where it gets named
   render();
   toast("Split at " + TL.fmt(at) + " — name the new track, or ⌘Z");

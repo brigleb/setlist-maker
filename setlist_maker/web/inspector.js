@@ -9,10 +9,12 @@ import { setDuration } from "./model.js";
 import { addBelow, renderList } from "./list.js";
 import { playAt, playFrom, seekTo } from "./player.js";
 import { pendingSamples, renderTimeline } from "./grid.js";
-import { moveStart, setNames, splitAtPlayhead, startOf, toggleMerge } from "./edits.js";
+import { mergeNote, mergeSelection, mergeWords, moveStart, restoreSelection, setNames, splitAtPlayhead, startOf, tidyTitles, tidyable,
+  toggleMerge } from "./edits.js";
 import { artFor, showArtwork } from "./artwork.js";
 import { render } from "./main.js";
 import { html, Icon, keyOf, render as paint, useEffect, useState } from "./ui.js";
+import { clearMulti, isMulti, selection } from "./selection.js";
 
 // A name field. The typed text is component state, so the panel can re-render
 // underneath it (a sample landing, the playhead crossing into another track)
@@ -81,7 +83,41 @@ function Tile({ cls, icon, fill, label, title, disabled, onClick }) {
     <${Icon} name=${icon} cls=${fill ? "fill" : ""} /><span>${label}</span></button>`;
 }
 
-function Inspector({ t, i }) {
+// Several tracks selected (#77): what they span and what can be done to them
+// all, above the inspector of the one the keys act on. That track's own merge
+// tiles are left out meanwhile, so each merge on the panel means one thing.
+function SelectionPanel() {
+  const sel = selection();
+  const W = TL.windows(S.tracks, setDuration());
+  const from = W[S.tracks.indexOf(sel[0])].start, to = W[S.tracks.indexOf(sel[sel.length - 1])].end;
+  const merged = sel.filter(t => t.rejected).length, keptN = sel.length - merged;
+  const tidy = tidyable(sel).length;
+  const just = () => { clearMulti(); renderList(); renderTimeline(); };
+  const prev = mergeWords("prev"), next = mergeWords("next");
+  return html`
+    <div class="in-sel">
+      <div class="in-sel-head">
+        <div>
+          <div class="in-sel-count">${sel.length + " tracks selected"}</div>
+          <div class="in-when">${TL.fmt(from) + " – " + TL.fmt(to) + (merged ? " · " + merged + " merged" : "")}</div>
+        </div>
+        <button type="button" class="xbtn" title="Select just this track again (Esc)" aria-label="Select just one track"
+          onClick=${just}><${Icon} name="x" /></button>
+      </div>
+      ${!S.liveMode && html`
+        <div class="in-acts" role="group" aria-label="Selected tracks">
+          ${keptN > 0 && html`<${Tile} icon="merge-up" label="Merge up" title=${prev + " (⌫)"} onClick=${() => mergeSelection("prev")} />`}
+          ${keptN > 0 && html`<${Tile} icon="merge-down" label="Merge down" title=${next + " (⇧⌫)"} onClick=${() => mergeSelection("next")} />`}
+          ${merged > 0 && html`<${Tile} icon="bring-back" label="Bring back" title=${"Bring the " + merged + " merged back" + (keptN ? "" : " (⌫)")}
+            onClick=${restoreSelection} />`}
+          ${tidy > 0 && html`<${Tile} icon="eraser" label="Tidy" title=${"Remove the remaster tag from " + (tidy === 1 ? "1 title" : tidy + " titles")}
+            onClick=${() => tidyTitles(sel)} />`}
+        </div>
+        ${keptN > 0 && html`<div class="in-note">${mergeNote()}</div>`}`}
+    </div>`;
+}
+
+function Inspector({ t, i, multi }) {
   const D = setDuration();
   // A kept track owns everything merged into it, so its span and its samples
   // are the kept window's; a merged row shows its own old span.
@@ -148,7 +184,7 @@ function Inspector({ t, i }) {
         title=${cantSplit ? "Play inside this track, then split where the next one starts (S)" : "Start a new track at " + TL.fmt(now) + " (S)"}
         onClick=${splitAtPlayhead} />`}
     </div>
-    ${!S.liveMode && html`
+    ${!S.liveMode && !multi && html`
       <div class="in-acts" role="group" aria-label="Track actions">
         ${t.rejected
           ? html`<${Tile} icon="bring-back" label=${owner[i] === -1 ? "Bring back" : "Unmerge"}
@@ -210,7 +246,8 @@ export function renderInspector() {
     return;
   }
   // Keyed by track: choosing another track starts its fields fresh.
-  paint(html`<${Inspector} key=${keyOf(t)} t=${t} i=${i} />`, box);
+  const multi = isMulti();
+  paint(html`${multi && html`<${SelectionPanel} />`}<${Inspector} key=${keyOf(t)} t=${t} i=${i} multi=${multi} />`, box);
 }
 
 // ---- needs a look ----

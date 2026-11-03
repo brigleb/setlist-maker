@@ -20,6 +20,11 @@ export const S = {
   // model.playingIndex() derives the playing track's position when needed.
   playingTrack: null,
   selectedTrack: null,
+  // A multiple selection (#77): every selected track, selectedTrack among
+  // them, or empty when only selectedTrack is. selectedTrack stays the one the
+  // inspector shows and the keys act on; anchor is where a ⇧-range starts.
+  selected: new Set(),
+  anchor: null,
   editing: null,      // the track being edited in place in the list
   editField: "artist", // ...and the cell that was clicked to start it
   editSelect: false,  // ...and whether its text starts selected (from the keyboard)

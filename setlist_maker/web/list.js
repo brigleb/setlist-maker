@@ -18,6 +18,7 @@ import { render } from "./main.js";
 import { selectTrack } from "./grid.js";
 import { previewStart, startOf, toggleMerge } from "./edits.js";
 import { html, Icon, keyOf, render as paint, useEffect, useRef, useState } from "./ui.js";
+import { clickMods, isSelected } from "./selection.js";
 
 const listEl = document.getElementById("list");
 
@@ -34,7 +35,8 @@ function Thumb({ t, i }) {
   // background-size/position, so the cover would render at natural size
   // anchored top-left.
   const bg = artFor(t, i, near);
-  const open = hasIndex && !unknown ? e => { e.stopPropagation(); showArtwork(t); } : undefined;
+  // ⇧/⌘-click passes through to the row, which extends the selection.
+  const open = hasIndex && !unknown ? e => { if (clickMods(e)) return; e.stopPropagation(); showArtwork(t); } : undefined;
   return html`<div class="thumb" ref=${ref} style=${{ backgroundImage: bg }} onClick=${open}>
     ${unknown && html`<${Icon} name="help" />`}</div>`;
 }
@@ -129,7 +131,7 @@ function EditFields({ t }) {
 function Row({ t, i, playing, span, samples, tab }) {
   const unknown = !t.artist && !t.title;
   const editing = S.editing === t;
-  const selected = t === S.selectedTrack;
+  const selected = isSelected(t);
   const cls = "row trow" + (t.rejected ? " rejected" : "") + (unknown ? " unknown" : "")
     + (selected ? " selected" : "") + (playing ? " playing" : "")
     + (editing ? " editing" : "");
@@ -138,19 +140,21 @@ function Row({ t, i, playing, span, samples, tab }) {
   const reject = e => { e.stopPropagation(); toggleMerge(t); };
   // Clicking a row selects it; clicking its artist or title also edits it in
   // place. The .meta wrapper is display:contents, so its two cells sit in the
-  // row's grid while still sharing one click handler.
+  // row's grid while still sharing one click handler. ⇧ and ⌘ clicks only
+  // select (#77), anywhere on the row.
+  const edit = field => e => { if (!clickMods(e)) startEdit(t, field); };
   return html`
     <div class=${cls} data-key=${keyOf(t)} role="option" aria-selected=${selected ? "true" : "false"}
-      aria-label=${rowLabel(t, i)} tabindex=${tab ? 0 : -1} onClick=${() => selectTrack(t)}>
+      aria-label=${rowLabel(t, i)} tabindex=${tab ? 0 : -1} onClick=${e => { const m = clickMods(e); selectTrack(t, m); if (m) focusSelected(); }}>
       <span class="c-num idx">${i + 1}</span>
       <${Thumb} t=${t} i=${i} />
       ${editing
         ? html`<${EditFields} t=${t} />`
         : html`<div class="meta">
-            <div class="artist" onClick=${() => startEdit(t, "artist")}>${t.artist || (unknown ? "Unidentified" : "")}</div>
-            <div class="title" onClick=${() => startEdit(t, "title")}>${t.title || (unknown ? "add a label" : "")}</div>
+            <div class="artist" onClick=${edit("artist")}>${t.artist || (unknown ? "Unidentified" : "")}</div>
+            <div class="title" onClick=${edit("title")}>${t.title || (unknown ? "add a label" : "")}</div>
           </div>`}
-      ${!editing && html`<span class="c-num time" onClick=${() => startEdit(t, "time")}>${startOf(t) === t.timestamp ? t.time : fmt(startOf(t))}</span>`}
+      ${!editing && html`<span class="c-num time" onClick=${edit("time")}>${startOf(t) === t.timestamp ? t.time : fmt(startOf(t))}</span>`}
       <span class="c-num len">${span === null ? "—" : fmt(span)}</span>
       <span class="c-num smp">${samples || ""}</span>
       <span class="star" title=${t.episode_cover ? "This track's artwork is the episode cover" : undefined}>${t.episode_cover && html`<${Icon} name="star" cls="fill" />`}</span>

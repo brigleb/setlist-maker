@@ -708,8 +708,8 @@ CLI application with the following modules:
   (track windows, which track holds a moment), `history` (dirty, undo/redo), `list`, `player`,
   `grid` (the timeline), `inspector` (plus sampling), `issues`, `edits` (merge, split, rename,
   shared by every pane), `artwork` (thumbs, picker, uploads, episode cover, Embed), `dialog`
-  (the dialogs' shared behaviour and `ask()`), `commands` (every action, for the menus and
-  ⌘K), `menu` (the context menu), `palette` (⌘K), `activity` (what is running, in the
+  (the dialogs' shared behaviour and `ask()`), `selection` (which tracks are selected), `commands`
+  (every action, for the menus and ⌘K), `menu` (the context menu), `palette` (⌘K), `activity` (what is running, in the
   toolbar), `keys` (the keyboard map) and `main` (load, render, save, Done, the live poll). `main` is the entry and
   imports the rest.
 - **State that more than one module reassigns lives on `S` in `state.js`**, because an imported
@@ -798,6 +798,28 @@ CLI application with the following modules:
     keeps only its icon, and the activity area shows one task. `body` has one
     `minmax(0,1fr)` column, or an auto column grows to the toolbar's content and pushes Save off
     a narrow window.
+- **Multi-select (#77).** `S.selectedTrack` is still the one track the inspector shows, the
+  roving tab stop and what single-track keys act on. `S.selected` holds the whole selection
+  beside it, and is empty while only one track is selected. `S.anchor` is where a ⇧-range
+  starts. `selection.js`'s `pointSelection()`, called by `grid.selectTrack()`, is the one place
+  either changes. A plain call selects one track, so Follow, ⌘K and "Needs a look" drop a
+  multiple selection without knowing about it. `{ extend }` (⇧-click, ⇧↑/↓) selects the anchor
+  to the track, `{ toggle }` (⌘-click) adds or removes one, and `{ keepMulti }` (right-click) moves
+  the focus within the selection. `load()` and the live refresh clear it, because they replace
+  every object.
+  - `TL.selectionRuns` (Node-tested) groups the selected kept tracks into runs that sit next to
+    each other in kept order, so a merged row between two selected tracks doesn't split a run.
+    `edits.mergeSelection(dir)` turns each run of two or more into one track (⌫ keeps the
+    first, ⇧⌫ the last). A selected track on its own goes into its neighbour, as ⌫ does for one
+    track, and if every selected track is already merged, ⌫ brings them all back. It runs in a
+    single synchronous pass, so it is one undo step.
+  - A right-click on a selected row or block opens a `selection` menu (`MENUS.selection`), so
+    nothing in it quietly applies to just the one track clicked. The single-track merge
+    commands return `false` when `batch(c)` holds, so ⌫ means one thing in the menu and ⌘K.
+    Tidy (`edits.tidyTitles`, `TL.cleanTitle`) acts on the selection or on one track.
+  - With several selected, the inspector puts a panel over the focused track (`SelectionPanel`)
+    and leaves out that track's own merge tiles. Escape goes back to one track. Rows have
+    `user-select:none`, or ⇧-click selects page text.
 - **Context menus and ⌘K (#59).** `commands.js`'s `COMMANDS` is every action the page offers,
   each `{ id, group, label, menu, keys, playhead, when, run }`, and `run` calls the same function
   the action's button, gesture or key already calls, so the three can't drift. `when(c)` returns

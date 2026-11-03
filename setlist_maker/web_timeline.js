@@ -444,9 +444,24 @@
     return total;
   }
 
+  // The selected kept tracks grouped into runs that sit next to each other in
+  // kept order (#77): a merged row between two selected tracks doesn't break a
+  // run, an unselected kept track does. `indices` are positions in `tracks`;
+  // each run is a list of them, in order. Merging a selection collapses each
+  // run of two or more into one track.
+  function selectionRuns(tracks, indices) {
+    const sel = new Set(indices), runs = [];
+    let cur = null;
+    tracks.forEach((t, i) => {
+      if (t.rejected) return;
+      if (sel.has(i)) { if (!cur) runs.push(cur = []); cur.push(i); } else cur = null;
+    });
+    return runs;
+  }
+
   return {
     BLIP_SECONDS, SHORT_SECONDS, UNHEARD_SECONDS, HOUR,
     fmt, quarters, cleanTitle, identity, hue, windows, keptWindows, owners, startIndex, joinProbes, variants, unheard, findIssues,
-    snapPoints, MIN_SPP, clampView, zoomAt, tickStep, peakLevels, peakColumns, fuzzy,
+    snapPoints, selectionRuns, MIN_SPP, clampView, zoomAt, tickStep, peakLevels, peakColumns, fuzzy,
   };
 });

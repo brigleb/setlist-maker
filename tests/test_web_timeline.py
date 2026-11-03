@@ -398,3 +398,21 @@ def test_palette_ranks_a_whole_word_above_scattered_letters():
     assert whole > 1000 and nothing == -1 and miss == -1 and empty == 0
     assert accent > 1000 and two_words > 2000  # accents folded; every word must match
     assert 0 < scattered < whole
+
+
+def test_selection_runs_join_selected_tracks_next_to_each_other_in_kept_order():
+    tracks = [
+        track(0, "A"),
+        track(100, "B"),
+        track(200, "x", rejected=True),
+        track(300, "C"),
+        track(400, "D"),
+        track(500, "E"),
+    ]
+    # B and C are a run though a merged row sits between them; D, unselected
+    # and kept, breaks it from E.
+    assert js("T.selectionRuns(tracks, [1, 3, 5])", tracks=tracks) == [[1, 3], [5]]
+    # A selected merged row is not a member of any run.
+    assert js("T.selectionRuns(tracks, [2, 3, 4])", tracks=tracks) == [[3, 4]]
+    assert js("T.selectionRuns(tracks, [0])", tracks=tracks) == [[0]]
+    assert js("T.selectionRuns(tracks, [])", tracks=tracks) == []

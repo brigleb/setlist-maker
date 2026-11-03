@@ -13,6 +13,7 @@ import { renderIssues } from "./issues.js";
 import { artFor } from "./artwork.js";
 import { html, keyOf, render as paint } from "./ui.js";
 import { showTab } from "./shell.js";
+import { clickMods, isSelected, pointSelection } from "./selection.js";
 import { load, refreshLiveTracks, render, setLive } from "./main.js";
 
 export let replayShown = null;  // during a replay, how many probes are visible
@@ -178,7 +179,7 @@ export function paintView() {
   const kept = TL.keptWindows(S.tracks, D);
   const shown = replayShown === null ? S.probes : S.probes.slice(0, replayShown);
   const gaps = TL.unheard(S.probes, S.probeDuration || 0);
-  const sel = t => (t === S.selectedTrack ? " sel" : "");
+  const sel = t => (isSelected(t) ? " sel" : "");
 
   // One block per track that will be written, spanning its kept window: a
   // merge reads as one block because it is one track. Each merged row stays
@@ -404,9 +405,13 @@ miniEl.addEventListener("dblclick", zoomAll);
 // Choosing a track shows it in the inspector's Track tab -- except from the
 // "Needs a look" tab (`keepTab`), where the list and the timeline already
 // show the selection and switching away would lose the user's place.
+//
+// opts.extend, opts.toggle and opts.keepMulti shape a multiple selection
+// (#77, selection.pointSelection()); a plain call selects t alone, so Follow,
+// the palette and Needs a look all drop one without knowing about it.
 export function selectTrack(t, opts) {
   if (!t) return;
-  S.selectedTrack = t;
+  S.selectedTrack = pointSelection(t, opts || {});
   if (!(opts && opts.keepTab)) showTab("track");
   renderList();
   renderTimeline();
@@ -438,7 +443,7 @@ tlRows.addEventListener("click", e => {
     if (t !== null && !splitAt(S.tracks[+hit.dataset.i], t)) toast("Too close to the edge of the track to split there");
     return;
   }
-  if (hit) { selectTrack(S.tracks[+hit.dataset.i]); return; }
+  if (hit) { selectTrack(S.tracks[+hit.dataset.i], clickMods(e)); return; }
   if (S.canSample && e.target.closest(".tl-pins") && !e.target.closest(".tl-pin")) {
     const t = timeAt(e);
     if (t !== null) sampleAt(Math.round(t));
