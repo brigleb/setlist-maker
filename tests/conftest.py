@@ -4,13 +4,14 @@ import os
 import socket
 import socketserver
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 
 import pytest
 
-from setlist_maker.editor import CorrectionsDB, Track, Tracklist
+from setlist_maker.tracklist import CorrectionsDB, Track, Tracklist
 
 # Hostnames a test may legitimately resolve: its own loopback server, nothing else.
 _ALLOWED_HOSTS = frozenset({"", "127.0.0.1", "::1", "localhost", "localhost."})
@@ -219,3 +220,24 @@ def sample_audio_files(temp_dir):
     (temp_dir / "readme.txt").write_text("not an audio file")
 
     return files
+
+
+@pytest.fixture
+def usage_error(monkeypatch, capsys):
+    """Run the CLI on ``argv`` and expect argparse to refuse it.
+
+    Returns stderr. Asserts what makes it a *usage* error rather than a failed
+    run: exit status 2, and nothing on stdout.
+    """
+    from setlist_maker import cli
+
+    def run(*argv: str) -> str:
+        monkeypatch.setattr(sys, "argv", ["setlist-maker", *argv])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        out, err = capsys.readouterr()
+        assert exc.value.code == 2, err
+        assert out == ""
+        return err
+
+    return run

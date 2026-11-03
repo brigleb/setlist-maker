@@ -10,7 +10,6 @@ from mutagen.id3 import TIT2, TPE1
 from mutagen.mp3 import MP3
 
 from setlist_maker.chapters import embed_chapters
-from setlist_maker.editor import Track
 from setlist_maker.episode import (
     clean_tag,
     config_path,
@@ -20,6 +19,7 @@ from setlist_maker.episode import (
     remembered_artist,
     save_episode_tags,
 )
+from setlist_maker.tracklist import Track
 from tests.test_chapters import _make_silent_mp3, _make_test_jpeg
 from tests.test_web_editor import _ctx, running_server
 
@@ -174,11 +174,12 @@ def test_ffprobe_reads_the_tags_and_the_chapters_in_order(mp3):
 def test_chapters_for_a_tracklist_uses_the_saved_or_default_tags(
     sample_tracklist, tmp_path, monkeypatch
 ):
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     embedded = {}
     monkeypatch.setattr(
-        "setlist_maker.cli.embed_chapters", lambda **kw: embedded.update(kw) or kw["audio_path"]
+        "setlist_maker.chapters.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
     )
     md = tmp_path / SET
     embed_chapters_for_tracklist(

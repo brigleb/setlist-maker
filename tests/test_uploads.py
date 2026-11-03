@@ -279,7 +279,7 @@ def test_chapters_endpoint_embeds_the_saved_tracklist(sample_tracklist, tmp_path
         calls.append((audio_path, tracklist_path))
         return 4, 3, True
 
-    monkeypatch.setattr("setlist_maker.cli.embed_chapters_for_tracklist", fake_embed)
+    monkeypatch.setattr("setlist_maker.web_editor.embed_chapters_for_tracklist", fake_embed)
     ctx = _ctx(sample_tracklist, tmp_path, audio_path=audio)
     with running_server(ctx) as base:
         with urllib.request.urlopen(f"{base}/api/tracklist") as r:
@@ -316,7 +316,8 @@ def test_chapters_endpoint_needs_an_mp3_and_no_live_run(sample_tracklist, tmp_pa
 def _capture_embed(monkeypatch):
     embedded = {}
     monkeypatch.setattr(
-        "setlist_maker.cli.embed_chapters", lambda **kw: embedded.update(kw) or kw["audio_path"]
+        "setlist_maker.chapters.embed_chapters",
+        lambda **kw: embedded.update(kw) or kw["audio_path"],
     )
     return embedded
 
@@ -324,7 +325,7 @@ def _capture_embed(monkeypatch):
 def test_embed_uses_the_saved_cover_and_uploaded_art(
     sample_tracklist, tmp_path, monkeypatch, offline
 ):
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     md = tmp_path / "set_tracklist.md"
     ref = store_upload(artwork_dir_for(md), image_bytes(color=(10, 200, 30)))
@@ -347,7 +348,7 @@ def test_embed_uses_the_saved_cover_and_uploaded_art(
 def test_embed_cover_precedence_and_no_artwork(sample_tracklist, tmp_path, monkeypatch, offline):
     """--cover outranks the saved cover; the saved cover, like --cover, is
     embedded even with --no-artwork."""
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     md = tmp_path / "set_tracklist.md"
     set_episode_cover(md, store_upload(artwork_dir_for(md), image_bytes(color=(20, 20, 220))))

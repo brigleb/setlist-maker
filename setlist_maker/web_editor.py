@@ -26,7 +26,11 @@ from setlist_maker.artwork import CHAPTER_IMAGE_SIZE, is_fetchable_url, resize_c
 from setlist_maker.artwork_cache import artwork_options, chapter_image, source_artwork
 from setlist_maker.audio import probe_duration_seconds
 from setlist_maker.boundary import EngineConfig
-from setlist_maker.editor import (
+from setlist_maker.chapters import embed_chapters_for_tracklist
+from setlist_maker.episode import episode_tags, save_episode_tags
+from setlist_maker.peaks import peaks_for
+from setlist_maker.sampler import SampleRequests, SampleRequestsClosed, ShazamSampler
+from setlist_maker.tracklist import (
     CorrectionsDB,
     Track,
     Tracklist,
@@ -34,9 +38,6 @@ from setlist_maker.editor import (
     resolve_audio_path,
     save_tracklist,
 )
-from setlist_maker.episode import episode_tags, save_episode_tags
-from setlist_maker.peaks import peaks_for
-from setlist_maker.sampler import SampleRequests, SampleRequestsClosed, ShazamSampler
 from setlist_maker.uploads import (
     MAX_UPLOAD_BYTES,
     UploadError,
@@ -990,9 +991,6 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "already embedding"}, HTTPStatus.CONFLICT)
             return
         try:
-            # Imported here: cli imports this module, so a top-level import is a cycle.
-            from setlist_maker.cli import embed_chapters_for_tracklist
-
             # A save landing mid-embed would change the tracklist being read.
             with ctx.state_lock:
                 chapters, images, cover = embed_chapters_for_tracklist(

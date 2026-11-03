@@ -15,8 +15,8 @@ import setlist_maker.cli as cli
 import setlist_maker.web_editor as web_editor
 from setlist_maker.adaptive import live_snapshot, load_probes, process_single_file_adaptive
 from setlist_maker.boundary import Probe
-from setlist_maker.editor import Track, Tracklist
 from setlist_maker.sampler import SampleRequests, SampleRequestsClosed
+from setlist_maker.tracklist import Track, Tracklist
 from setlist_maker.web_editor import WatchSession
 from tests.test_adaptive_driver import _oracle, _wire
 from tests.test_cli_adaptive import _args
@@ -274,10 +274,8 @@ def fake_watch(monkeypatch):
     return FakeWatch
 
 
-def test_watch_and_edit_are_exclusive(tmp_path, capsys):
-    with pytest.raises(SystemExit):
-        cli.cmd_identify(_args(tmp_path, watch=True, edit=True))
-    assert "--watch" in capsys.readouterr().out
+def test_watch_and_edit_are_exclusive(usage_error):
+    assert "--edit: not allowed with argument --watch" in usage_error("s.mp3", "--watch", "-e")
 
 
 def test_watch_hands_its_questions_to_the_adaptive_run(tmp_path, monkeypatch, fake_watch):

@@ -161,7 +161,7 @@ This opens a small editor in your browser, served from a local-only
 preview audio with a real scrubber (no ffplay/macOS requirement — it works
 anywhere a browser does). **Save** writes the same `.md` + `.json` outputs;
 **Done** closes the server and returns to the CLI (so `--web-edit --chapters`
-still chains). `--edit` and `--web-edit` cannot be combined.
+still chains). `--edit`, `--web-edit` and `--watch` are one choice: pass at most one.
 
 Above the list sits a **timeline** of the whole set: one row per hour, a
 thumbnail at each track's start, and a pin for every sample Shazam took (dark

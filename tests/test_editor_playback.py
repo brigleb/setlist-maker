@@ -8,7 +8,8 @@ routine in asyncio.run(), matching how the app is driven at runtime.
 import asyncio
 from unittest.mock import patch
 
-from setlist_maker.editor import Track, Tracklist, TracklistEditor
+from setlist_maker.editor import TracklistEditor
+from setlist_maker.tracklist import Track, Tracklist
 
 
 class FakeController:

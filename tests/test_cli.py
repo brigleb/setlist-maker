@@ -10,15 +10,19 @@ import pytest
 from setlist_maker.call_log import LOG_FILENAME
 from setlist_maker.cli import (
     _chain_chapters_after_identify,
-    _load_tracklist_with_artwork_urls,
     cmd_identify,
 )
-from setlist_maker.editor import Track, Tracklist
 from setlist_maker.identify import (
     ARTIST_SIMILARITY_THRESHOLD,
     SIMILARITY_THRESHOLD,
     SINGLETON_CONFIDENCE_KEEP,
 )
+from setlist_maker.tracklist import Track, Tracklist, load_tracklist
+
+
+def artwork_urls(tracklist: Tracklist) -> dict[int, str]:
+    """Which tracks the sidecar gave a cover URL, by position."""
+    return {i: t.coverart_url for i, t in enumerate(tracklist.tracks) if t.coverart_url}
 
 
 def _identify_args(**overrides):
@@ -165,18 +169,13 @@ class TestIdentifyTuningFlags:
 
         assert mock_process.call_args.kwargs["allow_partial"] is True
 
-    def test_out_of_range_threshold_exits(self, capsys):
-        """An out-of-range tuning value fails fast before any processing."""
-        with (
-            patch("setlist_maker.cli.get_audio_file") as mock_file,
-            patch("setlist_maker.cli.process_single_file", new=AsyncMock()) as mock_process,
-            pytest.raises(SystemExit),
-        ):
-            cmd_identify(_identify_args(title_threshold=1.5))
+    def test_out_of_range_threshold_is_a_usage_error(self, usage_error):
+        """An out-of-range tuning value is refused while parsing, before any work."""
+        with patch("setlist_maker.cli.process_single_file", new=AsyncMock()) as mock_process:
+            err = usage_error("set.mp3", "--title-threshold", "1.5")
 
-        mock_file.assert_not_called()
         mock_process.assert_not_called()
-        assert "between 0.0 and 1.0" in capsys.readouterr().out
+        assert "--title-threshold: must be between 0.0 and 1.0 (got 1.5)" in err
 
 
 class TestIdentifyReusesExistingTracklist:
@@ -303,7 +302,7 @@ class TestChainChaptersAfterIdentify:
 
 
 class TestLoadTracklistWithArtworkUrls:
-    """Tests for _load_tracklist_with_artwork_urls."""
+    """Tests for load_tracklist: the markdown joined to its JSON sidecar."""
 
     def _write_tracklist_files(self, temp_dir, tracks_json, markdown):
         """Helper to write both markdown and JSON sidecar files."""
@@ -340,7 +339,8 @@ class TestLoadTracklistWithArtworkUrls:
         ]
 
         md_path = self._write_tracklist_files(temp_dir, tracks_json, markdown)
-        tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+        tracklist = load_tracklist(md_path)
+        urls = artwork_urls(tracklist)
 
         assert len(tracklist.tracks) == 2
         assert tracklist.tracks[0].coverart_url == "https://example.com/art1.jpg"
@@ -380,7 +380,8 @@ Peaked on 1. **Artist One** - Track One (0:00), a line shaped like a track.
         ]
 
         md_path = self._write_tracklist_files(temp_dir, tracks_json, markdown)
-        tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+        tracklist = load_tracklist(md_path)
+        urls = artwork_urls(tracklist)
 
         assert tracklist.summary == (
             "Peaked on 1. **Artist One** - Track One (0:00), a line shaped like a track."
@@ -429,7 +430,8 @@ Peaked on 1. **Artist One** - Track One (0:00), a line shaped like a track.
         ]
 
         md_path = self._write_tracklist_files(temp_dir, tracks_json, markdown)
-        tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+        tracklist = load_tracklist(md_path)
+        urls = artwork_urls(tracklist)
 
         assert [(t.artist, t.title) for t in tracklist.tracks] == [
             ("Artist One", "Track One"),
@@ -473,7 +475,8 @@ Peaked on 1. **Artist One** - Track One (0:00), a line shaped like a track.
         ]
 
         md_path = self._write_tracklist_files(temp_dir, tracks_json, markdown)
-        tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+        tracklist = load_tracklist(md_path)
+        urls = artwork_urls(tracklist)
 
         # Track at 0:00 should get art1
         assert tracklist.tracks[0].coverart_url == "https://example.com/art1.jpg"
@@ -500,7 +503,9 @@ Peaked on 1. **Artist One** - Track One (0:00), a line shaped like a track.
         )
         (temp_dir / "test_tracklist.json").write_text(sidecar)
 
-        tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+        tracklist = load_tracklist(md_path)
+
+        urls = artwork_urls(tracklist)
 
         assert [t.title for t in tracklist.tracks] == ["Track One"]
         assert urls == {}
@@ -517,7 +522,9 @@ Peaked on 1. **Artist One** - Track One (0:00), a line shaped like a track.
         md_path = temp_dir / "test_tracklist.md"
         md_path.write_text(markdown)
 
-        tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+        tracklist = load_tracklist(md_path)
+
+        urls = artwork_urls(tracklist)
 
         assert len(tracklist.tracks) == 1
         assert urls == {}
@@ -535,7 +542,8 @@ Peaked on 1. **Artist One** - Track One (0:00), a line shaped like a track.
         ]
 
         md_path = self._write_tracklist_files(temp_dir, tracks_json, markdown)
-        tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+        tracklist = load_tracklist(md_path)
+        urls = artwork_urls(tracklist)
 
         assert tracklist.tracks[0].coverart_url is None
         assert urls == {}
@@ -609,7 +617,7 @@ def test_md_edit_path_previews_the_same_key_chapters_embeds(monkeypatch, tmp_pat
         cmd_identify(args)
 
     editor_tracklist = mock_web.call_args.args[0]
-    chapters_tracklist, _urls = _load_tracklist_with_artwork_urls(md_path)
+    chapters_tracklist = load_tracklist(md_path)
 
     def keys(tracklist):
         return [
@@ -624,7 +632,7 @@ def test_md_edit_path_previews_the_same_key_chapters_embeds(monkeypatch, tmp_pat
 def test_embed_chapters_reuses_cached_artwork(monkeypatch, tmp_path, sample_tracklist):
     """A composite already generated in the editor is not re-fetched at embed time."""
     from setlist_maker import artwork_cache
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setattr(
@@ -644,7 +652,7 @@ def test_embed_chapters_reuses_cached_artwork(monkeypatch, tmp_path, sample_trac
 
     embedded = {}
     monkeypatch.setattr(
-        "setlist_maker.cli.embed_chapters",
+        "setlist_maker.chapters.embed_chapters",
         lambda **kw: embedded.update(kw) or kw["audio_path"],
     )
 
@@ -684,7 +692,7 @@ def test_episode_cover_skips_a_track_with_no_artwork(monkeypatch, tmp_path, samp
 
     from PIL import Image
 
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
@@ -697,7 +705,7 @@ def test_episode_cover_skips_a_track_with_no_artwork(monkeypatch, tmp_path, samp
 
     embedded = {}
     monkeypatch.setattr(
-        "setlist_maker.cli.embed_chapters",
+        "setlist_maker.chapters.embed_chapters",
         lambda **kw: embedded.update(kw) or kw["audio_path"],
     )
 
@@ -731,7 +739,7 @@ def test_episode_cover_falls_through_when_source_art_is_gone(
     from PIL import Image
 
     from setlist_maker import artwork_cache
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
@@ -760,7 +768,7 @@ def test_episode_cover_falls_through_when_source_art_is_gone(
 
     embedded = {}
     monkeypatch.setattr(
-        "setlist_maker.cli.embed_chapters",
+        "setlist_maker.chapters.embed_chapters",
         lambda **kw: embedded.update(kw) or kw["audio_path"],
     )
 
@@ -788,7 +796,7 @@ def test_episode_cover_reuses_cached_source_art(monkeypatch, tmp_path, sample_tr
     there, the episode-cover branch is never entered.
     """
     from setlist_maker import artwork_cache
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
@@ -811,7 +819,7 @@ def test_episode_cover_reuses_cached_source_art(monkeypatch, tmp_path, sample_tr
 
     embedded = {}
     monkeypatch.setattr(
-        "setlist_maker.cli.embed_chapters",
+        "setlist_maker.chapters.embed_chapters",
         lambda **kw: embedded.update(kw) or kw["audio_path"],
     )
 
@@ -824,7 +832,7 @@ def _capture_embed(monkeypatch):
     """Intercept embed_chapters and return the kwargs dict it was called with."""
     embedded = {}
     monkeypatch.setattr(
-        "setlist_maker.cli.embed_chapters",
+        "setlist_maker.chapters.embed_chapters",
         lambda **kw: embedded.update(kw) or kw["audio_path"],
     )
     return embedded
@@ -838,7 +846,7 @@ def test_cover_image_replaces_episode_cover_and_leaves_chapter_art_alone(
 
     from PIL import Image
 
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
@@ -867,7 +875,7 @@ def test_cover_image_replaces_episode_cover_and_leaves_chapter_art_alone(
 
 def test_cover_image_is_embedded_even_with_no_artwork(monkeypatch, tmp_path, sample_tracklist):
     """--cover --no-artwork: the hand-picked cover survives, per-track art is skipped."""
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     embedded = _capture_embed(monkeypatch)
     cover = _jpeg((20, 200, 30))
@@ -886,7 +894,7 @@ def test_no_cover_keeps_deriving_from_first_track(monkeypatch, tmp_path, sample_
 
     from PIL import Image
 
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     track_art = (200, 20, 21)
@@ -902,19 +910,28 @@ def test_no_cover_keeps_deriving_from_first_track(monkeypatch, tmp_path, sample_
     assert cover.getpixel((0, 0))[0] > cover.getpixel((0, 0))[1]
 
 
-def test_cover_without_chapters_is_rejected(tmp_path, capsys):
+def test_cover_without_chapters_is_rejected(tmp_path, usage_error):
     """--cover only means something for chapter embedding; say so instead of ignoring it."""
-    import pytest
-
-    from setlist_maker.cli import cmd_identify
-
     cover = tmp_path / "cover.jpg"
     cover.write_bytes(_jpeg((20, 200, 30)))
 
-    with pytest.raises(SystemExit) as exc:
-        cmd_identify(_identify_args(cover=str(cover), chapters=False))
-    assert exc.value.code == 1
-    assert "--chapters" in capsys.readouterr().out
+    assert "add --chapters" in usage_error("set.mp3", "--cover", str(cover))
+
+
+@pytest.mark.parametrize(
+    "argv, message",
+    [
+        (["--edit", "--web-edit"], "not allowed with argument -e/--edit"),
+        (["--edit", "--watch"], "not allowed with argument -e/--edit"),
+        (["--stride", "0"], "--stride: must be greater than 0"),
+        (["--precision", "fast"], "--precision: not a number: 'fast'"),
+        (["--budget", "soon"], "--budget: invalid duration"),
+    ],
+)
+def test_usage_errors_exit_2_on_stderr(usage_error, argv, message):
+    """A bad flag is argparse's to report: stderr, exit 2, with or without `identify`."""
+    assert message in usage_error("identify", "set.mp3", *argv)
+    assert message in usage_error(*argv, "set.mp3")
 
 
 def test_missing_cover_file_fails_before_any_work(tmp_path, capsys):
@@ -926,7 +943,7 @@ def test_missing_cover_file_fails_before_any_work(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         _resolve_cover(str(tmp_path / "nope.jpg"))
     assert exc.value.code == 1
-    assert "not found" in capsys.readouterr().out
+    assert "not found" in capsys.readouterr().err
 
 
 def test_episode_cover_prefers_the_starred_track(monkeypatch, tmp_path, sample_tracklist):
@@ -940,7 +957,7 @@ def test_episode_cover_prefers_the_starred_track(monkeypatch, tmp_path, sample_t
 
     from PIL import Image
 
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
@@ -959,7 +976,7 @@ def test_episode_cover_prefers_the_starred_track(monkeypatch, tmp_path, sample_t
 
     embedded = {}
     monkeypatch.setattr(
-        "setlist_maker.cli.embed_chapters",
+        "setlist_maker.chapters.embed_chapters",
         lambda **kw: embedded.update(kw) or kw["audio_path"],
     )
 
@@ -982,7 +999,7 @@ def test_episode_cover_falls_back_when_the_starred_track_has_no_art(
 
     from PIL import Image
 
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     art_color = (200, 20, 21)
@@ -995,7 +1012,7 @@ def test_episode_cover_falls_back_when_the_starred_track_has_no_art(
 
     embedded = {}
     monkeypatch.setattr(
-        "setlist_maker.cli.embed_chapters",
+        "setlist_maker.chapters.embed_chapters",
         lambda **kw: embedded.update(kw) or kw["audio_path"],
     )
 
@@ -1013,7 +1030,7 @@ def test_explicit_cover_flag_still_outranks_a_starred_track(
 ):
     """--cover is an explicit override typed at the moment of the run; the star
     is a saved preference. The flag wins, and costs no artwork lookup."""
-    from setlist_maker.cli import embed_chapters_for_tracklist
+    from setlist_maker.chapters import embed_chapters_for_tracklist
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setattr(
@@ -1024,7 +1041,7 @@ def test_explicit_cover_flag_still_outranks_a_starred_track(
 
     embedded = {}
     monkeypatch.setattr(
-        "setlist_maker.cli.embed_chapters",
+        "setlist_maker.chapters.embed_chapters",
         lambda **kw: embedded.update(kw) or kw["audio_path"],
     )
 
@@ -1036,7 +1053,7 @@ def test_explicit_cover_flag_still_outranks_a_starred_track(
 
 def test_sidecar_round_trips_the_curation_flags(tmp_path):
     """A curated choice saved by the editor has to reach a later chapters run."""
-    from setlist_maker.cli import _load_tracklist_with_artwork_urls
+    from setlist_maker.tracklist import load_tracklist
 
     md_path = tmp_path / "set_tracklist.md"
     md_path.write_text(
@@ -1060,7 +1077,9 @@ def test_sidecar_round_trips_the_curation_flags(tmp_path):
         )
     )
 
-    tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+    tracklist = load_tracklist(md_path)
+
+    urls = artwork_urls(tracklist)
 
     assert [t.is_episode_cover for t in tracklist.tracks] == [False, True]
     assert tracklist.tracks[1].artwork_pinned is True
@@ -1069,7 +1088,7 @@ def test_sidecar_round_trips_the_curation_flags(tmp_path):
 
 def test_sidecar_without_curation_flags_still_loads(tmp_path):
     """Sidecars written before this feature carry neither key."""
-    from setlist_maker.cli import _load_tracklist_with_artwork_urls
+    from setlist_maker.tracklist import load_tracklist
 
     md_path = tmp_path / "set_tracklist.md"
     md_path.write_text(
@@ -1080,7 +1099,8 @@ def test_sidecar_without_curation_flags_still_loads(tmp_path):
         json.dumps([{"timestamp": 0, "coverart_url": "https://cdn.shazam.com/a.jpg"}])
     )
 
-    tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+    tracklist = load_tracklist(md_path)
+
     assert tracklist.tracks[0].coverart_url == "https://cdn.shazam.com/a.jpg"
     assert tracklist.tracks[0].artwork_pinned is False
     assert tracklist.tracks[0].is_episode_cover is False
@@ -1089,7 +1109,7 @@ def test_sidecar_without_curation_flags_still_loads(tmp_path):
 def test_sidecar_with_a_non_string_coverart_url_does_not_crash(tmp_path):
     """A hand-edited sidecar holding a number here would reach cache_key's str
     join and resize_cover_art_url's re.sub, both outside the loader's guard."""
-    from setlist_maker.cli import _load_tracklist_with_artwork_urls
+    from setlist_maker.tracklist import load_tracklist
 
     md_path = tmp_path / "set_tracklist.md"
     md_path.write_text(
@@ -1098,7 +1118,9 @@ def test_sidecar_with_a_non_string_coverart_url_does_not_crash(tmp_path):
     )
     md_path.with_suffix(".json").write_text(json.dumps([{"timestamp": 0, "coverart_url": 42}]))
 
-    tracklist, urls = _load_tracklist_with_artwork_urls(md_path)
+    tracklist = load_tracklist(md_path)
+
+    urls = artwork_urls(tracklist)
     assert tracklist.tracks[0].coverart_url is None
     assert urls == {}
 

@@ -72,7 +72,7 @@ def test_peaks_are_cached_until_the_file_changes(clip, monkeypatch):
 
 
 def _serve(tmp_path, audio_path):
-    from setlist_maker.editor import Track, Tracklist
+    from setlist_maker.tracklist import Track, Tracklist
     from setlist_maker.web_editor import EditorContext, create_server
 
     ctx = EditorContext(

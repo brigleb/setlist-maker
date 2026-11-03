@@ -91,7 +91,7 @@ def test_sequential_flag_routes_to_old_path(tmp_path, monkeypatch):
 def test_budget_is_parsed_and_forwarded(tmp_path, monkeypatch):
     seen = _capture(monkeypatch)
     with pytest.raises(SystemExit):
-        cli.cmd_identify(_args(tmp_path, budget="2h"))
+        cli.cmd_identify(_args(tmp_path, budget=cli._budget("2h")))
     assert seen["adaptive"]["budget_seconds"] == 7200.0
 
 
@@ -161,11 +161,9 @@ def test_call_log_still_reaches_the_default_pipeline(tmp_path, monkeypatch):
     assert seen["adaptive"]["call_log"] is None
 
 
-def test_stride_must_exceed_refine_window(tmp_path, monkeypatch, capsys):
-    _capture(monkeypatch)
-    with pytest.raises(SystemExit):
-        cli.cmd_identify(_args(tmp_path, stride=10.0, refine_window=12.0))
-    assert "--stride" in capsys.readouterr().out
+def test_stride_must_exceed_refine_window(usage_error):
+    err = usage_error("set.mp3", "--stride", "10", "--refine-window", "12")
+    assert "--stride (10.0) must exceed --refine-window (12.0)" in err
 
 
 # --- resume hint -----------------------------------------------------------

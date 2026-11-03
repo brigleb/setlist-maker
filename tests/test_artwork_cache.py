@@ -351,7 +351,7 @@ def test_corrected_track_searches_on_new_metadata_not_the_stale_url(monkeypatch)
     regenerating the same wrong picture.
     """
     from setlist_maker.artwork_cache import source_artwork
-    from setlist_maker.editor import Track, apply_track_edit
+    from setlist_maker.tracklist import Track, apply_track_edit
 
     track = Track(
         timestamp=0,
