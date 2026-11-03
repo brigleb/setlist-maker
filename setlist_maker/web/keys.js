@@ -13,14 +13,15 @@ import { audio, el, playerEl, pplayEl, toast } from "./dom.js";
 import { keptTrackAt } from "./model.js";
 import { redo, undo } from "./history.js";
 import { nextTrack, playSelected, prevTrack, shuttle, skip, toggleFollow } from "./player.js";
-import { mergeInto, moveStart, splitAt, startOf } from "./edits.js";
+import { mergeSelection, moveStart, splitAt, startOf } from "./edits.js";
 import { identifyAt } from "./inspector.js";
 import { dialogOpen, sheet } from "./dialog.js";
-import { selectTrack, zoomAll, zoomBy, zoomToTrack } from "./grid.js";
-import { focusSelected, startEdit } from "./list.js";
+import { renderTimeline, selectTrack, zoomAll, zoomBy, zoomToTrack } from "./grid.js";
+import { focusSelected, renderList, startEdit } from "./list.js";
 import { save } from "./main.js";
 import { openPalette } from "./palette.js";
 import { selectedMenu } from "./commands.js";
+import { clearMulti } from "./selection.js";
 
 // Matches a key with exactly these modifiers. ⌘ and Ctrl count as one.
 const key = (names, mods = {}) => e => [].concat(names).includes(e.key)
@@ -42,13 +43,15 @@ export const KEYMAP = [
   // ---- tracks ----
   { group: "Tracks", keys: ["↑", "↓"], label: "Select the previous / next track",
     match: key(["ArrowUp", "ArrowDown"]), run: e => moveSelection(e.key === "ArrowUp" ? -1 : 1) },
+  { group: "Tracks", keys: ["⇧↑", "⇧↓"], label: "Extend the selection up / down",
+    match: key(["ArrowUp", "ArrowDown"], { shift: true }), run: e => moveSelection(e.key === "ArrowUp" ? -1 : 1, true) },
   { group: "Tracks", keys: ["Enter", "F2"], label: "Rename the selected track (Enter moves to the next field, Esc cancels)",
     match: key(["Enter", "F2"]), need: "select",
     run: e => { if (e.key === "Enter" && onButton()) return false; startEdit(S.selectedTrack, "artist", { select: true }); } },
-  { group: "Tracks", keys: ["⇧⌫"], label: "Merge the selected track into the next one",
-    match: key(["Backspace", "Delete"], { shift: true }), need: "select", run: () => mergeInto(S.selectedTrack, "next") },
-  { group: "Tracks", keys: ["⌫"], label: "Merge the selected track into the previous one; on a merged track, bring it back",
-    match: key(["Backspace", "Delete"]), need: "select", run: () => mergeInto(S.selectedTrack, "prev") },
+  { group: "Tracks", keys: ["⇧⌫"], label: "Merge the selected track into the next one; selected tracks in a run into the last",
+    match: key(["Backspace", "Delete"], { shift: true }), need: "select", run: () => mergeSelection("next") },
+  { group: "Tracks", keys: ["⌫"], label: "Merge the selected track into the previous one; selected tracks in a run into the first; merged tracks, bring them back",
+    match: key(["Backspace", "Delete"]), need: "select", run: () => mergeSelection("prev") },
   { group: "Tracks", keys: ["⇧F10"], label: "The selected track's actions (the menu key too)",
     match: e => e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey),
     need: "select", run: () => { selectedMenu(); } },
@@ -93,7 +96,13 @@ export const KEYMAP = [
   { group: "Set", keys: ["⌘S"], label: "Save", match: () => false },
   { group: "Set", keys: ["⌘Z", "⇧⌘Z"], label: "Undo / redo", match: () => false },
   { group: "Set", keys: ["?"], label: "Show these shortcuts", match: punct(["?"]), run: () => openSheet() },
-  { group: "Set", keys: ["Esc"], label: "Close a panel, cancel an edit or a drag", match: () => false },
+  { group: "Set", keys: ["Esc"], label: "Close a panel, cancel an edit or a drag, or select just one track again",
+    match: key("Escape"), run: () => {
+      if (!S.selected.size) return false;
+      clearMulti();
+      renderList();
+      renderTimeline();
+    } },
 ];
 
 // What the mouse does, for the sheet. It used to be the grey line under the
@@ -102,6 +111,8 @@ export const MOUSE = [
   ["⌘-scroll or pinch", "Zoom the timeline"],
   ["Scroll", "Pan the timeline"],
   ["Click a track", "Select it"],
+  ["⇧-click a track", "Select every track from the selected one to it"],
+  ["⌘-click a track", "Add it to the selection, or take it out"],
   ["Click its artist, title or start", "Edit it in place"],
   ["Double-click the timeline", "Play from there"],
   ["⌥-click a track", "Split it there"],
@@ -112,14 +123,15 @@ export const MOUSE = [
   ["Right-click a track, a sample or the timeline", "Its actions"],
 ];
 
-function moveSelection(d) {
+// ↑/↓, and with ⇧ (extend) the selection grows or shrinks from its anchor.
+function moveSelection(d, extend) {
   if (!S.tracks.length) return;
   const cur = S.tracks.indexOf(S.selectedTrack);
   // Nothing selected yet: start from the playing track, else an end.
   const from = cur !== -1 ? cur : S.tracks.indexOf(S.playingTrack);
   const i = from === -1 ? (d > 0 ? 0 : S.tracks.length - 1)
     : cur === -1 ? from : Math.max(0, Math.min(S.tracks.length - 1, cur + d));
-  selectTrack(S.tracks[i]);
+  selectTrack(S.tracks[i], extend && cur !== -1 ? { extend: true } : null);
   focusSelected();
 }
 

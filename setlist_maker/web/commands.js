@@ -25,7 +25,8 @@ import { trackName } from "./util.js";
 import { keptTrackAt, setDuration, splitWindow } from "./model.js";
 import { redo, undo } from "./history.js";
 import { nextTrack, playAt, playFrom, playSelected, prevTrack, skip, toggleFollow } from "./player.js";
-import { mergeBlocked, mergeInto, moveStart, setNames, splitAt, startOf } from "./edits.js";
+import { mergeBlocked, mergeInto, mergeSelection, mergeWords, moveStart, restoreSelection, setNames, splitAt, startOf,
+  tidyTitles, tidyable } from "./edits.js";
 import { identifyAt, sampleAt } from "./inspector.js";
 import { hasArtwork, setEpisodeCover, showArtwork } from "./artwork.js";
 import { selectTrack, timeAt, zoomAll, zoomBy, zoomToTrack } from "./grid.js";
@@ -36,6 +37,7 @@ import { openSheet } from "./keys.js";
 import { dialogOpen } from "./dialog.js";
 import { menuJustOpened, openMenu } from "./menu.js";
 import { keyOf } from "./ui.js";
+import { isMulti, isSelected, selection } from "./selection.js";
 
 const LIVE = "Editing opens when the run finishes";
 const NO_AUDIO = "The audio is still loading";
@@ -46,6 +48,12 @@ const now = () => audio.currentTime || 0;
 const indexOf = t => S.tracks.indexOf(t);
 const kept = () => S.tracks.filter(x => !x.rejected);
 const edit = c => (!c.track ? NO_TRACK : S.liveMode ? LIVE : true);
+// The context is a multiple selection (#77): the menu's track is one of
+// several selected, or the palette's (the selected track) is. The single-track
+// merge commands then stand aside for the batch ones, so ⌫ means one thing.
+const batch = c => !!c.track && isSelected(c.track) && isMulti();
+// What Tidy acts on: the selection when the track is part of it, else the track.
+const tidyTargets = c => (!c.track ? [] : isSelected(c.track) ? selection() : [c.track]);
 // A toolbar or panel button's own click, so its handler stays the one place
 // that action lives. Left out while the button is hidden.
 const button = id => document.getElementById(id);
@@ -101,17 +109,32 @@ export const COMMANDS = [
     when: edit, run: c => addBelow(indexOf(c.track)) },
   { id: "merge-prev", group: "Track", label: "Merge the selected track into the previous one", keys: ["⌫"],
     menu: () => (kept().length === 1 ? "Reject" : "Merge into the previous track"),
-    when: c => (c.track && c.track.rejected ? false : edit(c) !== true ? edit(c) : mergeBlocked(c.track, "prev") || true),
+    when: c => (batch(c) || (c.track && c.track.rejected) ? false : edit(c) !== true ? edit(c) : mergeBlocked(c.track, "prev") || true),
     run: c => mergeInto(c.track, "prev") },
   { id: "merge-next", group: "Track", label: "Merge the selected track into the next one", keys: ["⇧⌫"],
     menu: "Merge into the next track",
-    when: c => (!c.track ? NO_TRACK : c.track.rejected || kept().length === 1 ? false
+    when: c => (!c.track ? NO_TRACK : batch(c) || c.track.rejected || kept().length === 1 ? false
       : S.liveMode ? LIVE : mergeBlocked(c.track, "next") || true),
     run: c => mergeInto(c.track, "next") },
   { id: "restore", group: "Track", label: "Bring the selected track back", keys: ["⌫"],
     menu: c => (TL.owners(S.tracks, setDuration())[indexOf(c.track)] === -1 ? "Bring it back" : "Unmerge"),
-    when: c => (c.track && c.track.rejected ? (S.liveMode ? LIVE : true) : false),
+    when: c => (!batch(c) && c.track && c.track.rejected ? (S.liveMode ? LIVE : true) : false),
     run: c => mergeInto(c.track, "prev") },
+  // ---- a multiple selection (#77) ----
+  { id: "merge-sel-prev", group: "Selection", label: () => mergeWords("prev"), keys: ["⌫"],
+    when: c => (!batch(c) || selection().every(t => t.rejected) ? false : S.liveMode ? LIVE : true),
+    run: () => mergeSelection("prev") },
+  { id: "merge-sel-next", group: "Selection", label: () => mergeWords("next"), keys: ["⇧⌫"],
+    when: c => (!batch(c) || selection().every(t => t.rejected) ? false : S.liveMode ? LIVE : true),
+    run: () => mergeSelection("next") },
+  { id: "restore-sel", group: "Selection", label: () => "Bring the " + selection().filter(t => t.rejected).length + " merged tracks back",
+    keys: () => (selection().every(t => t.rejected) ? ["⌫"] : null),
+    when: c => (!batch(c) || !selection().some(t => t.rejected) ? false : S.liveMode ? LIVE : true),
+    run: () => restoreSelection() },
+  { id: "tidy", group: "Selection",
+    label: c => (tidyTargets(c).length > 1 ? "Tidy the selected titles (remove remaster tags)" : "Tidy the title (remove its remaster tag)"),
+    when: c => (!tidyable(tidyTargets(c)).length ? false : S.liveMode ? LIVE : true),
+    run: c => tidyTitles(tidyTargets(c)) },
   { id: "artwork", group: "Track", label: "Artwork for the selected track…", menu: "Artwork…",
     when: c => (!c.track ? NO_TRACK : !hasArtwork(c.track) ? false : S.liveMode ? LIVE : true),
     run: c => showArtwork(c.track) },
@@ -187,7 +210,8 @@ export function resolve(cmd, c, where) {
   const words = where === "menu" && cmd.menu ? text(cmd.menu, c) : text(cmd.label, c);
   // S and I act on the playhead, so their keys don't apply to a moment the
   // pointer picked.
-  const keys = cmd.keys && !(where === "menu" && c.pointer && cmd.playhead) ? cmd.keys : null;
+  const k = text(cmd.keys, c);
+  const keys = k && !(where === "menu" && c.pointer && cmd.playhead) ? k : null;
   return { label: words, keys, disabled: state === true ? "" : String(state), run: () => cmd.run(c) };
 }
 
@@ -200,16 +224,20 @@ export function paletteContext(cmd) {
 // ---- the context menus ----
 // Which commands each surface offers, in order; "-" is a separator.
 const MENUS = {
-  block: ["play-here", "play-start", "-", "split", "identify", "-", "rename", "merge-prev", "merge-next", "restore",
+  block: ["play-here", "play-start", "-", "split", "identify", "-", "rename", "merge-prev", "merge-next", "restore", "tidy",
     "-", "artwork", "cover", "-", "zoom-track", "copy-time"],
   row: ["play-start", "-", "split", "identify", "start-here", "-", "rename", "insert", "merge-prev", "merge-next", "restore",
-    "-", "artwork", "cover", "-", "zoom-track", "copy-time"],
+    "tidy", "-", "artwork", "cover", "-", "zoom-track", "copy-time"],
+  // A row or block that is one of several selected (#77): only what acts on
+  // them all, so nothing in it quietly applies to just the one clicked.
+  selection: ["merge-sel-prev", "merge-sel-next", "restore-sel", "tidy"],
   pin: ["play-sample", "use-name", "-", "copy-time"],
   moment: ["ask", "play-here", "-", "copy-time"],
 };
 export const MENU_IDS = MENUS;
 
 function menuItems(kind, c, heading) {
+  if ((kind === "row" || kind === "block") && batch(c)) { kind = "selection"; heading = selection().length + " tracks selected"; }
   const items = [{ heading }];
   for (const id of MENUS[kind]) {
     if (id === "-") { items.push("-"); continue; }
@@ -259,7 +287,7 @@ document.addEventListener("contextmenu", e => {
   if (row) {
     const t = S.tracks.find(x => String(keyOf(x)) === row.dataset.key);
     if (!t) return;
-    selectTrack(t, { keepTab: true });
+    selectTrack(t, { keepTab: true, keepMulti: true });
     focusSelected();  // where focus goes back to when the menu closes
     rowMenu(t, at);
     return;
@@ -280,7 +308,7 @@ document.addEventListener("contextmenu", e => {
   if (block) {
     const t = S.tracks[+block.dataset.i];
     if (!t || seconds === null) return;
-    selectTrack(t, { keepTab: true });
+    selectTrack(t, { keepTab: true, keepMulti: true });
     focusSelected();
     openMenu(menuItems("block", { track: t, at: seconds, pointer: true }, trackName(t) + " · " + TL.fmt(seconds)), at);
     return;

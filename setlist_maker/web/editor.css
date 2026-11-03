@@ -125,7 +125,8 @@ body.live .histbtn { display:none; }
 #list-head { position:sticky; top:0; z-index:3; height:28px; background:var(--card); border-bottom:1px solid var(--line);
   color:var(--muted); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
 .c-num { text-align:right; font-variant-numeric:tabular-nums; }
-.row { min-height:42px; padding-top:5px; padding-bottom:5px; border-bottom:1px solid var(--hairline); background:var(--card); cursor:default; }
+.row { min-height:42px; padding-top:5px; padding-bottom:5px; border-bottom:1px solid var(--hairline); background:var(--card); cursor:default;
+  -webkit-user-select:none; user-select:none; }  /* ⇧-click selects rows, not their text (#77) */
 .row:hover { background:var(--bg); }
 .row .idx, .row .len, .row .smp { color:var(--text-faint); font-size:12px; }
 .row .thumb { width:30px; height:30px; border-radius:5px; font-size:12px; }
@@ -383,6 +384,13 @@ body.tl-dragging, body.tl-dragging * { cursor:col-resize !important; user-select
 .tbtn:disabled { opacity:.45; cursor:default; }
 .tbtn.quiet { background:transparent; }
 .in-note { color:var(--muted); font-size:11.5px; margin-top:8px; line-height:1.4; }
+/* Several tracks selected (#77): the panel over the focused track's inspector. */
+.in-sel { margin:-2px 0 16px; padding:12px; border-radius:10px; background:var(--focus-bg);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
+.in-sel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+.in-sel-count { font-weight:650; font-size:14px; }
+.in-sel .in-acts { margin-top:10px; }
+.in-sel .act-tile { background:var(--card); }
 /* Icon | text | dismiss, with the fixes on their own line under the text so
    a long title never wraps a word at a time beside them. */
 .issue { display:grid; grid-template-columns:24px minmax(0,1fr) 24px; column-gap:10px; row-gap:8px; align-items:start; padding:10px 0; border-top:1px solid var(--hairline); cursor:pointer; }

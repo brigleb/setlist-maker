@@ -40,6 +40,10 @@ export async function load() {
   // revision, whose indices would land on other tracks.
   revision = data.revision === undefined ? null : data.revision;
   if (was) S.selectedTrack = S.tracks.find(t => t.timestamp === was.timestamp && t.artist === was.artist) || null;
+  // A multiple selection isn't carried over: after a merge has been saved its
+  // rows are gone, and nothing else reloads under the user.
+  S.selected = new Set();
+  S.anchor = S.selectedTrack;
   summaryEl.value = data.summary || "";
   autosizeSummary();
   epTitle.value = (data.episode && data.episode.title) || "";
@@ -208,6 +212,7 @@ export async function refreshLiveTracks() {
   const data = await (await fetch("/api/tracklist")).json();
   if (!S.liveMode || !data.live) return;  // the run finished meanwhile; load() owns the page now
   S.tracks = data.tracks;
+  S.selected = new Set();
   resetHistory();
   if (focus !== null) {
     const W = TL.windows(S.tracks, setDuration());
