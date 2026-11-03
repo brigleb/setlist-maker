@@ -18,9 +18,12 @@ uv run setlist-maker <audio_file_or_directory>
 # Run as module
 uv run python -m setlist_maker <audio_file_or_directory>
 
-# Lint with ruff
+# Lint with ruff (pyproject excludes *.md from formatting)
 uv run ruff check .
 uv run ruff format .
+
+# Type-check (pyright basic, against Python 3.10; config in pyproject.toml)
+uv run pyright
 
 # Run tests (~15s). A global `pytest` can't import the deps; use uv run or .venv/bin/pytest.
 uv run pytest
@@ -28,6 +31,13 @@ uv run pytest
 
 **System dependency:** Requires ffmpeg installed (`brew install ffmpeg` / `apt install ffmpeg`).
 Its bundled `ffplay` also powers the editor's audio preview (macOS only).
+
+**CI (#66)** is `.github/workflows/ci.yml`: ruff, `ruff format --check .`, pyright, then pytest
+on Ubuntu and macOS with Python 3.10 and 3.13, with ffmpeg and Node installed. A test that
+needs a program is marked `@pytest.mark.requires_tool("ffprobe")` (or `"node"`), which
+`conftest.py`'s `pytest_runtest_setup` skips without it, **except under `CI`, where it fails**:
+the ffprobe round trips guard #17 and #33. Don't use a bare `skipif(shutil.which(...))`.
+Pyright is held at 0 errors. A `# pyright: ignore[rule]` names its rule and says why.
 
 ## Architecture
 

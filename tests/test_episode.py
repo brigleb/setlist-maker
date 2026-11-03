@@ -1,7 +1,6 @@
 """The episode's title and artist (episode.py), and where they are written."""
 
 import json
-import shutil
 import subprocess
 import urllib.request
 
@@ -139,7 +138,7 @@ def test_embed_without_them_leaves_the_recorders_tags(mp3):
     assert str(tags["TPE1"]) == "DJ Disarray"
 
 
-@pytest.mark.skipif(shutil.which("ffprobe") is None, reason="ffprobe not installed")
+@pytest.mark.requires_tool("ffprobe")
 def test_ffprobe_reads_the_tags_and_the_chapters_in_order(mp3):
     """Extra top-level frames change the layout the chapter reordering walks."""
     images = {i: _make_test_jpeg(300 - 100 * i) for i in range(len(TRACKS))}

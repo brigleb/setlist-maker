@@ -19,13 +19,14 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
+from typing import cast
 from urllib.parse import parse_qs, urlparse
 
 from setlist_maker.adaptive import append_probe, live_snapshot, load_probes
 from setlist_maker.artwork import CHAPTER_IMAGE_SIZE, is_fetchable_url, resize_cover_art_url
 from setlist_maker.artwork_cache import artwork_options, chapter_image, source_artwork
 from setlist_maker.audio import probe_duration_seconds
-from setlist_maker.boundary import EngineConfig
+from setlist_maker.boundary import EngineConfig, Probe
 from setlist_maker.chapters import embed_chapters_for_tracklist
 from setlist_maker.episode import episode_tags, save_episode_tags
 from setlist_maker.peaks import peaks_for
@@ -237,7 +238,8 @@ def apply_edits(
                 )
             )
             continue
-        track = by_index.get(edit.get("index"))
+        index = edit.get("index")
+        track = by_index.get(index) if isinstance(index, int) else None
         if track is None:
             continue
         moved_to = _moved_start(edit, track)
@@ -274,7 +276,7 @@ def apply_edits(
         tracklist.tracks.sort(key=lambda t: t.timestamp)  # stable: keeps load order on ties
 
     if summary is not _UNSET:
-        tracklist.summary = _normalize_summary(summary)
+        tracklist.summary = _normalize_summary(cast("str | None", summary))
 
 
 def _load_page() -> str:
@@ -332,7 +334,7 @@ class EditorContext:
     progress_path: Path | None = None
     # Takes a second on the timeline and returns the Probe Shazam answered
     # with (see sampler.ShazamSampler). None disables click-to-sample.
-    sampler: Callable[[float], object] | None = None
+    sampler: Callable[[float], Probe] | None = None
     # Set while `identify --watch` is still identifying: the page is read-only
     # and everything it shows is replayed from the progress file.
     live: "LiveRun | None" = None
@@ -407,12 +409,16 @@ class LiveRun:
 class _Handler(BaseHTTPRequestHandler):
     """Request handler; reads session state from ``self.server.ctx``."""
 
-    def log_message(self, *args) -> None:  # silence default stderr logging
+    def log_message(self, format: str, *args: object) -> None:  # silence default stderr logging
         pass
 
     @property
+    def _server(self) -> "_EditorServer":
+        return cast(_EditorServer, self.server)  # create_server() is the only constructor
+
+    @property
     def _ctx(self) -> EditorContext:
-        return self.server.ctx
+        return self._server.ctx
 
     def _send_json(self, obj: dict, status: int = HTTPStatus.OK) -> None:
         body = json.dumps(obj).encode()
@@ -445,7 +451,7 @@ class _Handler(BaseHTTPRequestHandler):
         """
         host = self.headers.get("Host", "")
         name, sep, port = host.partition(":")
-        if sep and port == str(self.server.server_address[1]):
+        if sep and port == str(self._server.server_port):
             if name.lower() in _LOOPBACK_HOSTS:
                 return False
         self.send_error(HTTPStatus.FORBIDDEN, "invalid Host header")
@@ -525,7 +531,8 @@ class _Handler(BaseHTTPRequestHandler):
                 # Checked before anything is applied, so a bad cover saves nothing.
                 if not is_upload_ref(cover):
                     raise ValueError(f"episode cover must be an uploaded image -- got {cover!r}")
-                if not upload_path(artwork_dir_for(ctx.output_path), cover).exists():
+                stored = upload_path(artwork_dir_for(ctx.output_path), cover)
+                if stored is None or not stored.exists():
                     raise ValueError(f"uploaded image {cover} is missing")
             order = [id(t) for t in ctx.tracklist.tracks]
             apply_edits(
@@ -724,6 +731,7 @@ class _Handler(BaseHTTPRequestHandler):
         if live is not None:
             # The run takes it ahead of its own next probe, records it, and
             # saves it; nothing to append here.
+            assert live.requests is not None  # refused above
             try:
                 probe = live.requests.ask(t, timeout=LIVE_SAMPLE_TIMEOUT)
             except (SampleRequestsClosed, TimeoutError) as exc:
@@ -731,9 +739,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._send_json({"ok": True, "probe": probe_to_api(probe)})
             return
+        sampler, progress_path, audio_path = ctx.sampler, ctx.progress_path, ctx.audio_path
+        # _can_sample() checked all three
+        assert sampler is not None and progress_path is not None and audio_path is not None
         try:
-            probe = ctx.sampler(t)
-            append_probe(ctx.progress_path, probe, probe_duration_seconds(ctx.audio_path))
+            probe = sampler(t)
+            append_probe(progress_path, probe, probe_duration_seconds(audio_path))
         except Exception as exc:  # a handler that raises sends no response at all
             self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_GATEWAY)
             return
@@ -1068,11 +1079,17 @@ class _Handler(BaseHTTPRequestHandler):
                 remaining -= len(chunk)
 
 
+class _EditorServer(ThreadingHTTPServer):
+    """The server, carrying the session its handlers read (``_Handler._ctx``)."""
+
+    def __init__(self, ctx: EditorContext):
+        self.ctx = ctx
+        super().__init__(("127.0.0.1", 0), _Handler)
+
+
 def create_server(ctx: EditorContext) -> ThreadingHTTPServer:
     """Build a loopback HTTP server bound to an ephemeral port for ``ctx``."""
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    httpd.ctx = ctx
-    return httpd
+    return _EditorServer(ctx)
 
 
 def run_web_editor(

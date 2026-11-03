@@ -107,7 +107,8 @@ class BoundaryEngine:
         self._evidence: list[Evidence] = []  # sorted by mid; real probes only
         self._identity_by_index: list[object] = []  # parallel to self.probes
         self._clusters: list[tuple[str, str]] = []
-        self._cluster_meta: dict[tuple[str, str], dict] = {}
+        # Keyed by identity, which is typed `object` (see Evidence.identity).
+        self._cluster_meta: dict[object, dict] = {}
 
     # ---- identity --------------------------------------------------------
     def _identify(self, result: dict | None) -> tuple[str, str] | None:
@@ -218,6 +219,7 @@ class BoundaryEngine:
                     if round(pl.mid, 3) == lo and round(pr.mid, 3) == hi
                 )
                 p_start = self._resolved_by_prediction(*pair)
+                assert p_start is not None  # _status() said "resolved"
                 rmeta = self._cluster_meta.get(pair[1].identity) or {}
                 events.append(
                     {
@@ -836,7 +838,8 @@ class BoundaryEngine:
                     )
                     continue
             if ident is not None and len(run) == 1 and span < cfg.phantom_min:
-                conf = (run[0].probe.result or {}).get("confidence") or 0
+                probe = run[0].probe
+                conf = ((probe.result if probe else None) or {}).get("confidence") or 0
                 if conf < cfg.singleton_confidence_keep:
                     meta = self._cluster_meta.get(ident) or {}
                     drops.append(

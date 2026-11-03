@@ -22,6 +22,7 @@ import io
 import logging
 import re
 from pathlib import Path
+from typing import TypeGuard
 
 from PIL import Image
 
@@ -65,7 +66,7 @@ def cover_path_for(tracklist_path: Path) -> Path:
     return tracklist_path.with_name(f"{set_stem(tracklist_path)}_cover.jpg")
 
 
-def is_upload_ref(value: str | None) -> bool:
+def is_upload_ref(value: str | None) -> TypeGuard[str]:
     """True for a well-formed ``upload:<hash>.jpg`` reference."""
     return bool(value) and _REF.match(value) is not None
 
@@ -114,7 +115,7 @@ def normalize_image(data: bytes, max_edge: int = MAX_STORED_EDGE) -> bytes:
         left, top = (width - edge) // 2, (height - edge) // 2
         image = image.crop((left, top, left + edge, top + edge))
     if edge > max_edge:
-        image = image.resize((max_edge, max_edge), Image.LANCZOS)
+        image = image.resize((max_edge, max_edge), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     image.save(buf, format="JPEG", quality=90, optimize=True)
     return buf.getvalue()

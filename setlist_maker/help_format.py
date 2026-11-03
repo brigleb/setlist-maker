@@ -122,7 +122,8 @@ class ColorHelpParser(argparse.ArgumentParser):
         self._subcommand_action = action
         return action
 
-    def print_help(self, file: IO[str] | None = None) -> None:
+    # typeshed's `file` is SupportsWrite[str]; ours is narrower, and argparse only passes a stream.
+    def print_help(self, file: IO[str] | None = None) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
         stream = file or sys.stdout
         action = getattr(self, "_subcommand_action", None)
         console = Console(

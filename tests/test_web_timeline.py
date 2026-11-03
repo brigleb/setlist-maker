@@ -2,7 +2,7 @@
 
 The page has no JS harness, but these functions decide which tracks the editor
 calls broken and what one click does about it, so they are run under Node
-rather than asserted as substrings. Skipped where Node is not installed.
+rather than asserted as substrings. Skipped where Node is not installed, except under CI.
 """
 
 import json
@@ -13,7 +13,7 @@ from importlib.resources import files
 import pytest
 
 NODE = shutil.which("node")
-pytestmark = pytest.mark.skipif(NODE is None, reason="node is not installed")
+pytestmark = pytest.mark.requires_tool("node")
 
 SCRIPT = str(files("setlist_maker") / "web_timeline.js")
 

@@ -255,8 +255,8 @@ def save_progress(results: list, filepath: Path):
     atomic_write_text(filepath, json.dumps(serializable, indent=2))
 
 
-def load_progress(filepath: Path) -> list:
-    """Load previous progress if it exists."""
+def load_progress(filepath: Path) -> list | dict:
+    """Load previous progress if it exists: a sequential list, or an adaptive v2 object."""
     if filepath.exists():
         with open(filepath, "r") as f:
             return json.load(f)

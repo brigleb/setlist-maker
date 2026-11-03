@@ -2,7 +2,6 @@
 
 import io
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -280,7 +279,7 @@ class TestPlayerCompatibility:
         assert header[:3] == b"ID3"
         assert header[3] == 3, f"tag is ID3v2.{header[3]}, players need v2.3"
 
-    @pytest.mark.skipif(shutil.which("ffprobe") is None, reason="ffprobe not installed")
+    @pytest.mark.requires_tool("ffprobe")
     def test_ffprobe_reads_chapters_with_artwork(self, temp_mp3, sample_tracks):
         """
         Round-trip through an independent parser with artwork embedded.
@@ -389,7 +388,7 @@ class TestChapterFrameOrder:
             tag_size = (tag_size << 7) | (byte & 0x7F)
         assert data[10 + tag_size :] == audio_bytes
 
-    @pytest.mark.skipif(shutil.which("ffprobe") is None, reason="ffprobe not installed")
+    @pytest.mark.requires_tool("ffprobe")
     def test_ffprobe_lists_chapters_in_order(self, temp_mp3, sample_tracks):
         """The real consumer that reads physical order must now see them chronological."""
         embed_chapters(
