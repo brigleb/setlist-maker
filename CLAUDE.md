@@ -528,8 +528,13 @@ CLI application with the following modules:
   a paste-a-URL box, upload and **Automatic** on the right. Only the grid scrolls. Candidates
   load when the dialog opens (they used to wait for a *Choose artwork…* click); the server caches
   each track's answer. The arrows walk the tiles and Enter is the tile's own click. Stepping
-  re-renders the grid, which drops a focused tile, so `keepFocus()` puts focus back on the ‹/›
-  button or the tile in use; a dialog without focus never sees its own keys. The ★ toggle is
+  re-renders the grid, which drops a focused tile, and at either end of the set the ‹/› just
+  pressed turns disabled, which drops focus too; `stepArtwork()` / `keepFocus()` put it back on
+  an enabled button or the tile in use, since a dialog without focus never sees its own keys. A
+  step waits 250ms before looking up its covers, and leaving a track aborts its lookup: the
+  browser allows six connections to this server, and lookups queued behind the network held them
+  all, so a Save sat waiting (measured: >15s after walking the set). `_send_json` treats the
+  aborted client's broken pipe as ordinary. The ★ toggle is
   disabled for a rejected track, which the sidecar does
   not carry (the server refuses the star for one too, so a stale client cannot clear a valid choice
   and store nothing in its place); and `[hidden] { display:none !important; }` is required because

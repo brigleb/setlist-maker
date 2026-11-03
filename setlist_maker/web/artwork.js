@@ -59,7 +59,7 @@ export function setPickNote(url) {
 export const hasArtwork = t => t.index !== undefined && t.index !== null && !!(t.artist || t.title);
 const walkable = t => hasArtwork(t) && !t.rejected;
 
-export function showArtwork(t) {
+export function showArtwork(t, opts) {
   artTrack = t;
   artUrlEl.value = "";
   if (t._art) {
@@ -86,9 +86,20 @@ export function showArtwork(t) {
   syncCoverButton();
   // The other covers load with the dialog now, rather than behind a button:
   // the server caches each track's answer, so a reopened track costs nothing.
-  loadAlternates(t);
+  // A step waits a moment first, so holding ⌘] across the set doesn't start
+  // a lookup for every track it passes.
+  clearTimeout(altTimer);
+  if (altAbort) altAbort.abort();
+  artGrid.innerHTML = '<div class="status">Searching iTunes, Deezer and Cover Art Archive…</div>';
+  if (opts && opts.step) altTimer = setTimeout(() => { if (artTrack === t) loadAlternates(t); }, 250);
+  else loadAlternates(t);
   if (!artDialog.open) artDialog.showModal();
 }
+let altTimer = null;
+// The lookup for the track on show. Leaving that track aborts it: the browser
+// allows six connections to this server, and lookups left queued behind the
+// network would hold them, so a Save would wait for covers nobody is looking at.
+let altAbort = null;
 
 // ⌘[ / ⌘] and the ‹ › buttons: the previous or next track with artwork,
 // without closing, so a whole set can be curated in one pass. The selection
@@ -104,9 +115,14 @@ export function stepArtwork(d) {
   if (!t) return;
   artProbeSeq++;  // a paste still loading belongs to the track being left
   selectTrack(t, { keepTab: true });
-  showArtwork(t);
-  // Stepping rebuilds the grid, and a focused tile goes with it.
-  keepFocus(artDialog, document.getElementById(d < 0 ? "art-prev" : "art-next"));
+  showArtwork(t, { step: true });
+  // Stepping rebuilds the grid, and a focused tile goes with it; at either end
+  // of the set the button just pressed is disabled, and a disabled button
+  // loses its focus. Either way the dialog would stop hearing its own keys.
+  const want = document.getElementById(d < 0 ? "art-prev" : "art-next");
+  const other = document.getElementById(d < 0 ? "art-next" : "art-prev");
+  const at = document.activeElement;
+  if (!artDialog.contains(at) || at.disabled) (want.disabled ? other : want).focus();
 }
 document.getElementById("art-prev").onclick = () => stepArtwork(-1);
 document.getElementById("art-next").onclick = () => stepArtwork(1);
@@ -115,6 +131,8 @@ export function closeArtwork() {
   if (artDialog.open) artDialog.close();
 }
 artDialog.addEventListener("close", () => {
+  clearTimeout(altTimer);
+  if (altAbort) altAbort.abort();
   overlayImg.src = "";
   artGrid.replaceChildren();
   artTrack = null;
@@ -182,6 +200,8 @@ artCoverBtn.onclick = () => {
 // and must never run for a track the user did not open.
 export async function loadAlternates(t) {
   artGrid.innerHTML = '<div class="status">Searching iTunes, Deezer and Cover Art Archive…</div>';
+  if (altAbort) altAbort.abort();
+  const ctl = altAbort = new AbortController();
   let data;
   try {
     // The live artist/title, not the saved ones: correcting a bad
@@ -190,8 +210,9 @@ export async function loadAlternates(t) {
     const query = "/api/artwork/options?index=" + t.index
       + "&artist=" + encodeURIComponent(t.artist || "")
       + "&title=" + encodeURIComponent(t.title || "");
-    data = await (await fetch(query)).json();
+    data = await (await fetch(query, { signal: ctl.signal })).json();
   } catch (e) {
+    if (ctl.signal.aborted) return;  // the dialog moved on
     artGrid.innerHTML = '<div class="status">Could not reach the artwork sources.</div>';
     return;
   }

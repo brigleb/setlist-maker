@@ -48,8 +48,9 @@ function focusables(dlg) {
 // A dialog that lost its focus (the focused node was re-rendered away) takes
 // it back, so its own keys keep working; `prefer` is where it should land.
 export function keepFocus(dlg, prefer) {
-  if (!dlg.open || dlg.contains(document.activeElement)) return;
-  (prefer || focusables(dlg)[0] || dlg).focus();
+  const at = document.activeElement;
+  if (!dlg.open || (dlg.contains(at) && !at.disabled)) return;
+  (prefer && !prefer.disabled ? prefer : focusables(dlg)[0] || dlg).focus();
 }
 
 // ---- ask(): an in-app confirm ----

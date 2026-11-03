@@ -247,7 +247,9 @@ export function playAt(seconds) {
     audio.currentTime = Math.max(0, seconds);
     const i = trackIndexAt(audio.currentTime);
     if (i !== null) setPlayingIndex(i, { scroll: false });
-    audio.play();
+    // A pause before playback starts (the replace dialog's Listen, closed at
+    // once) rejects this promise; that is not an error worth reporting.
+    audio.play().catch(() => {});
   };
   if (audio.readyState >= 1) go();
   else audio.addEventListener("loadedmetadata", go, { once: true });
