@@ -1245,3 +1245,17 @@ at 0.5s, waiting out `shutdown()` was ~75% of the suite's wall clock. `pytest-ti
 - Line length: 100 (configured in pyproject.toml)
 - Ruff lint rules: E, F, W, I (errors, pyflakes, warnings, isort)
 - Python 3.10+ required
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on brigleb/setlist-maker, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root, created only when they're first needed. See `docs/agents/domain.md`.
