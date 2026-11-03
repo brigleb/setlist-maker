@@ -4,7 +4,8 @@ import { S, TL } from "./state.js";
 import { audio, autosizeSummary, el, epArtist, epTitle, summaryEl, toast } from "./dom.js";
 import { ask } from "./dialog.js";
 import { playingIndex, setDuration, trackIndexAt, windowFor } from "./model.js";
-import { resetHistory, setDirty } from "./history.js";
+import { markSaved, resetHistory, syncSaveState } from "./history.js";
+import { during } from "./activity.js";
 import { focusSelected, renderList } from "./list.js";
 import { syncPlayerBar } from "./player.js";
 import { loadPeaks, loadProbes, renderTimeline } from "./grid.js";
@@ -19,7 +20,8 @@ import "./shell.js";
 export let revision = null;
 export async function load() {
   const data = await (await fetch("/api/tracklist")).json();
-  document.getElementById("file").textContent = "🎚 " + data.source_file;
+  S.fileName = data.source_file || "";
+  document.getElementById("file").textContent = S.fileName || "—";
   // A reload replaces every track object, so the selection is carried over
   // by what it pointed at rather than by reference.
   const was = S.selectedTrack;
@@ -47,6 +49,7 @@ export async function load() {
   S.canEmbed = !!data.can_embed;
   resetHistory();
   render();
+  syncSaveState();
   if (listFocused) focusSelected();
   loadProbes();
   loadPeaks();  // once a page; slow the first time a set is opened (peaks.py)
@@ -56,7 +59,7 @@ export function updateCounts() {
   const rej = S.tracks.filter(t => t.rejected).length;
   const ed = S.tracks.filter(t => t._edited).length;
   const parts = [S.tracks.length + " tracks"];
-  if (ed) parts.push(ed + " edited");
+  if (ed) parts.push(ed + " corrected");
   if (rej) parts.push(rej + " rejected");
   document.getElementById("counts").textContent = parts.join(" · ");
 }
@@ -78,7 +81,7 @@ document.getElementById("save").onclick = () => save();
 // rather than sending the same rows again.
 export let saving = null;
 export function save() {
-  if (!saving) saving = doSave().finally(() => { saving = null; });
+  if (!saving) saving = during("save", "Saving…", doSave).finally(() => { saving = null; });
   return saving;
 }
 
@@ -124,11 +127,11 @@ export async function doSave() {
       // (a moved start) bumped the revision: either way, reload first.
       if (hasNew || merged || res.revision !== revision) await load();
       else render();
-      setDirty(false); resetHistory(); toast("Saved");
+      markSaved(); resetHistory(); toast("Saved");
       return true;
     }
-    toast("Save failed: " + (res.error || ""));
-  } catch (e) { toast("Save failed"); }
+    toast("Save failed: " + (res.error || r.status), { kind: "error" });
+  } catch (e) { toast("Save failed: the editor's server did not answer", { kind: "error" }); }
   return false;
 }
 
@@ -159,13 +162,13 @@ document.getElementById("done").onclick = async () => {
 // The editor's end state: the server has stopped, so nothing on the page
 // works any more. Built with el(), and styled by body.closed.
 function showClosed() {
-  const name = (document.getElementById("file").textContent || "").replace(/^🎚\s*/, "");
+  const name = S.fileName;
   const box = el("div");
   box.id = "closed-screen";
   const reopen = el("p", null, "You can close this tab. To open it again, run ");
   reopen.append(el("code", null, "setlist-maker <set> --web-edit"), ".");
   box.append(el("h1", null, "Editor closed"),
-    el("p", null, name && name !== "—" ? "Finished with " + name + "." : "The editor has stopped."),
+    el("p", null, name ? "Finished with " + name + "." : "The editor has stopped."),
     reopen);
   document.body.className = "closed";
   document.body.replaceChildren(box);

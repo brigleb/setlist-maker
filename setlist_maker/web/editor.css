@@ -17,6 +17,11 @@
      instead of dissolving into the same grey as the list. */
   --player-bg:#1c1c1e; --player-text:#fff; --player-hover:#2f2f33; --player-muted:#9a9a9e;
   --player-thumb:#333; --player-line:transparent;
+  /* #62: one control height and radius for the toolbar and its buttons; the
+     raised surface menus, toasts and popovers share; the scrollbar thumb. */
+  --ctl-h:30px; --r-ctl:7px;
+  --pop-shadow:0 10px 32px rgba(0,0,0,.16), 0 2px 6px rgba(0,0,0,.08);
+  --scroll:rgba(0,0,0,.22); --chip-bg:#f0f0f2;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -27,12 +32,26 @@
     --btn-bg:#2c2c2e; --btn-text:#d1d1d6; --btn-border:#3a3a3c;
     --player-bg:#2c2c2e; --player-hover:#3a3a3c; --player-muted:#a1a1a6;
     --player-thumb:#3a3a3c; --player-line:#3a3a3c;
+    --pop-shadow:0 10px 32px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.3);
+    --scroll:rgba(255,255,255,.24); --chip-bg:#2a2a2d;
   }
 }
 * { box-sizing:border-box; }
 /* An author `display` rule beats the UA stylesheet's [hidden] rule, so the
    flex containers below would ignore the attribute without this. */
 [hidden] { display:none !important; }
+/* ---- #62: icons, and the browser surfaces the page didn't draw ----
+   Every icon is one <symbol> in the page's sprite, drawn at 1em in the text
+   colour, so a button's icon and label share size and colour by default. */
+.ic { width:1.15em; height:1.15em; flex:none; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; vertical-align:-.2em; }
+.ic.fill { fill:currentColor; stroke-width:1.5; }
+.ic.spin { animation:ic-spin .8s linear infinite; }
+@keyframes ic-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ic.spin { animation-duration:2.4s; } }
+::selection { background:color-mix(in srgb, var(--accent) 30%, transparent); }
+.pane, .panel, dialog { scrollbar-width:thin; scrollbar-color:var(--scroll) transparent; }
+button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+input, textarea { caret-color:var(--accent); }
 /* ---- the shell: one window, and nothing scrolls but the panes ----
    toolbar / timeline / divider / (list | divider | inspector) / transport.
    The two sizes are custom properties shell.js sets from the dividers and
@@ -41,7 +60,10 @@
 :root { --tl-h:40vh; --side-w:360px; }
 html, body { height:100%; overflow:hidden; }
 body { margin:0; font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif; background:var(--bg); color:var(--text);
-  display:grid; grid-template-rows:auto clamp(120px, var(--tl-h), calc(100% - 300px)) 5px minmax(0,1fr) auto; height:100vh; height:100dvh; }
+  display:grid; grid-template-rows:auto clamp(120px, var(--tl-h), calc(100% - 300px)) 5px minmax(0,1fr) auto; height:100vh; height:100dvh;
+  /* One column the window's width: an auto column would grow to the
+     toolbar's content and push Save off a narrow window. */
+  grid-template-columns:minmax(0,1fr); }
 .pane { min-height:0; min-width:0; background:var(--card); }
 #work { display:grid; grid-template-columns:minmax(0,1fr) 5px clamp(280px, var(--side-w), 50vw); min-height:0; }
 .divider { background:var(--line); position:relative; z-index:4; touch-action:none; }
@@ -49,16 +71,49 @@ body { margin:0; font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe U
 .divider.rows { cursor:row-resize; }
 .divider.cols { cursor:col-resize; }
 .divider:hover, .divider:focus-visible, .divider.dragging { background:var(--accent); outline:none; }
-header { background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px; display:flex; align-items:center; justify-content:space-between; gap:12px; z-index:5; }
-.file { font-weight:700; font-size:15px; }
-.counts { color:var(--muted); font-size:12px; margin-top:2px; }
-.actions button { font:inherit; font-weight:600; font-size:13px; border-radius:7px; padding:7px 16px; cursor:pointer; border:1px solid transparent; margin-left:8px; }
-#save { background:var(--accent); color:#fff; }
-#save:disabled { opacity:.5; cursor:default; }
-.histbtn { background:var(--btn-bg); color:var(--btn-text); border-color:var(--btn-border) !important; padding-left:12px !important; padding-right:12px !important; }
-.histbtn:disabled { opacity:.45; cursor:default; }
+/* ---- the toolbar (#62): the set on the left, what's running in the middle,
+   the window's controls on the right with Save, the primary action, last ---- */
+header { background:var(--card); border-bottom:1px solid var(--line); padding:9px 14px 9px 12px; display:flex; align-items:center; gap:16px; z-index:5; min-width:0; }
+.brand { display:flex; align-items:center; gap:10px; min-width:0; flex:0 1 auto; }
+.appmark { width:32px; height:32px; flex:none; border-radius:8px; display:grid; place-items:center; color:#fff; font-size:17px;
+  background:linear-gradient(160deg, color-mix(in srgb, var(--accent) 80%, #fff), var(--accent)); box-shadow:inset 0 0 0 1px rgba(0,0,0,.08); }
+.brand-text { min-width:0; }
+.file { font-weight:700; font-size:14px; display:flex; align-items:baseline; gap:8px; min-width:0; white-space:nowrap; }
+#file { overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.counts { color:var(--muted); font-size:12px; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Unsaved work: "Edited" beside the name with the accent dot; once saved,
+   when (history.js). */
+#savestate { font-size:12px; font-weight:500; color:var(--muted); display:inline-flex; align-items:center; gap:5px; flex:none; }
+#savestate:empty { display:none; }
+#savestate.dirty { color:var(--text-soft); }
+#savestate.dirty::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--accent); }
+#activity { flex:1 1 auto; min-width:0; display:flex; justify-content:center; gap:8px; overflow:hidden; }
+.act { display:inline-flex; align-items:center; gap:7px; height:26px; padding:0 11px 0 9px; border-radius:13px; min-width:0;
+  background:var(--chip-bg); color:var(--text-soft); font-size:12px; white-space:nowrap; animation:act-in .18s ease-out; }
+.act .ic { color:var(--accent); }
+.act-label { overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.act-more { color:var(--muted); flex:none; }
+@keyframes act-in { from { opacity:0; transform:translateY(-3px); } }
+.actions { display:flex; align-items:center; gap:8px; flex:none; margin-left:auto; }
+#activity:not([hidden]) + .actions { margin-left:0; }
+.tool { font:inherit; font-weight:600; font-size:13px; height:var(--ctl-h); padding:0 14px; border-radius:var(--r-ctl); cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
+.tool:hover:not(:disabled) { color:var(--text); border-color:color-mix(in srgb, var(--btn-border) 60%, var(--text)); }
+.tool:disabled { opacity:.42; cursor:default; }
+.tool .ic { font-size:15px; }
+.tool.primary { background:var(--accent); color:#fff; border-color:transparent; min-width:68px; }
+.tool.primary:hover:not(:disabled) { background:color-mix(in srgb, var(--accent) 88%, #000); color:#fff; }
+.tool.icbtn { width:var(--ctl-h); padding:0; }
+.seg { display:inline-flex; }
+.seg .tool:first-child { border-radius:var(--r-ctl) 0 0 var(--r-ctl); }
+.seg .tool:last-child { border-radius:0 var(--r-ctl) var(--r-ctl) 0; margin-left:-1px; }
+.seg .tool:focus-visible { position:relative; z-index:1; }
+/* ⌘K looks like the search field it opens. */
+.findbtn { width:168px; justify-content:flex-start; color:var(--muted); font-weight:500; padding:0 6px 0 10px; }
+.findbtn .find-text { flex:1; text-align:left; }
+.findbtn kbd { font-size:11px; padding:0 5px; color:var(--muted); background:var(--bg); }
 body.live .histbtn { display:none; }
-#done { background:var(--btn-bg); color:var(--btn-text); border-color:var(--btn-border); }
 .summary { display:block; width:100%; min-height:5.5em; padding:8px 10px; font:inherit; font-size:14px; line-height:1.5; color:var(--text-soft); background:var(--card); border:1px solid var(--line); border-radius:6px; resize:none; overflow:hidden; }
 .summary:focus { outline:none; background:var(--focus-bg); border-color:var(--input-border); }
 .summary::placeholder { color:var(--muted); font-style:italic; }
@@ -68,7 +123,7 @@ body.live .histbtn { display:none; }
 #listpane { overflow:auto; }
 .trow { display:grid; grid-template-columns:28px 32px minmax(0,1fr) minmax(0,1.25fr) 52px 48px 48px 14px 72px; align-items:center; column-gap:10px; padding:0 12px; }
 #list-head { position:sticky; top:0; z-index:3; height:28px; background:var(--card); border-bottom:1px solid var(--line);
-  color:var(--muted); font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+  color:var(--muted); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
 .c-num { text-align:right; font-variant-numeric:tabular-nums; }
 .row { min-height:42px; padding-top:5px; padding-bottom:5px; border-bottom:1px solid var(--hairline); background:var(--card); cursor:default; }
 .row:hover { background:var(--bg); }
@@ -77,7 +132,11 @@ body.live .histbtn { display:none; }
 .row .meta { display:contents; }
 .row .artist, .row .title, .row .time { cursor:text; }
 .row .title { color:var(--text-soft); font-size:13px; }
-.acts { display:flex; justify-content:flex-end; gap:2px; }
+.acts { display:flex; justify-content:flex-end; gap:2px; opacity:0; transition:opacity .12s; }
+/* A row's own buttons show where the pointer or the selection is, as in a
+   desktop list; the keyboard reaches the same actions by key and menu. */
+.row:hover .acts, .row.selected .acts, .row.playing .acts { opacity:1; }
+@media (hover:none) { .acts { opacity:1; } }
 .row.rejected { opacity:.45; }
 /* Two markers (#58). The selection is the row's background, deeper while
    the list has focus, as in a desktop list; the row being edited is the
@@ -95,9 +154,13 @@ body.live .histbtn { display:none; }
    here or inline in JS -- the shorthand resets every background-* longhand,
    which renders a 600px composite at natural size anchored top-left, showing
    only its corner and hiding the lower-third label entirely. */
-.thumb { width:42px; height:42px; border-radius:6px; flex:none; background-size:cover; background-position:center; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; cursor:zoom-in; }
-.artbtn { font:inherit; font-size:13px; font-weight:600; padding:7px 14px; border-radius:7px; cursor:pointer;
+.thumb { width:42px; height:42px; border-radius:6px; flex:none; background-size:cover; background-position:center; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; cursor:zoom-in; box-shadow:inset 0 0 0 1px rgba(0,0,0,.06); }
+.thumb .ic { font-size:15px; opacity:.9; }
+.artbtn { font:inherit; font-size:13px; font-weight:600; padding:0 14px; height:var(--ctl-h); border-radius:var(--r-ctl); cursor:pointer;
+  display:inline-flex; align-items:center; gap:6px;
   background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
+#art-cover .ic { color:var(--warn); }
+#art-cover.on .ic { color:#fff; }
 .artbtn.on { background:var(--accent); color:#fff; border-color:transparent; }
 .artbtn:disabled { opacity:.5; cursor:default; }
 #artwork-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(92px,1fr)); grid-auto-rows:min-content; gap:10px; }
@@ -115,8 +178,12 @@ body.live .histbtn { display:none; }
 #art-dialog.drop #artwork-large, #episode.drop { outline:3px dashed var(--accent); outline-offset:3px; }
 #episode { display:flex; flex-direction:column; gap:8px; border-radius:8px; }
 .ep-row { display:flex; align-items:center; gap:12px; }
-#ep-thumb { width:56px; height:56px; border-radius:8px; flex:none; background-size:cover; background-position:center; background-color:var(--player-thumb); }
-#ep-thumb.empty { background-image:linear-gradient(135deg, var(--hairline), var(--line)); }
+#ep-thumb { width:56px; height:56px; border-radius:8px; flex:none; background-size:cover; background-position:center; background-color:var(--player-thumb);
+  display:grid; place-items:center; color:var(--muted); font-size:20px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.06); }
+#ep-thumb .ic { display:none; }
+/* No cover yet: a drop target that says so, rather than a grey square. */
+#ep-thumb.empty { background-color:transparent; border:1.5px dashed var(--btn-border); box-shadow:none; }
+#ep-thumb.empty .ic { display:block; }
 .ep-text { min-width:0; flex:1; display:flex; flex-direction:column; }
 .ep-field { font:inherit; color:var(--text); background:transparent; border:none; border-radius:4px; padding:1px 4px; margin-left:-4px; min-width:0; }
 .ep-field:hover { background:var(--focus-bg); }
@@ -127,7 +194,7 @@ body.live .histbtn { display:none; }
 .ep-note { color:var(--muted); font-size:12px; line-height:1.4; }
 .ep-note:empty { display:none; }
 body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
-.star { color:var(--warn); font-size:13px; flex:none; }
+.star { color:var(--warn); font-size:12px; flex:none; display:flex; }
 .artist { font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .title { color:var(--muted); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .row.rejected .artist, .row.rejected .title { text-decoration:line-through; }
@@ -135,26 +202,38 @@ body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
 .editfields { grid-column:3 / 6; display:flex; gap:8px; min-width:0; }
 .editfields input { flex:1; min-width:0; font:inherit; font-size:13px; padding:4px 8px; border:1px solid var(--input-border); border-radius:6px; background:var(--card); color:var(--text); }
 .time { color:var(--text-faint); font-size:12px; font-variant-numeric:tabular-nums; }
-.iconbtn { background:none; border:none; cursor:pointer; font-size:14px; padding:2px 4px; line-height:1; }
-.play { color:var(--accent); }
-.reject { color:var(--icon); }
-.add { color:var(--icon); font-weight:700; }
-.add:hover { color:var(--accent); }
+.iconbtn { width:24px; height:24px; display:grid; place-items:center; background:none; border:none; border-radius:6px; cursor:pointer; font-size:15px; padding:0; color:var(--muted); }
+.iconbtn:hover { background:var(--chip-bg); color:var(--text); }
+.iconbtn.play { color:var(--accent); }
+.iconbtn.play .ic { font-size:13px; }
 .editfields input.timefield { flex:0 0 80px; text-align:center; font-variant-numeric:tabular-nums; }
-#player { background:var(--player-bg); color:var(--player-text); box-shadow:0 -1px 0 var(--player-line); display:flex; align-items:center; gap:14px; padding:10px 20px; }
+#player { background:var(--player-bg); color:var(--player-text); box-shadow:0 -1px 0 var(--player-line); display:flex; align-items:center; gap:14px; padding:10px 20px 10px 14px; }
 #player.disabled { opacity:.4; pointer-events:none; }
 /* background-color, not the `background` shorthand: the shorthand would reset
    background-size:cover declared beside it and crop the artwork to its corner. */
-#pthumb { width:48px; height:48px; border-radius:6px; flex:none; background-color:var(--player-thumb); background-size:cover; background-position:center; }
+#pthumb { width:52px; height:52px; border-radius:7px; flex:none; background-color:var(--player-thumb); background-size:cover; background-position:center;
+  display:grid; place-items:center; color:var(--player-muted); font-size:22px; }
+#pthumb .ic { display:none; }
+#player.idle #pthumb:not([style*="url"]) .ic { display:block; }
+/* Nothing playing (#62): the set's own name and cover, and the scrubber
+   dimmed until there is a track to scrub. */
+#player.idle #plabel { color:var(--player-muted); font-weight:500; }
+#player.idle #seek, #player.idle #seek-wave { opacity:.3; }
 #pbody { flex:1; min-width:0; display:flex; flex-direction:column; gap:5px; }
 #ptop { display:flex; align-items:center; gap:14px; }
 #ptransport { display:flex; align-items:center; gap:2px; flex:none; }
-#ptransport button { min-width:34px; height:28px; font-size:14px; background:none; border:none; color:var(--player-text); cursor:pointer; border-radius:6px; line-height:1; }
+#ptransport button { width:32px; height:32px; font-size:17px; background:none; border:none; color:var(--player-text); cursor:pointer; border-radius:50%;
+  display:grid; place-items:center; padding:0; }
 #ptransport button:hover { background:var(--player-hover); }
-#ptransport button span { font-size:9px; vertical-align:super; }
-#pplay { font-size:17px; }
-#pfollow { flex:none; font:inherit; font-size:11px; font-weight:600; padding:3px 9px; border-radius:10px; cursor:pointer;
-  background:none; color:var(--player-muted); border:1px solid var(--player-muted); }
+/* ±15: the number sits inside the circular arrow, as on a podcast player. */
+#ptransport .skip { position:relative; font-size:21px; }
+#ptransport .skip span { position:absolute; inset:0; display:grid; place-items:center; font-size:7.5px; font-weight:700; padding-top:1px; }
+#ptransport #pplay { width:36px; height:36px; margin:0 3px; background:var(--player-text); color:var(--player-bg); font-size:15px; }
+#ptransport #pplay:hover { background:color-mix(in srgb, var(--player-text) 85%, var(--player-bg)); }
+
+#pfollow { flex:none; font:inherit; font-size:11px; font-weight:600; padding:0 10px 0 8px; height:24px; border-radius:12px; cursor:pointer;
+  display:inline-flex; align-items:center; gap:5px;
+  background:none; color:var(--player-muted); border:1px solid color-mix(in srgb, var(--player-muted) 60%, transparent); }
 #pfollow:hover { color:var(--player-text); border-color:var(--player-text); }
 #pfollow.on { background:var(--accent); color:#fff; border-color:transparent; }
 #plabel { flex:1; min-width:0; font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -166,9 +245,13 @@ body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
    message, which puts it above any modal dialog opened since (#61). The
    resets undo the UA's popover box; it stays displayed while closed so it
    can fade out. */
-#toast { position:fixed; inset:auto auto 96px 50%; margin:0; border:0; transform:translateX(-50%); background:var(--player-bg); color:var(--player-text); box-shadow:0 0 0 1px var(--player-line); padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; overflow:visible; }
-#toast:not(:popover-open) { display:block; }
-#toast.show { opacity:1; }
+#toast { position:fixed; inset:auto auto 100px 50%; margin:0; border:0; padding:0; background:none; transform:translateX(-50%);
+  display:flex; flex-direction:column; align-items:center; gap:6px; pointer-events:none; overflow:visible; width:max-content; max-width:calc(100vw - 32px); }
+.toast { display:flex; align-items:center; gap:8px; background:var(--player-bg); color:var(--player-text); box-shadow:0 0 0 1px var(--player-line), var(--pop-shadow);
+  padding:9px 15px; border-radius:9px; font-size:13px; line-height:1.35; max-width:560px; animation:toast-in .2s cubic-bezier(.2,.9,.3,1); transition:opacity .2s, transform .2s; }
+.toast.error .ic { color:#ff6b6b; font-size:15px; }
+.toast.out { opacity:0; transform:translateY(4px); }
+@keyframes toast-in { from { opacity:0; transform:translateY(8px) scale(.98); } }
 /* ---- timeline: one zoomable row over the set, the waveform behind the
    blocks, the run's probes as pins, the whole set in the strip above ---- */
 :root { --hatch:rgba(0,0,0,.07); --block-l:62%; --wave:rgba(0,0,0,.42); }
@@ -188,6 +271,7 @@ body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
 #tl-head { display:flex; align-items:center; gap:12px; flex:none; }
 #tl-head .tl-title { font-weight:700; }
 #tl-head .tl-stats { color:var(--muted); font-size:12px; flex:1; }
+#tl-replay .ic { font-size:13px; }
 .tl-ruler { position:relative; flex:none; height:14px; overflow:hidden; color:var(--text-faint); font-size:10px; font-variant-numeric:tabular-nums; }
 .tl-ruler span { position:absolute; top:0; }
 .tl-blocks { position:absolute; inset:0; cursor:pointer; }
@@ -240,14 +324,23 @@ body.tl-dragging, body.tl-dragging * { cursor:col-resize !important; user-select
   background:var(--hairline); color:var(--text-soft); }
 .panel { flex:1; min-height:0; overflow:auto; padding:14px; }
 #panel-set .in-lbl:first-child { margin-top:0; }
-#insp .empty { color:var(--muted); font-size:13px; line-height:1.5; }
+/* An empty pane teaches what goes in it (#62). */
+.blank { text-align:center; padding:28px 12px; color:var(--muted); font-size:13px; line-height:1.5; }
+.blank p { margin:4px auto 0; max-width:30ch; }
+.blank-ico { width:44px; height:44px; margin:0 auto 10px; border-radius:12px; display:grid; place-items:center; font-size:21px;
+  background:var(--chip-bg); color:var(--text-soft); }
+.blank-ico.ok { color:var(--ok); }
+.blank-title { color:var(--text); font-weight:600; font-size:14px; }
+.blank-keys { margin-top:14px !important; font-size:12px; }
+.blank-keys kbd { margin-right:3px; }
 .in-hero { display:flex; gap:12px; align-items:center; }
 .in-hero .thumb { width:72px; height:72px; border-radius:8px; }
 .in-when { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
 .in-badges { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
-.badge { font-size:11px; padding:1px 7px; border-radius:10px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+.badge { font-size:11px; padding:1px 7px; border-radius:10px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; display:inline-flex; align-items:center; gap:4px; }
+.badge.star .ic { color:var(--warn); }
 .badge.warn { color:var(--warn); border-color:currentColor; }
-.in-lbl { font-size:10.5px; color:var(--muted); margin:12px 0 4px; text-transform:uppercase; letter-spacing:.05em; }
+.in-lbl { font-size:11px; color:var(--muted); margin:12px 0 4px; text-transform:uppercase; letter-spacing:.05em; }
 #insp input { width:100%; font:inherit; font-size:14px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); }
 #insp input:focus { outline:none; border-color:var(--input-border); background:var(--focus-bg); }
 #insp input.in-title { font-weight:600; }
@@ -264,22 +357,31 @@ body.tl-dragging, body.tl-dragging * { cursor:col-resize !important; user-select
 .in-samples .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .in-samples .miss { color:var(--muted); font-style:italic; }
 .in-btns { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
-.tbtn { font:inherit; font-size:12px; font-weight:600; padding:5px 10px; border-radius:7px; cursor:pointer; background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
+.tbtn { font:inherit; font-size:12px; font-weight:600; padding:0 10px; height:28px; border-radius:var(--r-ctl); cursor:pointer; background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border);
+  display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+.tbtn:hover:not(:disabled) { color:var(--text); }
+.tbtn.primary:hover:not(:disabled) { color:#fff; background:color-mix(in srgb, var(--accent) 88%, #000); }
+.tbtn .ic { font-size:13px; }
 .tbtn.primary { background:var(--accent); color:#fff; border-color:transparent; }
 .tbtn:disabled { opacity:.45; cursor:default; }
 .tbtn.quiet { background:transparent; }
 .in-note { color:var(--muted); font-size:11.5px; margin-top:8px; line-height:1.4; }
-.issue { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-top:1px solid var(--hairline); cursor:pointer; }
+/* Icon | text | dismiss, with the fixes on their own line under the text so
+   a long title never wraps a word at a time beside them. */
+.issue { display:grid; grid-template-columns:24px minmax(0,1fr) 24px; column-gap:10px; row-gap:8px; align-items:start; padding:10px 0; border-top:1px solid var(--hairline); cursor:pointer; }
+.issue .fixes { grid-column:2; display:flex; flex-wrap:wrap; gap:6px; }
+.issue .x { grid-column:3; grid-row:1; }
 .issue:first-child { border-top:none; }
-.issue .ico { width:22px; height:22px; border-radius:6px; flex:none; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#fff; }
-.issue .txt { flex:1; min-width:0; }
+.issue .ico { width:24px; height:24px; border-radius:7px; flex:none; display:grid; place-items:center; font-size:13px; color:#fff; }
+.issue .txt { min-width:0; }
 .issue .t1 { font-weight:600; font-size:13px; }
 .issue .t2 { color:var(--muted); font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
-.issue .x { background:none; border:none; color:var(--icon); cursor:pointer; font-size:14px; padding:0 2px; }
+.issue .x { background:none; border:none; color:var(--muted); cursor:pointer; font-size:14px; width:24px; height:24px; border-radius:6px; display:grid; place-items:center; padding:0; flex:none; }
+.issue .x:hover { background:var(--chip-bg); color:var(--text); }
 /* While a run is still identifying, the page follows it and edits nothing:
    the run writes the tracklist when it finishes, over anything saved now. */
-#livepill { display:none; margin-left:8px; font-size:11px; font-weight:600; color:#fff; background:#d9433b; padding:2px 8px; border-radius:10px; vertical-align:middle; }
-#livepill::before { content:"● "; animation:tl-pulse 1.2s infinite; }
+#livepill { display:none; margin-left:8px; font-size:11px; font-weight:600; color:#fff; background:#c9352c; padding:2px 8px; border-radius:10px; vertical-align:middle; }
+#livepill::before { content:""; display:inline-block; width:6px; height:6px; border-radius:50%; background:currentColor; margin-right:5px; vertical-align:1px; animation:tl-pulse 1.2s infinite; }
 body.live #livepill { display:inline-block; }
 body.live #list .artist, body.live #list .title, body.live #list .time { cursor:default; }
 body.live #list .iconbtn.reject, body.live #list .iconbtn.add, body.live #artwork-tools { display:none; }
@@ -292,7 +394,13 @@ body.live #list .iconbtn.reject, body.live #list .iconbtn.add, body.live #artwor
   #side { position:absolute; top:0; right:0; bottom:0; width:min(380px, 92vw); z-index:20; border-left:1px solid var(--line);
     box-shadow:-8px 0 24px rgba(0,0,0,.18); transform:translateX(105%); transition:transform .18s; }
   body.side-open #side { transform:none; }
-  #side-toggle { display:inline-block; }
+  #side-toggle { display:inline-flex; }
+  /* The find button keeps only its icon; ⌘K still opens it. */
+  .findbtn { width:var(--ctl-h); padding:0; justify-content:center; }
+  .findbtn .find-text, .findbtn kbd { display:none; }
+  /* Room for one running task; the rest are in its tooltip. */
+  #activity { justify-content:flex-start; }
+  #activity .act + .act, .act-more { display:none; }
   .trow { grid-template-columns:24px 30px minmax(0,1fr) minmax(0,1.2fr) 48px 64px; }
   .trow .len, .trow .smp, .trow .star { display:none; }
 }
@@ -314,8 +422,9 @@ dialog.sheet::backdrop { background:rgba(0,0,0,.55); }
 .sheet-titles { flex:1; min-width:0; }
 .sheet-titles h2 { display:block; }
 #art-sub { color:var(--muted); font-size:12px; margin-top:1px; }
-.xbtn { font:inherit; font-size:15px; line-height:1; width:30px; height:30px; flex:none; border-radius:7px; cursor:pointer;
-  background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
+.xbtn { font:inherit; font-size:16px; line-height:1; width:30px; height:30px; flex:none; border-radius:var(--r-ctl); cursor:pointer;
+  display:grid; place-items:center; padding:0; background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
+.xbtn:hover:not(:disabled) { color:var(--text); }
 .xbtn:disabled { opacity:.4; cursor:default; }
 .artbtn.danger { color:#c62828; }
 @media (prefers-color-scheme: dark) { .artbtn.danger { color:#ff6b6b; } }
@@ -364,8 +473,8 @@ body.closed { display:flex; align-items:center; justify-content:center; }
 /* ---- the ⌘K palette (#59) ---- */
 /* Near the top, as palettes are, so the list grows down without moving the box. */
 #palette { width:620px; margin-top:12vh; padding:0; gap:0; max-height:min(560px, calc(100dvh - 24vh)); overflow:hidden; }
-#pal-q { font:inherit; font-size:16px; padding:14px 18px; border:0; border-bottom:1px solid var(--line); background:transparent;
-  color:var(--text); outline:none; flex:none; }
+#pal-search { display:flex; align-items:center; gap:10px; padding:0 18px; border-bottom:1px solid var(--line); flex:none; color:var(--muted); font-size:17px; }
+#pal-q { font:inherit; font-size:16px; padding:14px 0; border:0; background:transparent; color:var(--text); outline:none; flex:1; min-width:0; }
 #pal-list { overflow:auto; min-height:0; flex:1; padding:6px; }
 .pal-item { display:grid; grid-template-columns:86px minmax(0,1fr) auto; gap:10px; align-items:center; padding:5px 10px; min-height:33px;
   border-radius:7px; cursor:pointer; font-size:13px; }
@@ -381,7 +490,7 @@ body.closed { display:flex; align-items:center; justify-content:center; }
 
 /* ---- the context menu (#59): a modal <dialog> with a clear backdrop ---- */
 #menu { position:fixed; inset:auto; margin:0; padding:5px; border:1px solid var(--btn-border); border-radius:9px;
-  background:var(--card); color:var(--text); box-shadow:0 8px 28px rgba(0,0,0,.28); min-width:220px; max-width:min(380px, calc(100vw - 16px));
+  background:var(--card); color:var(--text); box-shadow:var(--pop-shadow); min-width:220px; max-width:min(380px, calc(100vw - 16px));
   max-height:calc(100dvh - 16px); overflow:auto; font-size:13px; }
 #menu::backdrop { background:transparent; }
 #menu-items { outline:none; display:flex; flex-direction:column; }

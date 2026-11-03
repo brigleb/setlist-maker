@@ -1,12 +1,12 @@
 // The <audio> transport: track windows, the scrubber, prev/next.
 
 import { S, TL } from "./state.js";
-import { audio, playerEl, pplayEl } from "./dom.js";
+import { audio, icon, playerEl, pplayEl } from "./dom.js";
 import { fmt } from "./util.js";
 import { fmtWindowTimes, playingIndex, trackIndexAt, windowFor } from "./model.js";
 import { renderList, scrollToPlaying } from "./list.js";
 import { renderTimeline, selectTrack, updatePlayhead } from "./grid.js";
-import { artFor } from "./artwork.js";
+import { artFor, setArt } from "./artwork.js";
 
 export const SKIP_SECONDS = 15;
 export const PREV_RESTART_THRESHOLD = 3;  // ⏮ within this many seconds goes to the previous track
@@ -42,7 +42,8 @@ export function setPlayingIndex(i, opts) {
 // changes what the bar should say.
 export function syncPlayerBar() {
   const i = playingIndex();
-  if (i === null) return;
+  playerEl.classList.toggle("idle", i === null);
+  if (i === null) { syncIdle(); return; }
   const t = S.tracks[i];
   // Only a track missing *both* halves is unidentified; one that knows just
   // its title says so, in the same words the saved markdown uses (#44).
@@ -53,6 +54,17 @@ export function syncPlayerBar() {
   const pt = document.getElementById("pthumb");
   // backgroundImage, never the `background` shorthand -- see the CSS comment.
   pt.style.backgroundImage = artFor(t, i);
+}
+
+// Nothing playing yet (#62): the bar shows the set itself -- its cover and
+// its name -- and how to start, and the scrubber stays dimmed (editor.css)
+// until there is a track to scrub.
+function syncIdle() {
+  const ep = document.getElementById("ep-title").value.trim();
+  document.getElementById("plabel").textContent = ep || S.fileName || "Nothing playing";
+  document.getElementById("pcount").textContent = S.tracks.length ? S.tracks.length + " tracks" : "";
+  document.getElementById("ppos").textContent = S.tracks.length ? "Space plays from the start" : "";
+  document.getElementById("pthumb").style.backgroundImage = setArt();
 }
 
 // `scroll` defaults to true: any jump the user did not initiate by clicking a
@@ -192,8 +204,12 @@ document.getElementById("pfwd15").onclick = () => skip(SKIP_SECONDS);
 document.getElementById("pprev").onclick = prevTrack;
 document.getElementById("pnext").onclick = nextTrack;
 
-audio.addEventListener("play", () => pplayEl.textContent = "⏸");
-audio.addEventListener("pause", () => { pplayEl.textContent = "▶"; audio.playbackRate = 1; });
+function syncPlayButton() {
+  pplayEl.replaceChildren(icon(audio.paused ? "play" : "pause", "fill"));
+  pplayEl.setAttribute("aria-label", audio.paused ? "Play" : "Pause");
+}
+audio.addEventListener("play", syncPlayButton);
+audio.addEventListener("pause", () => { syncPlayButton(); audio.playbackRate = 1; });
 audio.addEventListener("ratechange", () => syncPlayerUI());
 function onMetadata() {
   playerEl.classList.remove("disabled");

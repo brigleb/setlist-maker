@@ -625,7 +625,8 @@ CLI application with the following modules:
   with one lock per key so a reload during the first computation waits rather than starting a
   second fan-out. Embed rewrites the MP3's tag, so the first request after an Embed recomputes.
 - The page fetches it once, after the tracklist, and draws without it meanwhile ("reading the
-  waveform…" in the stats). A set with no audio gets a 404 and simply has no waveform.
+  waveform…" in the toolbar's activity area). A set with no audio gets a 404 and simply has no
+  waveform.
 
 ### `setlist_maker/fileio.py` - Atomic writes and the config directory
 
@@ -703,13 +704,13 @@ CLI application with the following modules:
   modules with no build step, served from the package at `/web/<name>.js` (a plain name and
   `.js`/`.css` only, so a request can't leave the directory). `/timeline.js` is still a classic
   script loaded first, because Node `require`s the same file in tests.
-- Modules: `state` (shared state), `dom` (element lookups, `el()`, `toast()`), `util`, `model`
+- Modules: `state` (shared state), `dom` (element lookups, `el()`, `icon()`, `toast()`), `util`, `model`
   (track windows, which track holds a moment), `history` (dirty, undo/redo), `list`, `player`,
   `grid` (the timeline), `inspector` (plus sampling), `issues`, `edits` (merge, split, rename,
   shared by every pane), `artwork` (thumbs, picker, uploads, episode cover, Embed), `dialog`
   (the dialogs' shared behaviour and `ask()`), `commands` (every action, for the menus and
-  ⌘K), `menu` (the context menu), `palette` (⌘K), `keys` (the
-  keyboard map) and `main` (load, render, save, Done, the live poll). `main` is the entry and
+  ⌘K), `menu` (the context menu), `palette` (⌘K), `activity` (what is running, in the
+  toolbar), `keys` (the keyboard map) and `main` (load, render, save, Done, the live poll). `main` is the entry and
   imports the rest.
 - **State that more than one module reassigns lives on `S` in `state.js`**, because an imported
   binding is read-only. A `let` that only its own module reassigns stays there, exported if
@@ -767,6 +768,31 @@ CLI application with the following modules:
   `stopPropagation()` or the document handler, finding no dialog open, acts on it too; and the
   top layer covers any `z-index`, so `#toast` is a `popover="manual"` shown afresh for every
   message, which puts it above a dialog opened before it.
+- **Icons, save state, activity, toasts (#62).**
+  - Icons are `<symbol>`s in one sprite at the top of the page (`#icons`, Lucide's shapes, ISC,
+    in `web/LICENSES.md`), drawn as `<svg class="ic"><use href="#i-name"/></svg>`. JS uses
+    `dom.icon(name, cls)` or `ui.Icon`. `.ic` is 1.15em in `currentColor`, so an icon takes its
+    button's size and colour; `fill` makes a solid shape. No glyph or emoji stands in for one,
+    and a test checks every name used has a symbol (a missing one draws nothing).
+  - Unsaved work shows three ways: Save enabled, "Edited" with the accent dot beside the set's
+    name, and "• " leading the tab title. `history.syncSaveState()` sets all three from
+    `S.dirty`, so `setDirty()` and `restore()` call it. After a save it reads "Saved just now",
+    then "Saved N min ago" (`S.savedAt`, refreshed every 30s).
+  - `activity.js` is work still running: `begin(kind, label)` returns `{ set, end }`, and
+    `during()` wraps a promise. Tasks of one kind show as one chip, the oldest's label plus
+    "· N queued", which is how several Shazam lookups waiting their turn on the server read. Save,
+    Embed, uploads, the picker's lookup and the waveform each report there. Toasts are for things
+    that finished: they stack (newest at the bottom, at most four, each on its own timer, sized to
+    its text) just above the player bar, so a sample's answer and "Saved" no longer overwrite
+    each other. `toast(msg, { kind: "error" })` adds the alert icon and stays longer.
+  - Empty states: with nothing playing, the player shows the set (the episode title, the cover or
+    the starred or first named track's art from `artwork.setArt()`) with "Space plays from the
+    start", and dims the scrubber (`#player.idle`). The episode cover is a dashed drop target
+    that says what Embed will use; the inspector and "Needs a look" say what goes in them.
+  - The toolbar's ⌘K button looks like the search field it opens. Below the narrow breakpoint it
+    keeps only its icon, and the activity area shows one task. `body` has one
+    `minmax(0,1fr)` column, or an auto column grows to the toolbar's content and pushes Save off
+    a narrow window.
 - **Context menus and ⌘K (#59).** `commands.js`'s `COMMANDS` is every action the page offers,
   each `{ id, group, label, menu, keys, playhead, when, run }`, and `run` calls the same function
   the action's button, gesture or key already calls, so the three can't drift. `when(c)` returns

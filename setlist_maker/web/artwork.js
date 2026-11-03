@@ -1,7 +1,8 @@
 // Row thumbnails, the artwork panel and picker, uploads, the episode cover, Embed.
 
 import { GRADS, S, TL } from "./state.js";
-import { audio, epArtist, epTitle, toast } from "./dom.js";
+import { audio, epArtist, epTitle, icon, toast } from "./dom.js";
+import { begin, during } from "./activity.js";
 import { trackName } from "./util.js";
 import { setDirty } from "./history.js";
 import { render, save } from "./main.js";
@@ -167,7 +168,7 @@ artDialog.addEventListener("keydown", e => {
 export function syncCoverButton() {
   const on = !!(artTrack && artTrack.episode_cover);
   const rejected = !!(artTrack && artTrack.rejected);
-  artCoverBtn.textContent = (on ? "★" : "☆") + " Episode cover";
+  artCoverBtn.firstElementChild.replaceWith(icon("star", on ? "fill" : ""));
   artCoverBtn.classList.toggle("on", on);
   // A rejected track is absent from the output, and from the sidecar the star
   // is stored in, so it cannot be the cover. The server refuses the star for
@@ -204,6 +205,8 @@ export async function loadAlternates(t) {
   if (altAbort) altAbort.abort();
   const ctl = altAbort = new AbortController();
   let data;
+  const job = begin("art", "Finding artwork for " + trackName(t));
+  ctl.signal.addEventListener("abort", () => job.end());
   try {
     // The live artist/title, not the saved ones: correcting a bad
     // identification and then fixing its cover is one workflow, and searching
@@ -212,7 +215,9 @@ export async function loadAlternates(t) {
       + "&artist=" + encodeURIComponent(t.artist || "")
       + "&title=" + encodeURIComponent(t.title || "");
     data = await (await fetch(query, { signal: ctl.signal })).json();
+    job.end();
   } catch (e) {
+    job.end();
     if (ctl.signal.aborted) return;  // the dialog moved on
     artGrid.innerHTML = '<div class="status">Could not reach the artwork sources.</div>';
     return;
@@ -333,7 +338,8 @@ function cssUrl(u) {
 export async function uploadImage(file) {
   if (!file || !(file.type || "").startsWith("image/")) throw new Error("That file is not an image.");
   if (file.size > 25 * 1024 * 1024) throw new Error("That image is over 25 MB.");
-  const r = await fetch("/api/upload", { method: "POST", headers: { "Content-Type": file.type }, body: file });
+  const r = await during("upload", "Uploading " + (file.name || "the image") + "…",
+    () => fetch("/api/upload", { method: "POST", headers: { "Content-Type": file.type }, body: file }));
   const res = await r.json().catch(() => ({}));
   if (!r.ok || !res.ok) throw new Error(res.error ? "Upload failed: " + res.error : "Upload failed (" + r.status + ")");
   return res.ref;
@@ -390,13 +396,29 @@ export function renderCover() {
     : S.coverChoice === undefined && S.coverVersion !== null ? "/api/cover?v=" + S.coverVersion : null;
   const thumb = document.getElementById("ep-thumb");
   thumb.style.backgroundImage = src ? "url('" + src + "')" : "";
-  thumb.classList.toggle("empty", !src);
   document.getElementById("ep-remove").hidden = !src;
   document.getElementById("embed").hidden = !S.canEmbed;
+  // No uploaded cover: the thumb shows the starred track's art, or a
+  // placeholder, and the note says what Embed will use instead (#62).
   const star = S.tracks.find(t => t.episode_cover && !t.rejected);
+  if (!src && star) thumb.style.backgroundImage = artFor(star, S.tracks.indexOf(star));
+  thumb.classList.toggle("auto", !src && !!star);
+  thumb.classList.toggle("empty", !src && !star);
   document.getElementById("ep-note").textContent = src
-    ? (typeof S.coverChoice === "string" ? "Cover uploaded — Save to keep it" : "Cover uploaded")
-    : star ? "Cover from ★ " + trackName(star) : "Cover: the first track with artwork";
+    ? (typeof S.coverChoice === "string" ? "Your cover — Save to keep it." : "Your uploaded cover.")
+    : star ? "Uses the artwork of " + trackName(star) + "."
+    : "Uses the first track with artwork. Drop an image here to use your own.";
+}
+
+// The set's own picture, for the player bar while nothing plays (#62): the
+// uploaded cover, else the starred track's art, else the first named track's.
+export function setArt() {
+  const src = typeof S.coverChoice === "string" ? artSrc(S.coverChoice)
+    : S.coverChoice === undefined && S.coverVersion !== null ? "/api/cover?v=" + S.coverVersion : null;
+  if (src) return cssUrl(src);
+  const star = S.tracks.find(t => t.episode_cover && !t.rejected);
+  const t = star || S.tracks.find(x => !x.rejected && (x.artist || x.title));
+  return t ? artFor(t, S.tracks.indexOf(t)) : "";
 }
 
 export async function uploadCover(file) {
@@ -410,7 +432,7 @@ export async function uploadCover(file) {
     toast("Episode cover set — Save to keep it");
   } catch (e) {
     renderCover();
-    toast(e.message);
+    toast(e.message, { kind: "error" });
   }
 }
 export const epFile = document.getElementById("ep-file");
@@ -435,6 +457,7 @@ document.getElementById("embed").onclick = async () => {
   embedding = true;
   btn.disabled = true;
   btn.textContent = "Embedding…";
+  const job = begin("embed", "Writing chapters into the MP3…");
   const at = audio.currentTime || 0, wasPlaying = !audio.paused;
   audio.pause();
   try {
@@ -444,11 +467,12 @@ document.getElementById("embed").onclick = async () => {
       toast("Embedded " + res.chapters + " chapters, " + res.images + " images"
         + (res.cover ? " and the episode cover" : "") + " into the MP3");
     } else {
-      toast("Embed failed: " + (res.error || r.status));
+      toast("Embed failed: " + (res.error || r.status), { kind: "error" });
     }
   } catch (e) {
-    toast("Embed failed");
+    toast("Embed failed: the editor's server did not answer", { kind: "error" });
   } finally {
+    job.end();
     embedding = false;
     btn.disabled = false;
     btn.textContent = "Embed chapters in MP3";

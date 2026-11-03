@@ -100,11 +100,11 @@ export const COMMANDS = [
   { id: "insert", group: "Track", label: "Insert a track below the selected one", menu: "Insert a track below",
     when: edit, run: c => addBelow(indexOf(c.track)) },
   { id: "merge-prev", group: "Track", label: "Merge the selected track into the previous one", keys: ["⌫"],
-    menu: () => (kept().length === 1 ? "Reject" : "Merge ← into the previous track"),
+    menu: () => (kept().length === 1 ? "Reject" : "Merge into the previous track"),
     when: c => (c.track && c.track.rejected ? false : edit(c) !== true ? edit(c) : mergeBlocked(c.track, "prev") || true),
     run: c => mergeInto(c.track, "prev") },
   { id: "merge-next", group: "Track", label: "Merge the selected track into the next one", keys: ["⇧⌫"],
-    menu: "Merge → into the next track",
+    menu: "Merge into the next track",
     when: c => (!c.track ? NO_TRACK : c.track.rejected || kept().length === 1 ? false
       : S.liveMode ? LIVE : mergeBlocked(c.track, "next") || true),
     run: c => mergeInto(c.track, "next") },
@@ -118,7 +118,7 @@ export const COMMANDS = [
   { id: "cover", group: "Track",
     label: c => (c.track && c.track.episode_cover ? "Stop using the selected track's artwork as the episode cover"
       : "Use the selected track's artwork as the episode cover"),
-    menu: c => (c.track.episode_cover ? "★ Stop using as the episode cover" : "☆ Use as the episode cover"),
+    menu: c => (c.track.episode_cover ? "Stop using as the episode cover" : "Use as the episode cover"),
     when: c => (!c.track ? NO_TRACK : !hasArtwork(c.track) ? false : S.liveMode ? LIVE
       : c.track.rejected ? "A merged track can't be the episode cover" : true),
     run: c => setEpisodeCover(c.track, !c.track.episode_cover) },

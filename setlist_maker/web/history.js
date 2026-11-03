@@ -9,9 +9,34 @@ summaryEl.addEventListener("input", () => { setDirty(true); autosizeSummary(); }
 
 export function setDirty(v) {
   if (v && S.liveMode) return;  // nothing on a live page may be saved over by the run
-  S.dirty = v; document.getElementById("save").disabled = !v;
+  S.dirty = v;
+  syncSaveState();
   if (v) recordChange();
 }
+
+// ---- save state (#62) ----
+// Unsaved work shows three ways, as in a desktop app: Save is enabled, the
+// toolbar says "Edited" beside the set's name, and the tab title starts with
+// a dot. Once saved, the toolbar says how long ago, refreshed every 30s.
+const saveStateEl = document.getElementById("savestate");
+export function syncSaveState() {
+  document.getElementById("save").disabled = !S.dirty;
+  document.title = (S.dirty ? "• " : "") + (S.fileName || "Editor") + " — Setlist Maker";
+  saveStateEl.className = S.dirty ? "dirty" : S.savedAt ? "saved" : "";
+  saveStateEl.textContent = S.dirty ? "Edited" : S.savedAt ? "Saved " + ago(S.savedAt) : "";
+  saveStateEl.title = !S.dirty && S.savedAt ? "Saved at " + new Date(S.savedAt).toLocaleTimeString() : "";
+}
+export function markSaved() {
+  S.savedAt = Date.now();
+  setDirty(false);
+}
+function ago(at) {
+  const min = Math.floor((Date.now() - at) / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return min + " min ago";
+  return "at " + new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+setInterval(() => { if (!S.dirty && S.savedAt) syncSaveState(); }, 30000);
 
 // ---- undo ----
 // Every edit already ends in setDirty(true), so that is where history is
@@ -75,7 +100,7 @@ export function restore(to) {
   }
   closeArtwork();  // it may show a pick being undone
   S.dirty = stepAt !== savedAt || textState() !== savedText;
-  document.getElementById("save").disabled = !S.dirty;
+  syncSaveState();
   syncHistoryButtons();
   render();
 }

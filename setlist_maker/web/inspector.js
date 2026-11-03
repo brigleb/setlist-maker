@@ -1,7 +1,8 @@
 // The selected track's inspector, and asking Shazam about a moment.
 
 import { S, TL } from "./state.js";
-import { audio, el, toast } from "./dom.js";
+import { audio, el, icon, toast } from "./dom.js";
+import { begin } from "./activity.js";
 import { ask } from "./dialog.js";
 import { fmt, parseTime, trackName } from "./util.js";
 import { setDuration } from "./model.js";
@@ -11,7 +12,7 @@ import { pendingSamples, renderTimeline } from "./grid.js";
 import { moveStart, setNames, splitAtPlayhead, startOf, toggleMerge } from "./edits.js";
 import { artFor, showArtwork } from "./artwork.js";
 import { render } from "./main.js";
-import { html, keyOf, render as paint, useEffect, useState } from "./ui.js";
+import { html, Icon, keyOf, render as paint, useEffect, useState } from "./ui.js";
 
 // A name field. The typed text is component state, so the panel can re-render
 // underneath it (a sample landing, the playhead crossing into another track)
@@ -124,7 +125,7 @@ function Inspector({ t, i }) {
         <div class="in-badges">
           ${t.rejected && html`<span class="badge warn">${owner[i] === -1 ? "rejected" : "merged into " + dir}</span>`}
           ${t._new && html`<span class="badge">new — unsaved</span>`}
-          ${t.episode_cover && html`<span class="badge">★ episode cover</span>`}
+          ${t.episode_cover && html`<span class="badge star"><${Icon} name="star" cls="fill" />episode cover</span>`}
           <span class="badge">${joined.length + " sample" + (joined.length === 1 ? "" : "s")}</span>
         </div>
       </div>
@@ -155,7 +156,7 @@ function Inspector({ t, i }) {
           <button class="tbtn" disabled=${S.liveMode} onClick=${() => toggleMerge(m)}>Unmerge</button>
         </div>`)}`}
     <div class="in-btns">
-      <button class="tbtn primary" onClick=${() => playFrom(i, { scroll: false })}>▶ Play</button>
+      <button class="tbtn primary" onClick=${() => playFrom(i, { scroll: false })}><${Icon} name="play" cls="fill" />Play</button>
       ${!S.liveMode && html`
         <button class="tbtn in-identify" disabled=${cantIdentify} title=${identTitle}
           hidden=${!!t.rejected} onClick=${() => identifyAt(t, audio.currentTime || 0)}>Identify at playhead</button>
@@ -166,11 +167,11 @@ function Inspector({ t, i }) {
           ? html`<button class="tbtn" onClick=${() => toggleMerge(t)}>${owner[i] === -1 ? "Bring back" : "Unmerge"}</button>`
           : html`
             ${k > 0 && html`<button class="tbtn" title="Its time goes to the track before"
-              onClick=${() => toggleMerge(t, "prev")}>Merge ← previous</button>`}
+              onClick=${() => toggleMerge(t, "prev")}><${Icon} name="arrow-left" />Merge into previous</button>`}
             ${k < kept.length - 1 && html`<button class="tbtn" title="Its time goes to the track after, which starts here instead"
-              onClick=${() => toggleMerge(t, "next")}>Merge → next</button>`}
+              onClick=${() => toggleMerge(t, "next")}>Merge into next<${Icon} name="arrow-right" /></button>`}
             ${kept.length === 1 && html`<button class="tbtn" onClick=${() => toggleMerge(t)}>Reject</button>`}`}
-        <button class="tbtn" onClick=${() => addBelow(i)}>＋ Add below</button>`}
+        <button class="tbtn" onClick=${() => addBelow(i)}><${Icon} name="plus" />Add below</button>`}
       ${canArt && !S.liveMode && html`<button class="tbtn" onClick=${() => showArtwork(t)}>Artwork…</button>`}
     </div>
     ${t.rejected && html`<div class="in-note">${owner[i] === -1
@@ -185,7 +186,12 @@ export function renderInspector() {
   const i = t ? S.tracks.indexOf(t) : -1;
   if (i === -1) {
     S.selectedTrack = null;
-    paint(html`<div class="empty">Click a track on the timeline — or anything in “Needs a look” — to see what Shazam heard there and fix it.</div>`, box);
+    paint(html`<div class="blank">
+      <div class="blank-ico"><${Icon} name="list-music" /></div>
+      <div class="blank-title">No track selected</div>
+      <p>Click a track on the timeline — or anything in “Needs a look” — to see what Shazam heard there and fix it.</p>
+      <p class="blank-keys"><kbd>↑</kbd><kbd>↓</kbd> move through the list · <kbd>⌘K</kbd> finds a track by name</p>
+    </div>`, box);
     return;
   }
   // Keyed by track: choosing another track starts its fields fresh.
@@ -201,6 +207,8 @@ export async function sampleAt(t, opts) {
   let got = null;
   pendingSamples.push(t);
   renderTimeline();
+  // In the toolbar while it waits its turn (#62); several read as "· 2 queued".
+  const job = begin("shazam", "Asking Shazam about " + TL.fmt(t));
   try {
     const r = await fetch("/api/sample", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ t }) });
     const res = await r.json();
@@ -209,11 +217,12 @@ export async function sampleAt(t, opts) {
       const p = got = res.probe;
       if (!quiet) toast(TL.fmt(t) + " — " + (p.artist || p.title ? (p.artist || "?") + " — " + (p.title || "?") : "Shazam heard nothing it knew"));
     } else {
-      toast("Sample failed: " + (res.error || r.status));
+      toast("Sample failed: " + (res.error || r.status), { kind: "error" });
     }
   } catch (e) {
-    toast("Sample failed");
+    toast("Sample failed: the editor's server did not answer", { kind: "error" });
   } finally {
+    job.end();
     pendingSamples.splice(pendingSamples.indexOf(t), 1);
     renderList();  // its Samples column
     renderTimeline();
@@ -232,10 +241,14 @@ function confirmReplace(t, p, at) {
   dl.append(el("dt", null, "Now"), el("dd", null, trackName(t)),
     el("dt", null, "Shazam heard"), el("dd", null, (p.artist || "?") + " — " + (p.title || "?")));
   const meta = el("div", "ask-meta");
-  const listen = el("button", "artbtn", "▶ Listen");
+  const listen = el("button", "artbtn");
   listen.type = "button";
   let started = false, from = 0;
-  const sync = () => { listen.textContent = started && !audio.paused ? "⏸ Pause" : "▶ Listen"; };
+  const sync = () => {
+    const on = started && !audio.paused;
+    listen.replaceChildren(icon(on ? "pause" : "play", "fill"), on ? "Pause" : "Listen");
+  };
+  sync();
   listen.onclick = () => {
     if (started && !audio.paused) { audio.pause(); sync(); return; }
     if (!started) from = audio.currentTime || 0;
@@ -274,7 +287,6 @@ export async function identifyAt(t, seconds) {
   if (!S.canSample) { toast("Sampling needs the set's audio"); return; }
   if (!t) return;
   const at = Math.round(seconds);
-  toast("Asking Shazam about " + TL.fmt(at) + "…");
   const p = await sampleAt(at, { quiet: true });
   if (!p) return;  // sampleAt already said why
   const heard = (p.artist || "?") + " — " + (p.title || "?");
