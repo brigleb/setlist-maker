@@ -80,7 +80,7 @@ def probe_duration_seconds(filepath: Path) -> float | None:
                 break
 
     try:
-        seconds = float(duration)
+        seconds = float(duration)  # pyright: ignore[reportArgumentType] -- None is caught below
     except (TypeError, ValueError):
         return None
     return seconds if seconds > 0 else None
@@ -164,4 +164,4 @@ def extract_window(
     """
     start_ms = max(0, int(round(start_seconds * 1000)))
     end_ms = min(len(audio), start_ms + int(round(window_seconds * 1000)))
-    return audio[start_ms:end_ms]
+    return audio[start_ms:end_ms]  # pyright: ignore[reportReturnType] -- pydub is untyped here

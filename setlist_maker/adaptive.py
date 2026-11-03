@@ -18,6 +18,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TextIO
 
 from shazamio import Shazam
 
@@ -186,18 +187,20 @@ class EventLog:
 
     def __init__(self, path: Path):
         self.path = path
-        self._fh = None
+        self._fh: TextIO | None = None
 
     def __enter__(self) -> "EventLog":
         self._fh = open(self.path, "a")
         return self
 
     def write(self, event: dict) -> None:
+        assert self._fh is not None, "EventLog is a context manager"
         self._fh.write(json.dumps({"at": round(time.time(), 2), **event}) + "\n")
         self._fh.flush()
 
     def __exit__(self, *exc) -> None:
-        self._fh.close()
+        if self._fh is not None:
+            self._fh.close()
 
 
 class _SigintFlag:
@@ -416,6 +419,7 @@ async def process_single_file_adaptive(
 
             save_progress_v2(duration, probes, progress_path)
             if request is not None:
+                assert requests is not None  # a request only comes from requests
                 # Only now: the asker re-reads the progress file for its pin.
                 requests.resolve(request, probe)
                 inflight.clear()

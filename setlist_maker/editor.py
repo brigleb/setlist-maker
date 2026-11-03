@@ -418,7 +418,7 @@ class TracklistEditor(App[None]):
         self._update_status()
         self.notify(f"Saved to {self.output_path}", title="Saved")
 
-    def action_quit(self) -> None:
+    def action_quit(self) -> None:  # pyright: ignore[reportIncompatibleMethodOverride] -- Textual runs sync actions too
         """Quit the editor."""
         if self.unsaved_changes:
             self.notify(

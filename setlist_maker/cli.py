@@ -83,7 +83,7 @@ def parse_budget(text: str) -> float:
     if not match:
         raise ValueError(f"invalid duration: {text!r} (try 45m, 2h or 90s)")
     value, unit = float(match.group(1)), match.group(2).lower()
-    return value * {"h": 3600.0, "m": 60.0, "s": 1.0}.get(unit or "m")
+    return value * {"h": 3600.0, "m": 60.0, "s": 1.0}[unit or "m"]
 
 
 # argparse `type=` callables. Raising ArgumentTypeError is what makes argparse

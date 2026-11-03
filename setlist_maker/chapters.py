@@ -12,7 +12,18 @@ ID3v2 Chapter Frame Addendum v1.0 specification.
 import struct
 from pathlib import Path
 
-from mutagen.id3 import APIC, CHAP, CTOC, TALB, TIT2, TPE1, CTOCFlags, Encoding, PictureType
+from mutagen.id3 import (
+    APIC,
+    CHAP,
+    CTOC,
+    TALB,
+    TIT2,
+    TPE1,
+    CTOCFlags,
+    Encoding,
+    Frame,
+    PictureType,
+)
 from mutagen.mp3 import MP3
 
 from setlist_maker.artwork import CoverImageError, create_chapter_image, load_cover_image
@@ -68,6 +79,8 @@ def embed_chapters(
     # Ensure ID3 tags exist
     if audio.tags is None:
         audio.add_tags()
+    tags = audio.tags
+    assert tags is not None
 
     # Get audio duration
     if audio_duration_ms is None:
@@ -79,8 +92,8 @@ def embed_chapters(
     # Add episode-level artwork before chapters so delall("APIC") doesn't
     # risk interfering with CHAP sub-frames
     if episode_image:
-        audio.tags.delall("APIC")
-        audio.tags.add(
+        tags.delall("APIC")
+        tags.add(
             APIC(
                 encoding=3,
                 mime="image/jpeg",
@@ -94,10 +107,10 @@ def embed_chapters(
     # TIT2 is a sub-frame of its CHAP and is not touched. A blank value leaves
     # the file's own tag, since the recorder may already have written one.
     if title and title.strip():
-        audio.tags.setall("TIT2", [TIT2(encoding=Encoding.UTF8, text=[title.strip()])])
-        audio.tags.setall("TALB", [TALB(encoding=Encoding.UTF8, text=[title.strip()])])
+        tags.setall("TIT2", [TIT2(encoding=Encoding.UTF8, text=[title.strip()])])
+        tags.setall("TALB", [TALB(encoding=Encoding.UTF8, text=[title.strip()])])
     if artist and artist.strip():
-        audio.tags.setall("TPE1", [TPE1(encoding=Encoding.UTF8, text=[artist.strip()])])
+        tags.setall("TPE1", [TPE1(encoding=Encoding.UTF8, text=[artist.strip()])])
 
     # Build chapter element IDs
     chapter_ids = [f"chp{i:03d}" for i in range(len(tracks))]
@@ -123,7 +136,7 @@ def embed_chapters(
             chapter_title = "Unknown Track"
 
         # Build sub-frames
-        sub_frames = [
+        sub_frames: list[Frame] = [
             TIT2(encoding=Encoding.UTF8, text=[chapter_title]),
         ]
 
@@ -139,7 +152,7 @@ def embed_chapters(
                 )
             )
 
-        audio.tags.add(
+        tags.add(
             CHAP(
                 element_id=chapter_ids[i],
                 start_time=start_ms,
@@ -149,7 +162,7 @@ def embed_chapters(
         )
 
     # Add CTOC (Table of Contents) frame
-    audio.tags.add(
+    tags.add(
         CTOC(
             element_id="toc",
             flags=CTOCFlags.TOP_LEVEL | CTOCFlags.ORDERED,

@@ -1,6 +1,7 @@
 """Shared pytest fixtures for setlist-maker tests."""
 
 import os
+import shutil
 import socket
 import socketserver
 import subprocess
@@ -25,6 +26,20 @@ class NetworkAccessBlocked(BaseException):
     swallowed and the unpatched test would quietly pass with no artwork instead
     of reporting the leak -- exactly the silence this guard exists to end.
     """
+
+
+def pytest_runtest_setup(item):
+    """``@pytest.mark.requires_tool("ffprobe")``: skip without it -- except under CI (#66).
+
+    The ffprobe round trips guard bugs that shipped (#17, #33) and the Node tests
+    guard the timeline, so a CI runner missing either must fail, not go quietly green.
+    """
+    for mark in item.iter_markers("requires_tool"):
+        program = mark.args[0]
+        if shutil.which(program) is None:
+            if os.environ.get("CI"):
+                pytest.fail(f"{program} is not on PATH, and CI must not skip the tests needing it")
+            pytest.skip(f"{program} is not installed")
 
 
 @pytest.fixture(autouse=True)

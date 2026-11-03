@@ -176,6 +176,8 @@ class RunState:
 
     @property
     def elapsed(self) -> float:
+        if self.started_at is None:
+            return 0.0
         return max(0.0, self.clock() - self.started_at)
 
     @property
@@ -563,6 +565,8 @@ class AdaptiveRunState:
 
     @property
     def elapsed(self) -> float:
+        if self.started_at is None:
+            return 0.0
         return max(0.0, self.clock() - self.started_at)
 
     @property

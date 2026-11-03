@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -457,7 +458,7 @@ def fetch_artwork(
         Raw image bytes, or None if not found.
     """
     # Build the strategy list: (description, url_fetcher) pairs
-    strategies: list[tuple[str, callable]] = []
+    strategies: list[tuple[str, Callable[[], str | None]]] = []
 
     if coverart_url:
         resized_url = resize_cover_art_url(coverart_url, size)
@@ -574,7 +575,7 @@ def create_chapter_image(
     if artwork_bytes:
         try:
             base = Image.open(io.BytesIO(artwork_bytes)).convert("RGBA")
-            base = base.resize((size, size), Image.LANCZOS)
+            base = base.resize((size, size), Image.Resampling.LANCZOS)
         except Exception as e:
             logger.debug("Failed to load artwork image, using fallback: %s", e)
             base = _create_fallback_background(size)
@@ -692,7 +693,7 @@ def load_cover_image(path: Path, size: int = CHAPTER_IMAGE_SIZE) -> bytes:
         logger.debug("Center-cropped cover from %dx%d to %dx%d", width, height, edge, edge)
 
     if base.size != (size, size):
-        base = base.resize((size, size), Image.LANCZOS)
+        base = base.resize((size, size), Image.Resampling.LANCZOS)
 
     return _compress_to_jpeg(base)
 
@@ -709,7 +710,7 @@ def _compress_to_jpeg(image: Image.Image, max_bytes: int = MAX_IMAGE_BYTES) -> b
         quality -= 10
 
     # If still too large, reduce dimensions
-    smaller = image.resize((400, 400), Image.LANCZOS)
+    smaller = image.resize((400, 400), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     smaller.save(buf, format="JPEG", quality=60, optimize=True)
     return buf.getvalue()

@@ -1,5 +1,7 @@
 # Setlist Maker
 
+[![CI](https://github.com/brigleb/setlist-maker/actions/workflows/ci.yml/badge.svg)](https://github.com/brigleb/setlist-maker/actions/workflows/ci.yml)
+
 **Generate tracklists from DJ sets using Shazam — right from your terminal.**
 
 You just played a 2-hour set and can't remember half the tracks you played. Setlist Maker takes your recording, slices it into samples, identifies each one through Shazam, and hands you a clean tracklist. Review it in the built-in editor, and it learns from your corrections for next time.
@@ -426,15 +428,20 @@ cd setlist-maker
 # Create .venv from the lockfile, with the dev extras
 uv sync --extra dev
 
-# Lint and test
+# Lint, type-check and test: what CI runs
 uv run ruff check .
-uv run ruff format --check .
+uv run ruff format --check setlist_maker tests
+uv run pyright
 uv run pytest
 ```
 
 Run `pytest` through `uv run` (or `.venv/bin/pytest`): a system-wide `pytest` cannot see the
 project's dependencies and fails importing `conftest.py`. Without uv,
 `pip install -e ".[dev]"` inside a virtualenv works too.
+
+A few tests need `ffprobe` (from ffmpeg) or `node` on your PATH and are skipped without them.
+CI runs on Linux and macOS with Python 3.10 and 3.13, and there a missing tool **fails** those
+tests instead of skipping them: they guard bugs that shipped.
 
 ## License
 

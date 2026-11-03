@@ -44,7 +44,7 @@ _generation_slots = threading.Semaphore(_MAX_CONCURRENT_GENERATION)
 # while still holding this lock (both derive their cache key from the same
 # (artist, title, coverart_url, size)), so the same thread must be able to
 # re-enter without deadlocking itself.
-_key_locks: dict[str, object] = {}
+_key_locks: dict[str, threading.RLock] = {}
 _key_locks_guard = threading.Lock()
 
 
@@ -70,7 +70,7 @@ def cache_key(artist: str, title: str, coverart_url: str | None, size: int) -> s
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _lock_for(key: str):
+def _lock_for(key: str) -> threading.RLock:
     """Return the (created-on-demand) reentrant lock guarding one cache key."""
     with _key_locks_guard:
         return _key_locks.setdefault(key, threading.RLock())

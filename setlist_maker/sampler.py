@@ -136,6 +136,7 @@ class SampleRequests:
             raise TimeoutError(f"no answer for {t:.0f}s within {timeout}s")
         if request.error is not None:
             raise request.error
+        assert request.probe is not None  # done, and no error: the run answered
         return request.probe
 
     def pop(self) -> _Request | None:
