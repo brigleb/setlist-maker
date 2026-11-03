@@ -96,24 +96,11 @@ body.live .histbtn { display:none; }
    which renders a 600px composite at natural size anchored top-left, showing
    only its corner and hiding the lower-third label entirely. */
 .thumb { width:42px; height:42px; border-radius:6px; flex:none; background-size:cover; background-position:center; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; cursor:zoom-in; }
-#artwork-overlay { position:fixed; inset:0; background:rgba(0,0,0,.72); display:none;
-  align-items:center; justify-content:center; z-index:50; cursor:zoom-out; padding:24px; overflow:auto; }
-#artwork-overlay.open { display:flex; }
-/* The panel is interactive now, so it neither inherits the backdrop's
-   dismiss cursor nor closes on click -- the overlay's handler checks that
-   the click landed on the backdrop itself. */
-#artwork-panel { cursor:default; width:min(90vw,600px); margin:auto; display:flex; flex-direction:column; gap:12px; }
-#artwork-large { width:100%; height:auto; border-radius:10px; box-shadow:0 12px 48px rgba(0,0,0,.5); }
-/* Sits on the backdrop rather than on a card, so it takes the player bar's
-   muted token, which is legible against dark chrome in both schemes. */
-#artwork-note { color:var(--player-muted); font-size:12px; }
-#artwork-tools { display:flex; gap:8px; flex-wrap:wrap; }
 .artbtn { font:inherit; font-size:13px; font-weight:600; padding:7px 14px; border-radius:7px; cursor:pointer;
   background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
 .artbtn.on { background:var(--accent); color:#fff; border-color:transparent; }
 .artbtn:disabled { opacity:.5; cursor:default; }
-#artwork-alts { background:var(--card); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:10px; }
-#artwork-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(92px,1fr)); gap:10px; }
+#artwork-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(92px,1fr)); grid-auto-rows:min-content; gap:10px; }
 #artwork-grid .status { grid-column:1/-1; color:var(--muted); font-size:13px; }
 .alt { padding:0; border:2px solid transparent; border-radius:8px; background:none; cursor:pointer;
   display:flex; flex-direction:column; gap:3px; }
@@ -125,7 +112,7 @@ body.live .histbtn { display:none; }
 #artwork-url input { flex:1; font:inherit; font-size:13px; padding:6px 9px; border:1px solid var(--input-border);
   border-radius:6px; background:var(--card); color:var(--text); }
 #artwork-upload { display:flex; gap:10px; align-items:center; color:var(--muted); font-size:12px; }
-#artwork-panel.drop #artwork-large, #episode.drop { outline:3px dashed var(--accent); outline-offset:3px; }
+#art-dialog.drop #artwork-large, #episode.drop { outline:3px dashed var(--accent); outline-offset:3px; }
 #episode { display:flex; flex-direction:column; gap:8px; border-radius:8px; }
 .ep-row { display:flex; align-items:center; gap:12px; }
 #ep-thumb { width:56px; height:56px; border-radius:8px; flex:none; background-size:cover; background-position:center; background-color:var(--player-thumb); }
@@ -175,9 +162,12 @@ body.live #ep-upload, body.live #ep-remove, body.live #embed { display:none; }
 #seek { width:100%; margin:0; accent-color:var(--accent); }
 #seek-wave { display:block; width:100%; height:22px; }
 #pfoot { display:flex; justify-content:space-between; align-items:center; }
-/* Above the artwork overlay's z-index:50 -- without it, a toast raised while
-   the picker is open renders behind the backdrop and is never seen. */
-#toast { position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:var(--player-bg); color:var(--player-text); box-shadow:0 0 0 1px var(--player-line); padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:60; }
+/* A manual popover, so it sits in the top layer: shown again for every
+   message, which puts it above any modal dialog opened since (#61). The
+   resets undo the UA's popover box; it stays displayed while closed so it
+   can fade out. */
+#toast { position:fixed; inset:auto auto 96px 50%; margin:0; border:0; transform:translateX(-50%); background:var(--player-bg); color:var(--player-text); box-shadow:0 0 0 1px var(--player-line); padding:9px 16px; border-radius:8px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; overflow:visible; }
+#toast:not(:popover-open) { display:block; }
 #toast.show { opacity:1; }
 /* ---- timeline: one zoomable row over the set, the waveform behind the
    blocks, the run's probes as pins, the whole set in the strip above ---- */
@@ -306,12 +296,6 @@ body.live #list .iconbtn.reject, body.live #list .iconbtn.add, body.live #artwor
   .trow { grid-template-columns:24px 30px minmax(0,1fr) minmax(0,1.2fr) 48px 64px; }
   .trow .len, .trow .smp, .trow .star { display:none; }
 }
-/* The shortcut sheet (#58), generated from keys.js's KEYMAP. */
-#keys-overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:55; display:flex; align-items:center; justify-content:center; padding:16px; }
-#keys-panel { background:var(--card); color:var(--text); border-radius:12px; box-shadow:0 12px 48px rgba(0,0,0,.35); width:min(860px, 100%);
-  max-height:calc(100dvh - 32px); overflow:auto; padding:18px 22px 22px; outline:none; }
-#keys-top { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:6px; }
-#keys-top h2 { margin:0; font-size:16px; }
 #keys-body { columns:2 340px; column-gap:32px; }
 .keys-group { break-inside:avoid; padding-top:10px; }
 .keys-group h3 { margin:0 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
@@ -319,3 +303,60 @@ body.live #list .iconbtn.reject, body.live #list .iconbtn.add, body.live #artwor
 .keys-group dt { display:flex; flex-wrap:wrap; gap:4px; align-items:flex-start; }
 .keys-group dd { margin:0; color:var(--text-soft); line-height:1.35; }
 kbd { font:inherit; font-size:12px; font-weight:600; padding:1px 6px; border-radius:5px; border:1px solid var(--btn-border); background:var(--bg); white-space:nowrap; }
+
+/* ---- dialogs (#61): native <dialog> + showModal(), see web/dialog.js ---- */
+dialog.sheet { background:var(--card); color:var(--text); border:none; border-radius:12px; padding:16px 20px 20px;
+  box-shadow:0 12px 48px rgba(0,0,0,.35); max-width:calc(100vw - 32px); max-height:calc(100dvh - 32px); box-sizing:border-box; }
+dialog.sheet[open] { display:flex; flex-direction:column; gap:12px; }
+dialog.sheet::backdrop { background:rgba(0,0,0,.55); }
+.sheet-head { display:flex; align-items:center; gap:8px; flex:none; }
+.sheet-head h2 { margin:0; font-size:16px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sheet-titles { flex:1; min-width:0; }
+.sheet-titles h2 { display:block; }
+#art-sub { color:var(--muted); font-size:12px; margin-top:1px; }
+.xbtn { font:inherit; font-size:15px; line-height:1; width:30px; height:30px; flex:none; border-radius:7px; cursor:pointer;
+  background:var(--btn-bg); color:var(--btn-text); border:1px solid var(--btn-border); }
+.xbtn:disabled { opacity:.4; cursor:default; }
+.artbtn.danger { color:#c62828; }
+@media (prefers-color-scheme: dark) { .artbtn.danger { color:#ff6b6b; } }
+
+#keys-dialog { width:860px; }
+#keys-dialog #keys-body { overflow:auto; min-height:0; }
+
+/* The picker: the composite Embed will write on the left, everything that
+   changes it on the right. It fits the window at any size; only the grid of
+   candidates scrolls. The preview is sized from the height that is left. */
+#art-dialog { width:1040px; height:min(720px, calc(100dvh - 32px)); }
+#art-body { flex:1; min-height:0; display:grid; grid-template-columns:auto minmax(260px, 1fr); gap:20px; }
+#art-left { display:flex; flex-direction:column; gap:10px; min-height:0; }
+#artwork-large { display:block; width:min(440px, calc(100dvh - 32px - 140px), 46vw); aspect-ratio:1/1; object-fit:cover;
+  border-radius:10px; background:var(--hairline); box-shadow:0 4px 20px rgba(0,0,0,.18); }
+#artwork-large[hidden] { display:block !important; visibility:hidden; }
+#art-left-foot { display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+#artwork-note { color:var(--muted); font-size:12px; max-width:440px; }
+#art-right { display:flex; flex-direction:column; gap:10px; min-height:0; min-width:0; }
+#art-right-head { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:600; }
+#art-right-head span { text-transform:none; letter-spacing:0; font-weight:400; margin-left:6px; }
+#artwork-grid { flex:1; min-height:0; overflow:auto; padding:2px; align-content:start; }
+.alt:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+@media (max-width: 760px) {
+  #art-dialog { height:calc(100dvh - 32px); }
+  #art-body { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); gap:12px; }
+  #art-left { flex-direction:row; align-items:flex-start; }
+  #artwork-large { width:min(160px, 36vw); }
+}
+
+#ask { width:460px; }
+#ask-body p { margin:0; line-height:1.45; }
+#ask-buttons { display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
+.ask-compare { display:grid; grid-template-columns:max-content 1fr; gap:6px 12px; margin:0; font-size:14px; }
+.ask-compare dt { color:var(--muted); font-size:12px; padding-top:2px; }
+.ask-compare dd { margin:0; font-weight:600; overflow-wrap:anywhere; }
+.ask-meta { color:var(--muted); font-size:12px; margin-top:10px; display:flex; align-items:center; gap:10px; }
+
+/* Done: the editor's end state. */
+body.closed { display:flex; align-items:center; justify-content:center; }
+#closed-screen { text-align:center; max-width:420px; padding:24px; }
+#closed-screen h1 { font-size:20px; margin:0 0 8px; }
+#closed-screen p { color:var(--muted); font-size:14px; line-height:1.5; margin:6px 0; }
+#closed-screen code { white-space:nowrap; font-size:13px; background:var(--card); border:1px solid var(--line); border-radius:5px; padding:1px 6px; }

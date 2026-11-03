@@ -15,7 +15,7 @@ import { redo, undo } from "./history.js";
 import { nextTrack, playSelected, prevTrack, shuttle, skip, toggleFollow } from "./player.js";
 import { moveStart, splitAt, startOf, toggleMerge } from "./edits.js";
 import { identifyAt } from "./inspector.js";
-import { overlay } from "./artwork.js";
+import { dialogOpen, sheet } from "./dialog.js";
 import { selectTrack, zoomAll, zoomBy, zoomToTrack } from "./grid.js";
 import { focusSelected, startEdit } from "./list.js";
 import { save } from "./main.js";
@@ -101,6 +101,7 @@ export const MOUSE = [
   ["⌥-click a track", "Split it there"],
   ["Drag a track's left edge", "Move its start (⌥: no snapping)"],
   ["Click a pin", "Hear what Shazam heard"],
+  ["Click the empty pin lane", "Ask Shazam about that moment"],
   ["Click a thumbnail", "Artwork and episode cover"],
 ];
 
@@ -135,9 +136,8 @@ function nudge(by) {
 }
 
 // ---- the shortcut sheet ----
-const sheet = document.getElementById("keys-overlay");
-let sheetBuilt = false, sheetReturn = null;
-const sheetOpen = () => !sheet.hidden;
+const sheetDlg = sheet(document.getElementById("keys-dialog"));
+let sheetBuilt = false;
 
 // Built on first open, not at load: module-load calls into other modules
 // are the cycle trap (see CLAUDE.md).
@@ -168,32 +168,23 @@ function buildSheet() {
 
 export function openSheet() {
   if (!sheetBuilt) buildSheet();
-  sheetReturn = document.activeElement;
-  sheet.hidden = false;
-  document.getElementById("keys-panel").focus();
+  sheetDlg.showModal();
 }
 
-function closeSheet() {
-  sheet.hidden = true;
-  if (sheetReturn && sheetReturn.isConnected) sheetReturn.focus({ preventScroll: true });
-  sheetReturn = null;
-}
-
-sheet.addEventListener("click", e => { if (e.target === sheet || e.target.closest("#keys-close")) closeSheet(); });
+// ? closes it again, as it opened it. Escape is the dialog's own. Stopped
+// here, or the document's handler, finding no dialog open any more, would
+// read the same ? as "open the sheet".
+sheetDlg.addEventListener("keydown", e => {
+  if (e.key === "?") { e.preventDefault(); e.stopPropagation(); sheetDlg.close(); }
+});
 document.getElementById("keys-btn").onclick = () => openSheet();
 
 // ---- the handler ----
 document.addEventListener("keydown", (e) => {
-  // The sheet owns the keyboard while it is open, as the artwork panel does.
-  if (sheetOpen()) {
-    if (e.key === "Escape" || e.key === "?") { e.preventDefault(); closeSheet(); }
-    return;
-  }
-  if (e.key === "Escape" && overlay.classList.contains("open")) { overlay.click(); return; }
-  // The artwork panel owns the keyboard while it is open: its candidate tiles
-  // are BUTTONs, and the guard below exempts only inputs, so the arrows would
-  // seek the audio while the user is browsing covers.
-  if (overlay.classList.contains("open")) return;
+  // A dialog owns the keyboard while it is open (#61): the shortcut sheet, the
+  // artwork picker and ask()'s questions handle their own keys, and the
+  // focus trap means a key pressed there still bubbles up to here.
+  if (dialogOpen()) return;
   // Never steal keys from an editor: artist/title/time fields and the summary
   // textarea all need Space and the arrows to behave normally. #seek is an
   // INPUT too, but deliberately excluded -- e.preventDefault() below already

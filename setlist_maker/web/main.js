@@ -1,13 +1,14 @@
 // Entry point: load, render, save, Done, and the live (--watch) poll.
 
 import { S, TL } from "./state.js";
-import { audio, autosizeSummary, epArtist, epTitle, summaryEl, toast } from "./dom.js";
+import { audio, autosizeSummary, el, epArtist, epTitle, summaryEl, toast } from "./dom.js";
+import { ask } from "./dialog.js";
 import { playingIndex, setDuration, trackIndexAt, windowFor } from "./model.js";
 import { resetHistory, setDirty } from "./history.js";
 import { focusSelected, renderList } from "./list.js";
 import { syncPlayerBar } from "./player.js";
 import { loadPeaks, loadProbes, renderTimeline } from "./grid.js";
-import { closeArtwork, overlay, renderCover } from "./artwork.js";
+import { closeArtwork, renderCover } from "./artwork.js";
 import "./util.js";
 import "./edits.js";
 import "./inspector.js";
@@ -117,7 +118,7 @@ export async function doSave() {
       // The open panel is showing a pre-save preview and a "Save to apply"
       // note, and after a reload its track object is stale; close it rather
       // than leave either lying.
-      if (overlay.classList.contains("open")) closeArtwork();
+      closeArtwork();
       if (S.coverChoice !== undefined) { S.coverVersion = S.coverChoice ? Date.now() : null; S.coverChoice = undefined; }
       // Inserted rows need real indices, and a save that re-sorted the tracks
       // (a moved start) bumped the revision: either way, reload first.
@@ -131,13 +132,45 @@ export async function doSave() {
   return false;
 }
 
+// Done (#61): unsaved work gets the three answers a desktop app gives, as an
+// in-app dialog rather than the browser's, and the page then shows its end state.
 document.getElementById("done").onclick = async () => {
-  if (S.dirty && !confirm("You have unsaved changes. Close anyway?")) return;
+  if (S.dirty) {
+    const v = await ask({
+      title: "Save your changes before closing?",
+      body: "You have unsaved changes to this tracklist.",
+      buttons: [
+        { label: "Discard", value: "discard", danger: true },
+        { label: "Cancel", value: null },
+        { label: "Save & close", value: "save", primary: true },
+      ],
+    });
+    if (!v) return;
+    if (v === "save" && !(await save())) return;  // save() has said why
+  }
   S.dirty = false;
+  audio.pause();
+  setLive(false);
   await fetch("/api/done", { method: "POST" }).catch(() => {});
-  document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:var(--muted);font-family:sans-serif">Editor closed — you can close this tab.</div>';
+  showClosed();
   setTimeout(() => { try { window.close(); } catch (e) {} }, 300);
 };
+
+// The editor's end state: the server has stopped, so nothing on the page
+// works any more. Built with el(), and styled by body.closed.
+function showClosed() {
+  const name = (document.getElementById("file").textContent || "").replace(/^🎚\s*/, "");
+  const box = el("div");
+  box.id = "closed-screen";
+  const reopen = el("p", null, "You can close this tab. To open it again, run ");
+  reopen.append(el("code", null, "setlist-maker <set> --web-edit"), ".");
+  box.append(el("h1", null, "Editor closed"),
+    el("p", null, name && name !== "—" ? "Finished with " + name + "." : "The editor has stopped."),
+    reopen);
+  document.body.className = "closed";
+  document.body.replaceChildren(box);
+  document.title = "Editor closed — Setlist Maker";
+}
 
 window.addEventListener("beforeunload", e => { if (S.dirty) { e.preventDefault(); e.returnValue = ""; } });
 

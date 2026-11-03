@@ -1,10 +1,13 @@
 // Row thumbnails, the artwork panel and picker, uploads, the episode cover, Embed.
 
-import { GRADS, S } from "./state.js";
+import { GRADS, S, TL } from "./state.js";
 import { audio, epArtist, epTitle, toast } from "./dom.js";
 import { trackName } from "./util.js";
 import { setDirty } from "./history.js";
 import { render, save } from "./main.js";
+import { keepFocus, sheet } from "./dialog.js";
+import { startOf } from "./edits.js";
+import { selectTrack } from "./grid.js";
 
 // Generate visible rows first: 60-track sets are network-bound on a miss.
 // One observer for every thumb; whenVisible() returns the unsubscribe a
@@ -26,14 +29,13 @@ export function whenVisible(node, cb) {
   return () => { artObserver.unobserve(node); onVisible.delete(node); };
 }
 
-export const overlay = document.getElementById("artwork-overlay");
+// The artwork dialog (#61). `artDialog.open` is the one "is it showing?" test.
+export const artDialog = sheet(document.getElementById("art-dialog"));
 export const overlayImg = document.getElementById("artwork-large");
 export const artNote = document.getElementById("artwork-note");
-export const artAlts = document.getElementById("artwork-alts");
 export const artGrid = document.getElementById("artwork-grid");
 export const artUrlEl = document.getElementById("art-url");
 export const artCoverBtn = document.getElementById("art-cover");
-
 // The track the panel is showing, held as an object reference rather than a
 // position: addBelow()/commit() can re-sort the array while the panel is open.
 export let artTrack = null;
@@ -51,10 +53,14 @@ export function setPickNote(url) {
   artNote.hidden = false;
 }
 
+// Which tracks have artwork to curate: the same rule as the list's thumb and
+// the inspector's button -- saved (so the server can answer for its index)
+// and named. Rejected tracks are left out of the chapters, so out of the walk.
+export const hasArtwork = t => t.index !== undefined && t.index !== null && !!(t.artist || t.title);
+const walkable = t => hasArtwork(t) && !t.rejected;
+
 export function showArtwork(t) {
   artTrack = t;
-  artAlts.hidden = true;
-  artGrid.innerHTML = "";
   artUrlEl.value = "";
   if (t._art) {
     // An unsaved pick has to survive closing and reopening the panel. The
@@ -71,19 +77,74 @@ export function showArtwork(t) {
     overlayImg.src = "/api/artwork?index=" + t.index + "&v=" + S.artVersion;
     artNote.hidden = true;
   }
+  const i = S.tracks.indexOf(t);
+  document.getElementById("art-title").textContent = trackName(t);
+  document.getElementById("art-sub").textContent = (i < 0 ? "" : "Track " + (i + 1) + " · ")
+    + TL.fmt(startOf(t)) + (t.rejected ? " · merged, so not in the chapters" : "");
+  document.getElementById("art-prev").disabled = !stepTarget(-1);
+  document.getElementById("art-next").disabled = !stepTarget(1);
   syncCoverButton();
-  overlay.classList.add("open");
+  // The other covers load with the dialog now, rather than behind a button:
+  // the server caches each track's answer, so a reopened track costs nothing.
+  loadAlternates(t);
+  if (!artDialog.open) artDialog.showModal();
 }
+
+// ⌘[ / ⌘] and the ‹ › buttons: the previous or next track with artwork,
+// without closing, so a whole set can be curated in one pass. The selection
+// follows, so the list and inspector stay on the track being looked at.
+function stepTarget(d) {
+  const i = S.tracks.indexOf(artTrack);
+  if (i < 0) return null;
+  for (let j = i + d; j >= 0 && j < S.tracks.length; j += d) if (walkable(S.tracks[j])) return S.tracks[j];
+  return null;
+}
+export function stepArtwork(d) {
+  const t = stepTarget(d);
+  if (!t) return;
+  artProbeSeq++;  // a paste still loading belongs to the track being left
+  selectTrack(t, { keepTab: true });
+  showArtwork(t);
+  // Stepping rebuilds the grid, and a focused tile goes with it.
+  keepFocus(artDialog, document.getElementById(d < 0 ? "art-prev" : "art-next"));
+}
+document.getElementById("art-prev").onclick = () => stepArtwork(-1);
+document.getElementById("art-next").onclick = () => stepArtwork(1);
 
 export function closeArtwork() {
-  overlay.classList.remove("open");
-  overlayImg.src = "";
-  artTrack = null;
+  if (artDialog.open) artDialog.close();
 }
+artDialog.addEventListener("close", () => {
+  overlayImg.src = "";
+  artGrid.replaceChildren();
+  artTrack = null;
+  artProbeSeq++;
+});
 
-// Only the backdrop dismisses; the panel is full of controls now. Escape
-// still routes through here, since overlay.click() targets the overlay itself.
-overlay.onclick = (e) => { if (e.target === overlay) closeArtwork(); };
+// The dialog's own keys. The page's keyboard map stands down while a dialog
+// is open (see keys.js), so these are the only shortcuts that apply here.
+artDialog.addEventListener("keydown", e => {
+  const cmd = (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey;
+  if (cmd && (e.key === "[" || e.key === "]")) {
+    e.preventDefault();
+    stepArtwork(e.key === "[" ? -1 : 1);
+    return;
+  }
+  // Arrows walk the candidate grid once a tile has focus, or from the dialog
+  // itself; Enter on a tile is the button's own click.
+  const tiles = [...artGrid.querySelectorAll(".alt")];
+  if (!tiles.length || e.altKey || e.metaKey || e.ctrlKey) return;
+  const at = tiles.indexOf(document.activeElement);
+  const inField = document.activeElement && document.activeElement.tagName === "INPUT";
+  if (inField || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+  e.preventDefault();
+  if (at < 0) { (tiles.find(x => x.classList.contains("current")) || tiles[0]).focus(); return; }
+  // Columns from the layout, so it follows the grid's auto-fill at any width.
+  const cols = Math.max(1, tiles.filter(x => x.offsetTop === tiles[0].offsetTop).length);
+  const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -cols, ArrowDown: cols }[e.key];
+  const next = tiles[at + step];
+  if (next) next.focus();
+});
 
 export function syncCoverButton() {
   const on = !!(artTrack && artTrack.episode_cover);
@@ -114,12 +175,6 @@ artCoverBtn.onclick = () => {
   setDirty(true);
   syncCoverButton();
   render();
-};
-
-document.getElementById("art-choose").onclick = () => {
-  if (!artTrack) return;
-  artAlts.hidden = !artAlts.hidden;
-  if (!artAlts.hidden && !artGrid.childElementCount) loadAlternates(artTrack);
 };
 
 // Lazy and per-track: the server asks every source here instead of stopping
@@ -186,6 +241,9 @@ export async function loadAlternates(t) {
     artGrid.append(status);
   }
   markCurrentAlt();
+  // Focus that was on the grid's "Searching…" (or on a tile of the track just
+  // left) went with it: land on the cover in use, ready for the arrows.
+  keepFocus(artDialog, artGrid.querySelector(".alt.current") || artGrid.querySelector(".alt"));
 }
 
 export function markCurrentAlt() {
@@ -290,7 +348,7 @@ export async function uploadTrackArt(file) {
 export const artFile = document.getElementById("art-file");
 document.getElementById("art-upload").onclick = () => artFile.click();
 artFile.onchange = () => { if (artFile.files[0]) uploadTrackArt(artFile.files[0]); artFile.value = ""; };
-dropZone(document.getElementById("artwork-panel"), file => { if (!S.liveMode) uploadTrackArt(file); });
+dropZone(artDialog, file => { if (!S.liveMode) uploadTrackArt(file); });
 
 // ---- episode cover ----
 // The file <set>_cover.jpg beside the tracklist, embedded as the MP3's cover
