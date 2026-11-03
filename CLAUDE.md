@@ -789,6 +789,11 @@ CLI application with the following modules:
     the starred or first named track's art from `artwork.setArt()`) with "Space plays from the
     start", and dims the scrubber (`#player.idle`). The episode cover is a dashed drop target
     that says what Embed will use; the inspector and "Needs a look" say what goes in them.
+  - The inspector's actions sit under the track's header, not below its samples, as tiles (an
+    icon over a short label) in two rows that always fill the panel: the playhead's (Play,
+    Identify, Split), then the track's (Merge up / down, Add below, Artwork). The full
+    description and the key are in each tooltip. A line under them says why Identify and Split
+    are off, and `updatePlayhead()` hides it as the playhead enters the track.
   - The toolbar's ⌘K button looks like the search field it opens. Below the narrow breakpoint it
     keeps only its icon, and the activity area shows one task. `body` has one
     `minmax(0,1fr)` column, or an auto column grows to the toolbar's content and pushes Save off

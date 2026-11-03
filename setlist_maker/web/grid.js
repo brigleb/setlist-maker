@@ -345,6 +345,9 @@ export function updatePlayhead() {
     const w = splitWindow(S.selectedTrack);
     if (split) split.disabled = !(t > Math.max(w.start, S.selectedTrack.timestamp) + 1 && t < w.end - 1);
     if (ident) ident.disabled = !S.canSample || !(t >= w.start && t < w.end);
+    // The line under them that says why both are off.
+    const hint = document.querySelector("#insp .in-hint");
+    if (hint && split) hint.hidden = !(split.disabled && (!ident || ident.disabled));
   }
 }
 
