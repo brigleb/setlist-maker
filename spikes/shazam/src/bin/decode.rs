@@ -12,7 +12,7 @@
 //! One JSON object per line on stdout.
 
 use serde_json::json;
-use shazam_spike::source::{self, diff, Error, Fnv, Version};
+use shazam_spike::source::{self, diff, Error, Fnv, Version, PREROLL};
 use std::collections::VecDeque;
 use std::path::Path;
 use std::process::Command;
@@ -205,7 +205,7 @@ fn peaks(v: Version, path: &Path, a: u64, b: u64, per_bin: u64) -> Result<Vec<(i
     let mut src = source::open(v, path)?;
     let ch = src.info().channels;
     if a > 0 {
-        src.seek(a.saturating_sub(1152))?; // one MP3 frame of preroll, discarded below
+        src.seek(a.saturating_sub(PREROLL))?; // discarded below
     }
     let nbins = (b - a).div_ceil(per_bin) as usize;
     let mut out = vec![(i16::MAX, i16::MIN); nbins];
@@ -240,13 +240,13 @@ fn vdiff(path: &Path) -> Result<(), Error> {
     loop {
         if q5.is_empty(ch) && !q5.done {
             match s5.next_chunk(&mut buf)? {
-                Some(ts) => q5.push(ts, &buf, ch),
+                Some(ts) => q5.push(ts, &buf),
                 None => q5.done = true,
             }
         }
         if q6.is_empty(ch) && !q6.done {
             match s6.next_chunk(&mut buf)? {
-                Some(ts) => q6.push(ts, &buf, ch),
+                Some(ts) => q6.push(ts, &buf),
                 None => q6.done = true,
             }
         }
@@ -293,7 +293,7 @@ impl Pending {
     fn is_empty(&self, ch: usize) -> bool {
         self.frames.len() < ch
     }
-    fn push(&mut self, ts: i64, buf: &[i16], _ch: usize) {
+    fn push(&mut self, ts: i64, buf: &[i16]) {
         if self.frames.is_empty() {
             self.ts = ts;
         }
@@ -313,7 +313,7 @@ fn ffcmp(v: Version, path: &Path, win: f64, pos: &[f64]) -> Result<(), Error> {
         let (rate, ch) = (src.info().rate as f64, src.info().channels);
         let first = (p * rate).round() as u64;
         let count = (win * rate).round() as usize;
-        let ours = source::window(src.as_mut(), first, count, true, 4608)?;
+        let ours = source::window(src.as_mut(), first, count, true, PREROLL)?;
         let out = Command::new("ffmpeg")
             .args(["-nostdin", "-v", "error", "-ss", &format!("{p}"), "-i"])
             .arg(path)

@@ -20,9 +20,6 @@ pub struct Dec {
     errors: u64,
 }
 
-// The boxed reader and decoder are only ever used from the thread that owns them.
-unsafe impl Send for Dec {}
-
 impl Dec {
     pub fn open(path: &Path) -> Result<Self, Error> {
         let mss = MediaSourceStream::new(Box::new(File::open(path)?), Default::default());

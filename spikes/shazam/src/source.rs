@@ -29,6 +29,10 @@ pub trait Source: Send {
     fn decode_errors(&self) -> u64;
 }
 
+/// One MP3 frame. Seeking this far early and discarding it makes a seeked MP3 window
+/// sample-identical to a continuous decode (spike 2).
+pub const PREROLL: u64 = 1152;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Version {
     V05,
