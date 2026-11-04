@@ -11,7 +11,6 @@ use std::time::Duration;
 use hindsight_core::audio::{AudioError, Recording, format_timestamp};
 use hindsight_core::engine::boundary::Confidence;
 use hindsight_core::model::CorrectionsDb;
-use hindsight_core::model::fileio::{adopt_python_config, config_dir};
 use hindsight_core::model::progress::Ended;
 use hindsight_core::run::{
     self, Clock, Existing, Note, Options, Outcome, SetPaths, ShazamListener, StopSignal,
@@ -87,12 +86,7 @@ pub fn run(args: Args) -> ExitCode {
             EXTENSIONS.join(", ")
         ));
     }
-    // The first launch takes over the corrections Python learned (a copy).
-    if let Some(base) = config_dir().parent()
-        && let Err(e) = adopt_python_config(base)
-    {
-        eprintln!("Warning: couldn't copy setlist-maker's config: {e}");
-    }
+    crate::adopt_python_folders();
     if let Some(dir) = &args.output_dir
         && let Err(e) = std::fs::create_dir_all(dir)
     {
