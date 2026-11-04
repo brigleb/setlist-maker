@@ -93,6 +93,20 @@ Each spike's exit is a measured result written into this file.
 1. **Fingerprint and Shazam.** From Rust, fingerprint a 12s window and a 30s window of the
    ground-truth set and send one request each. Pass: the same answer as Python, and implied
    starts within 0.1s (proves the centred 10s excerpt is reproduced).
+   **Result (2026-11-03, `spikes/shazam/`, 5 positions × 12s and 30s windows, 20 requests,
+   all 200):** pass. All 10 pairs named the same track, with the same `matches` list. Rust's
+   implied starts are within 5ms of Python's (most within 2ms); Rust's 12s and 30s windows
+   agree within 24ms. Offline, the ported fingerprinter is **byte-identical** to
+   shazamio-core 1.1.2 on the same PCM (`cargo test`, fixture made by shazamio-core). That
+   is M3's exit check 1, done early. What matching shazamio-core means, from its source and
+   rodio 0.20.1's: symphonia with gapless trimming, i16, the **first channel only** (rodio's
+   mono conversion drops the rest), integer linear resampling to 16 kHz, then the middle 10s
+   (`len / 2` ± 80000 samples). The request mirrors shazamio's URL, headers and body.
+   For spike 2: symphonia's accurate seek lands on the right sample (40ms against 1–7s
+   decoding from the top), but the first ≤13ms after a seek differ from a continuous decode
+   (MP3 decoder warm-up, up to 9577 LSB). Harmless here, since the excerpt starts ≥1s into
+   the window; M3 should seek a frame early and discard. The set is 48 kHz.
+   Verdict: continue.
 2. **symphonia.** Decode the 4-hour MP3: wall time, seek accuracy to an arbitrary second, and
    decoded length vs. the header duration (the decode guard). Also m4a, flac and wav.
 3. **Tauri.** The existing page in a window through the custom scheme. Pass: `<audio>` plays
