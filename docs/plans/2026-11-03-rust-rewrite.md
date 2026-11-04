@@ -379,7 +379,8 @@ both fixtures.
   misidentification, gaps, cut-ins, editor probes, stopped early or converged), 714 each of
   shuffled/subsampled runs with twins at one midpoint, hand-edit value shapes, names near the
   clustering thresholds, and legacy lists. 473,286 prefixes, **0 differ**.
-- **The check bites.** Each of these mutants is caught, out of 700 generated files:
+- **The check bites.** Each of these mutants is caught, out of 700 generated files (measured as
+  the generator grew, so the runs differ a little):
   - half-away rounding: 272
   - no fingerprint lead: 331
   - lower-middle median: 244
@@ -394,6 +395,8 @@ both fixtures.
   - A non-number confidence or timeskew counts as 0.
   - A non-object offset is skipped.
   - The one `assert` in `add_probe` (two intervals rounding to the same key) skips the event.
+  - With a clustering threshold above 1, which no command sets, equal keys can start two
+    clusters, and a `boundary_predicted` can fire where Python's wouldn't.
 - **Decided along the way:** `hindsight replay` lives in a new `crates/cli` (clap), whose
   other commands arrive in M3. Events and drops are typed enums that serialize to Python's
   dicts. `Probe.purpose` stays a string; a `ProbePlan` carries a `Purpose` enum.
