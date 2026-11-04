@@ -358,6 +358,43 @@ Exactness depends on three deliberate copies of Python: `round_ties_even` wherev
 calls `round()`; a faithful port of `difflib.SequenceMatcher.ratio()` over chars, not bytes;
 and insertion-ordered maps, so `max()` ties resolve the same way.
 
+**Result (2026-11-03, `scripts/parity_m2.py` with the hidden `hindsight replay`):** pass.
+`hindsight-core::engine` has 64 tests: Python's engine, segments and property tests ported, with
+both fixtures.
+- **Exact copies of Python.** `engine::py` covers `round(x, n)` (Rust's exact formatting,
+  parsed back), `round()` half to even, first-wins `max`/`min`, `statistics.median`, and
+  `repr(float)` for the dump. `engine::difflib` ports `SequenceMatcher.ratio()`, autojunk
+  included. Python's `\b` treats a combining mark as a non-word character and the regex
+  crate doesn't, so non-ASCII is mapped to `_`/`#` before the identity regexes. The oracle
+  runs on a port of Python's Mersenne Twister, so the property tests also pin Python's exact
+  numbers per seed (220 probes, p90 4.144984684561678, 43 impostors of 89), not just bounds.
+- **What's compared.** At every prefix: the events, segments and drops, `next_probe()`,
+  `boundary_stats()`, the probes-remaining estimate, `max_ratio` and `max_boundary_width`,
+  written as Python's `json.dumps` writes them.
+- **Corpus.** The real data is one 340-probe run (09-28), a 2-probe run and the two 08-26
+  fixtures. Generated on top: 2144 oracle runs (blur, jitter, offset dropout,
+  misidentification, gaps, cut-ins, editor probes, stopped early or converged), 714 each of
+  shuffled/subsampled runs with twins at one midpoint, hand-edit value shapes, names near the
+  clustering thresholds, and legacy lists. 474,476 prefixes, **0 differ**.
+- **The check bites.** Each of these mutants is caught, out of 700 generated files:
+  - half-away rounding: 272
+  - no fingerprint lead: 331
+  - lower-middle median: 244
+  - bisect right: 51
+  - autojunk off: 104
+  - Rust's `\b`: 24
+  - a later zone winner on a tie: only 2, so that rule's coverage is thin.
+  Ratio over bytes isn't observable, because normalized names are ASCII-only.
+- **Differences no writer produces:** where Python would crash, Hindsight carries on.
+  - A result that's a non-empty non-object is unidentified.
+  - A non-string name is empty.
+  - A non-number confidence or timeskew counts as 0.
+  - A non-object offset is skipped.
+  - The one `assert` in `add_probe` (two intervals rounding to the same key) skips the event.
+- **Decided along the way:** `hindsight replay` lives in a new `crates/cli` (clap), whose
+  other commands arrive in M3. Events and drops are typed enums that serialize to Python's
+  dicts. `Probe.purpose` stays a string; a `ProbePlan` carries a `Purpose` enum.
+
 ### M3 Recognition and the CLI (5–7 days)
 
 Decoding and windows, the Shazam client, the adaptive driver (15s pacing, persist after each
