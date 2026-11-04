@@ -93,19 +93,33 @@ Each spike's exit is a measured result written into this file.
 1. **Fingerprint and Shazam.** From Rust, fingerprint a 12s window and a 30s window of the
    ground-truth set and send one request each. Pass: the same answer as Python, and implied
    starts within 0.1s (proves the centred 10s excerpt is reproduced).
-   **Result (2026-11-03, `spikes/shazam/`, 5 positions × 12s and 30s windows, 20 requests,
-   all 200):** pass. All 10 pairs named the same track, with the same `matches` list. Rust's
-   implied starts are within 5ms of Python's (most within 2ms); Rust's 12s and 30s windows
-   agree within 24ms. Offline, the ported fingerprinter is **byte-identical** to
-   shazamio-core 1.1.2 on the same PCM (`cargo test`, fixture made by shazamio-core). That
-   is M3's exit check 1, done early. What matching shazamio-core means, from its source and
-   rodio 0.20.1's: symphonia with gapless trimming, i16, the **first channel only** (rodio's
-   mono conversion drops the rest), integer linear resampling to 16 kHz, then the middle 10s
-   (`len / 2` ± 80000 samples). The request mirrors shazamio's URL, headers and body.
-   For spike 2: symphonia's accurate seek lands on the right sample (40ms against 1–7s
-   decoding from the top), but the first ≤13ms after a seek differ from a continuous decode
-   (MP3 decoder warm-up, up to 9577 LSB). Harmless here, since the excerpt starts ≥1s into
-   the window; M3 should seek a frame early and discard. The set is 48 kHz.
+   **Result (2026-11-03, `spikes/shazam/`, 5 positions × 12s and 30s windows, each sent once
+   by Python's adaptive path and once by Rust):** pass. All 10 pairs named the same track,
+   with the same number and order of match offsets. Rust's implied starts are within 5.1ms of
+   Python's on the first match and 14.6ms on any match; within Rust, the 12s and 30s windows
+   agree within 25ms. Python re-encodes each window to MP3 before shazamio-core decodes it,
+   which accounts for most of the gap. The 10 Rust requests all returned 200; Python's
+   statuses weren't recorded. Offline, the fingerprinter is **byte-identical** to
+   shazamio-core 1.1.2 on the same PCM (`cargo test`, against a fixture made by shazamio-core).
+   That proves M3's exit check 1 early; M3 still has to carry the test into
+   `hindsight-core`, with `Cargo.lock` pinning `chfft`. The algorithm is SongRec's, but
+   current SongRec uses `realfft`, not `chfft`, and whether the bits match then is
+   unverified. To match shazamio-core, decode with symphonia with gapless trimming, take i16
+   and the **first channel only** (rodio's mono conversion drops the rest), resample to
+   16 kHz by rodio's integer linear interpolation, then keep the middle 10s
+   (`len / 2` ± 80000 samples). rodio restarts its resampler on every decoded packet; the
+   spike doesn't, and the difference fits inside the numbers above. This set is 48 kHz,
+   which is an exact 3:1 that never interpolates; a test against rodio itself covers
+   44.1 kHz. The request copies shazamio's URL, body and headers, except that it uses one
+   fixed User-Agent where shazamio picks one at random.
+   For spike 2: an accurate seek lands on the right sample, taking 26–53ms where decoding
+   from the top takes 0.9–7.2s. The first few ms after a seek differ from a continuous
+   decode, which is MP3 decoder warm-up:
+   - at 12941s with a 30s window, 580 samples within the first 644 (13ms), up to 9577 LSB;
+   - at 9876.4s with a 12s window, 26 samples within the first 69, up to 3 LSB;
+   - at 1607s and 7033s, identical.
+   That's harmless here, because the excerpt starts at least 1s into the window. M3 should
+   seek a frame early and discard it.
    Verdict: continue.
 2. **symphonia.** Decode the 4-hour MP3: wall time, seek accuracy to an arbitrary second, and
    decoded length vs. the header duration (the decode guard). Also m4a, flac and wav.
@@ -153,6 +167,8 @@ Exit, three checks:
 3. **End to end, once, online:** a ground-truth run (`-o <scratch>`) scored against Ray's
    corrected 60-track `_tracklist.md` finds at least the tracks one Python adaptive run (kept
    as the baseline, scored the same way) found, with boundary errors in the same range.
+   As of 2026-11-03 that `_tracklist.md` is missing from beside the MP3 and from anywhere
+   searched on disk; only the MP3 is left. Find it before M3.
 
 ### M4 Artwork, chapters, peaks (4–6 days)
 

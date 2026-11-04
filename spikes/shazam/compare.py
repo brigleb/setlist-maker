@@ -2,7 +2,7 @@
 
 For each position, a 30s and a 12s window are each sent once by Python
 (`load_audio` + `extract_window` + `identify_sample_with_retry`, the adaptive
-driver's own path) and once by `shazam-spike probe`, 15s apart throughout.
+driver's own path) and once by `shazam-spike sample`, 15s apart throughout.
 Implied start = T + (window - 10) / 2 - offset. Writes JSONL to the path given.
 
     cargo build --release --manifest-path spikes/shazam/Cargo.toml
@@ -20,11 +20,12 @@ from pathlib import Path
 from shazamio import Shazam
 
 from setlist_maker.audio import extract_window, load_audio
+from setlist_maker.identify import DEFAULT_DELAY_SECONDS
 from setlist_maker.shazam_client import identify_sample_with_retry
 
 HERE = Path(__file__).resolve().parent
 SPIKE = HERE / "target" / "release" / "shazam-spike"
-DELAY = 15
+DELAY = DEFAULT_DELAY_SECONDS
 WINDOWS = (30.0, 12.0)
 
 
@@ -66,7 +67,7 @@ async def main() -> None:
                 }
                 await pace()
                 proc = subprocess.run(
-                    [str(SPIKE), "probe", str(audio_path), str(t), str(w)],
+                    [str(SPIKE), "sample", str(audio_path), str(t), str(w)],
                     capture_output=True,
                     text=True,
                     check=True,

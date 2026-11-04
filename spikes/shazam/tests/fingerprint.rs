@@ -23,5 +23,5 @@ fn test_pcm() -> Vec<i16> {
 #[test]
 fn signature_matches_shazamio_core_for_the_same_pcm() {
     let expected = include_str!("fixtures/lcg_12s.uri").trim();
-    assert_eq!(shazam_spike::signature::fingerprint_uri(&test_pcm()), expected);
+    assert_eq!(shazam_spike::signature::fingerprint(&test_pcm()).uri, expected);
 }

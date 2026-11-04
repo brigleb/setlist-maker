@@ -1,12 +1,15 @@
 //! Shazam audio signature generation.
 //!
-//! Ported from shazamio-core 1.1.2 (`src/fingerprinting/algorithm.rs` and
-//! `signature_format.rs`), which is itself derived from SongRec's `SignatureGenerator`
-//! by Marin M. (GPL-3.0, https://github.com/marin-m/SongRec). Hindsight is GPL-3 for this
-//! reason (docs/adr/0001-gpl-3-via-songrec.md).
+//! The algorithm and the wire format are SongRec's `SignatureGenerator` and
+//! `DecodedSignature` by Marin M. (GPL-3.0-or-later, https://github.com/marin-m/SongRec,
+//! `src/core/fingerprinting/`), which is why Hindsight is GPL-3
+//! (docs/adr/0001-gpl-3-via-songrec.md). shazamio-core 1.1.2 ships the same code; checked
+//! against SongRec c6cd35b, the peak rules, constants and Hann table are identical.
 //!
-//! Exactness matters: the same FFT library (chfft) and the same f32 Hann table are what
-//! make the output byte-identical to shazamio-core's for the same PCM.
+//! One deliberate difference from current SongRec: the FFT is `chfft` (as in shazamio-core),
+//! not `realfft`. That is what makes the output byte-identical to shazamio-core's, which
+//! is what the Python version sends (`tests/fingerprint.rs`). Whether `realfft` gives the
+//! same bits is unverified. Only the centred excerpt below is shazamio-core's own.
 
 use crate::hanning::HANNING_WINDOW_2048_MULTIPLIERS;
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -20,16 +23,30 @@ pub const EXCERPT_SECONDS: u32 = 10;
 
 const DATA_URI_PREFIX: &str = "data:audio/vnd.shazam.sig;base64,";
 
-/// Centre a 16 kHz mono buffer on its middle 10 seconds, fingerprint it, and
-/// return the `data:audio/vnd.shazam.sig;base64,...` URI Shazam's tag endpoint takes.
-pub fn fingerprint_uri(pcm_16k_mono: &[i16]) -> String {
-    let sig = Signature::generate(excerpt(pcm_16k_mono));
-    format!("{DATA_URI_PREFIX}{}", STANDARD.encode(sig.encode()))
+/// What Shazam is sent for one window.
+pub struct Fingerprint {
+    /// `data:audio/vnd.shazam.sig;base64,...`, the request's `signature.uri`.
+    pub uri: String,
+    /// The excerpt's length in ms, the request's `signature.samplems`.
+    pub excerpt_ms: u32,
+    /// Seconds from the window's start to the excerpt's: `(window - 10) / 2`, or 0.
+    pub lead_s: f64,
+}
+
+/// Centre a 16 kHz mono window on its middle 10 seconds and fingerprint that excerpt.
+pub fn fingerprint(window_16k_mono: &[i16]) -> Fingerprint {
+    let ex = excerpt(window_16k_mono);
+    let sig = Signature::generate(ex);
+    Fingerprint {
+        uri: format!("{DATA_URI_PREFIX}{}", STANDARD.encode(sig.encode())),
+        excerpt_ms: (ex.len() as f32 / SAMPLE_RATE as f32 * 1000.) as u32,
+        lead_s: (window_16k_mono.len() - ex.len()) as f64 / 2.0 / SAMPLE_RATE as f64,
+    }
 }
 
 /// The excerpt shazamio-core fingerprints: the middle 10s, or everything when shorter.
 /// Same arithmetic as `make_signature_from_file` (`middle = len / 2`).
-pub fn excerpt(pcm: &[i16]) -> &[i16] {
+fn excerpt(pcm: &[i16]) -> &[i16] {
     let segment = (EXCERPT_SECONDS * SAMPLE_RATE) as usize;
     if pcm.len() <= segment {
         return pcm;
@@ -52,17 +69,12 @@ struct Peak {
     corrected_bin: u16,
 }
 
-pub struct Signature {
+struct Signature {
     number_samples: u32,
     peaks: BTreeMap<Band, Vec<Peak>>,
 }
 
 impl Signature {
-    /// Duration of the fingerprinted audio in ms, as sent in the request's `samplems`.
-    pub fn sample_ms(&self) -> u32 {
-        (self.number_samples as f32 / SAMPLE_RATE as f32 * 1000.) as u32
-    }
-
     fn generate(samples: &[i16]) -> Signature {
         let mut g = Generator {
             ring: vec![0; 2048],
@@ -152,7 +164,7 @@ struct Generator {
     sig: Signature,
 }
 
-/// Index `back` entries behind (negative) or ahead of `i` in a 256-entry ring.
+/// The entry `offset` places behind (negative) or ahead of `i` in a 256-entry ring.
 fn ring256(i: usize, offset: i32) -> usize {
     ((i as i32 + offset) & 255) as usize
 }

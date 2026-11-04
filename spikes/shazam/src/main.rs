@@ -1,6 +1,6 @@
 //! M0 spike 1 driver.
 //!
-//!   shazam-spike probe <audio> <start_s> <window_s>   one Shazam request, one JSON line
+//!   shazam-spike sample <audio> <start_s> <window_s>  one Shazam request, one JSON line
 //!   shazam-spike seekcheck <audio> <start_s> <window_s>  seeked vs from-the-top PCM
 //!
 //! The excerpt Shazam hears starts `(window - 10) / 2` after the window does, so a match
@@ -14,7 +14,7 @@ use std::time::Instant;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 5 {
-        eprintln!("usage: shazam-spike probe|seekcheck <audio> <start_s> <window_s>");
+        eprintln!("usage: shazam-spike sample|seekcheck <audio> <start_s> <window_s>");
         std::process::exit(2);
     }
     let path = Path::new(&args[2]);
@@ -22,15 +22,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window: f64 = args[4].parse()?;
 
     match args[1].as_str() {
-        "probe" => {
+        "sample" => {
             let t = Instant::now();
             let pcm = decode::window_16k_mono(path, start, window, true)?;
             let decode_ms = t.elapsed().as_millis();
-            let excerpt = signature::excerpt(&pcm);
-            let lead = (pcm.len() - excerpt.len()) as f64 / 2.0 / signature::SAMPLE_RATE as f64;
-            let uri = signature::fingerprint_uri(&pcm);
-            let sample_ms = (excerpt.len() as f32 / signature::SAMPLE_RATE as f32 * 1000.) as u32;
-            let a = shazam::recognize(&uri, sample_ms)?;
+            let fp = signature::fingerprint(&pcm);
+            let lead = fp.lead_s;
+            let a = shazam::recognize(&fp.uri, fp.excerpt_ms)?;
             let implied: Vec<f64> = a.offsets.iter().map(|o| start + lead - o).collect();
             println!(
                 "{}",

@@ -1,6 +1,6 @@
-// Hann window multipliers for a 2048-point FFT, copied verbatim from SongRec via
-// shazamio-core 1.1.2 (src/fingerprinting/hanning.rs). Kept as data, not computed, so the
-// f32 values match theirs bit for bit.
+// Hann window multipliers for a 2048-point FFT, from SongRec
+// (src/core/fingerprinting/hanning.rs, GPL-3.0-or-later; identical in shazamio-core 1.1.2).
+// Kept as data, not computed, so the f32 values match theirs bit for bit.
 // Multipliers for applying hanning window over 2048 entries, with
 // leading and trailing zeroes omitted.
 
