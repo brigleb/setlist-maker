@@ -253,6 +253,48 @@ Each spike's exit is a measured result written into this file.
 4. **ID3.** The `id3` crate writes v2.3 CHAP/CTOC with per-chapter APIC; ffprobe lists the
    chapters in time order. If the crate keeps insertion order, the #33 byte-permuting fix is
    not needed.
+   **Result (2026-11-03, `spikes/id3/`, id3 1.17.2, clones of the 09-28 set's 352MB MP3):**
+   pass, and the #33 fix is not needed. `dump_fixture.py` pulled out the 62 chapters, their
+   62 images (33–145KB) and the cover that Python had already embedded. Python's
+   `embed_chapters` and the spike then each embedded them again into a clone.
+   - **Order:** the crate writes frames in the order they were added (`add_frame` pushes onto
+     a `Vec`; a test that adds them shuffled finds them shuffled on disk). Added in time order,
+     the 62 CHAPs sit in time order despite art of every size, which is what scattered them
+     under mutagen. M4 adds them sorted by start and doesn't port
+     `_order_chap_frames_chronologically`.
+   - **The same chapters as Python:** ffprobe's `-show_chapters` JSON is byte-identical to
+     that of Python's file and of the original, including two Turkish titles outside Latin-1.
+     Every CHAP holds TIT2 then APIC, with the same image bytes and description, and offsets
+     of `0xFFFFFFFF`. CTOC is top-level and ordered, with the 62 children in order. The header
+     is `ID3 03 00 00`, mutagen loads it as v2.3 with 62 CHAP and one CTOC, and the audio after
+     the tag hashes the same.
+   - **Where the bytes differ from Python's** (neither ffprobe nor AVFoundation shows it): the
+     crate doesn't write the trailing UTF-16 NUL on text, which v2.3 makes optional, so each
+     text frame is 2 bytes shorter. It rewrites the frames it didn't touch (Logic's `TSSE`, the
+     `iTunNORM`/`iTunSMPB` comments) from Latin-1 to UTF-16, with the same text. Whether Apple's
+     gapless playback still reads `iTunSMPB` in UTF-16 is unverified. The frames keep the
+     file's order, with new ones after (the cover before the chapters, CTOC last).
+   - **Two crate gaps, both needed in M4:**
+     - A frame carried over from a v2.4 tag keeps its UTF-8, and the crate writes encoding
+       byte 3 into the v2.3 tag (a test with ffmpeg's v2.4 tag caught a `TXXX`). The spike
+       re-marks UTF-8 and UTF-16BE frames as UTF-16 before writing.
+     - CTOC's child count is one byte, and the crate writes `len() as u8` unchecked, so 256
+       chapters would make a table listing none. The spike refuses more than 255.
+   - **Write cost:** `write_to_path` writes no padding, so any change in the tag's size moves
+     the audio. The first run shrank the tag by Python's 347KB of padding and moved 352MB in
+     place (111ms). The spike instead encodes the tag first and applies mutagen's padding rule
+     through the public `Encoder::padding`: fill the old room if the tag fits and that leaves
+     at most 10KB + 1% of the audio, else pad 1KB + 0.1%. With that, a re-embed over Python's
+     tag leaves the audio in place: 5–11ms (Python 18–21ms). Embedding into a copy with no tag
+     has to move it: 463–541ms over 3 runs (Python 109–114ms; the crate copies in 64KB steps),
+     leaving exactly mutagen's 347,356 bytes of padding. Neither writer is atomic, so a crash
+     mid-move breaks the MP3, as in Python today. The audio moves only when the tag outgrows
+     its padding: the first Embed of a recording, or art growing by more than the padding.
+   - **AVFoundation** (`avchapters.swift`) lists 0 chapters for Python's file as well as the
+     spike's, so it can't judge chapters. It reads the same duration, title, album, artist and
+     78KB cover from both. Apple Podcasts wasn't tried (unverified).
+
+   Verdict: use the `id3` crate with the two fixes and the padding rule; don't port the reorder.
 
 If spike 3's Range streaming fails, fall back to a loopback server inside the app (and keep the
 host guard). If spike 1 fails, the plan stops here.

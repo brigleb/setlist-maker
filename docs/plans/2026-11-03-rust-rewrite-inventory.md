@@ -20,7 +20,7 @@ contracts Hindsight must keep, and the behaviour settled in the 2026-11-03 grill
 | `shazam_client.py` | 143 | **Rewrite.** Own HTTP client, real 429 handling. Drop the dead substring test. Keep `estimate_confidence`. |
 | `artwork.py` | 716 | **Port** the sources and candidates. **Drop** `create_chapter_image`'s overlay and the gradient card. |
 | `artwork_cache.py` | 306 | **Shrink** to a source-only cache: no composites, so no composite keys. |
-| `chapters.py` | 391 | **Port** the embed and episode-cover precedence. The #33 frame reorder only if spike 4 needs it. |
+| `chapters.py` | 391 | **Port** the embed and episode-cover precedence, on the `id3` crate. **Drop** the #33 frame reorder: the crate keeps insertion order (spike 4). |
 | `web_editor.py` | 1224 | **Port** the router and the save/revision logic. **Drop** the host guard in the app (kept in `serve`). |
 | `identify.py` | 522 | **Keep** `finalize_outputs` and `results_to_tracklist`. **Drop** the sequential scan, dedup and smoothing pipeline. |
 | `cli.py` | 884 | **Rewrite** small with clap: `identify`, `chapters`, plus hidden dev `replay` / `serve`. Flags below. |
@@ -61,8 +61,11 @@ Ray's existing sets open unchanged. M1's golden check proves it.
   **copy** (never move) the old files, so Python keeps working. Same for `~/.cache/hindsight`
   (artwork sources, `.fallback` markers, candidates, peaks), whose sha256 key strings match
   Python's exactly.
-- **MP3 tags**: ID3**v2.3** only (#17); CHAP frames in time order (#33); top-level
-  `TIT2`/`TALB`/`TPE1`, and a blank value writes nothing.
+- **MP3 tags**: ID3**v2.3** only (#17); CHAP frames in time order (#33), so they're added
+  sorted by start; top-level `TIT2`/`TALB`/`TPE1`, and a blank value writes nothing. From
+  spike 4: no UTF-8 inside v2.3 (frames read from a v2.4 tag are re-marked UTF-16), at most
+  255 chapters (CTOC's count is one byte), and mutagen's padding rule, so a re-embed doesn't
+  move the audio.
 
 ## Behaviour to carry over (each has a Python test today)
 

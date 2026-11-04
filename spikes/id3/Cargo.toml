@@ -1,0 +1,15 @@
+[package]
+name = "id3-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-or-later"
+description = "M0 spike 4: ID3v2.3 CHAP/CTOC with per-chapter APIC through the id3 crate (throwaway)"
+
+[dependencies]
+id3 = { version = "=1.17.2", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
