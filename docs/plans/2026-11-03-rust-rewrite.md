@@ -98,7 +98,7 @@ Each spike's exit is a measured result written into this file.
    with the same number and order of match offsets. Rust's implied starts are within 5.1ms of
    Python's on the first match and 14.6ms on any match; within Rust, the 12s and 30s windows
    agree within 25ms. Python re-encodes each window to MP3 before shazamio-core decodes it,
-   which accounts for most of the gap. The 10 Rust requests all returned 200; Python's
+   which likely accounts for most of the gap (unverified). The 10 Rust requests all returned 200; Python's
    statuses weren't recorded. Offline, the fingerprinter is **byte-identical** to
    shazamio-core 1.1.2 on the same PCM (`cargo test`, against a fixture made by shazamio-core).
    That proves M3's exit check 1 early; M3 still has to carry the test into
@@ -108,7 +108,7 @@ Each spike's exit is a measured result written into this file.
    and the **first channel only** (rodio's mono conversion drops the rest), resample to
    16 kHz by rodio's integer linear interpolation, then keep the middle 10s
    (`len / 2` ± 80000 samples). rodio restarts its resampler on every decoded packet; the
-   spike doesn't, and the difference fits inside the numbers above. This set is 48 kHz,
+   spike doesn't. At 48 kHz that changes nothing; at 44.1 kHz it's untested on the live path. This set is 48 kHz,
    which is an exact 3:1 that never interpolates; a test against rodio itself covers
    44.1 kHz. The request copies shazamio's URL, body and headers, except that it uses one
    fixed User-Agent where shazamio picks one at random.
