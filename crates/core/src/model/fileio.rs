@@ -46,7 +46,8 @@ pub fn adopt_python_config(base: &Path) -> io::Result<bool> {
         .tempdir_in(base)?;
     for entry in fs::read_dir(&theirs)? {
         let entry = entry?;
-        if entry.file_type()?.is_file() {
+        // Following symlinks: a linked corrections.json is still the user's corrections.
+        if fs::metadata(entry.path()).is_ok_and(|m| m.is_file()) {
             fs::copy(entry.path(), staging.path().join(entry.file_name()))?;
         }
     }
@@ -258,6 +259,25 @@ mod tests {
             fs::read_to_string(ours.join("corrections.json")).unwrap(),
             r#"{"corrections": {}}"#
         );
+    }
+
+    #[test]
+    fn a_symlinked_file_is_copied_as_its_contents() {
+        let base = tempfile::tempdir().unwrap();
+        let theirs = base.path().join(PYTHON_APP_DIR);
+        fs::create_dir(&theirs).unwrap();
+        let real = base.path().join("elsewhere.json");
+        fs::write(&real, "{}").unwrap();
+        symlink(&real, theirs.join("corrections.json")).unwrap();
+        assert!(adopt_python_config(base.path()).unwrap());
+        let copied = base.path().join(APP_DIR).join("corrections.json");
+        assert!(
+            !fs::symlink_metadata(&copied)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(copied).unwrap(), "{}");
     }
 
     #[test]

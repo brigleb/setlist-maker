@@ -9,18 +9,12 @@ use super::track::Track;
 
 // Reissue bookkeeping in a title: "(2009 Remaster)", "[Remastered]", "- 2012 Remaster". Mirrors
 // `cleanTitle()` in `web_timeline.js`, whose Tidy removes exactly this.
-static REISSUE_TAG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)\s*[(\[](?:\d{4}\s+)?(?:digital(?:ly)?\s+)?remaster(?:ed)?(?:\s+(?:version|\d{4}))?[)\]]",
-    )
-    .unwrap()
-});
-static REISSUE_DASH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)\s+-\s+(?:\d{4}\s+)?(?:digital(?:ly)?\s+)?remaster(?:ed)?(?:\s+(?:version|\d{4}))?\s*$",
-    )
-    .unwrap()
-});
+const REISSUE: &str =
+    r"(?:\d{4}\s+)?(?:digital(?:ly)?\s+)?remaster(?:ed)?(?:\s+(?:version|\d{4}))?";
+static REISSUE_TAG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"(?i)\s*[(\[]{REISSUE}[)\]]")).unwrap());
+static REISSUE_DASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"(?i)\s+-\s+{REISSUE}\s*$")).unwrap());
 
 /// A title without its remaster tag; "(Vocal)" and the like are left alone.
 pub fn strip_reissue_tag(title: &str) -> String {

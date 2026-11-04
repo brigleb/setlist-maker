@@ -12,7 +12,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use regex::Regex;
 use serde_json::{Map, Value};
 
@@ -72,7 +72,9 @@ pub fn default_title(tracklist_path: &Path) -> String {
         m[2].parse().unwrap_or(0),
         m[3].parse().unwrap_or(0),
     );
-    date.map(|d| d.format("%B %-d, %Y").to_string())
+    // Python's `date` has no year 0, and writes the year unpadded (`999`, not `0999`).
+    date.filter(|d| d.year() >= 1)
+        .map(|d| format!("{} {}, {}", d.format("%B"), d.day(), d.year()))
         .unwrap_or_default()
 }
 
@@ -147,14 +149,15 @@ pub fn save_episode_tags_in(
     title: &str,
     artist: &str,
 ) -> io::Result<()> {
+    let artist = clean_str(artist);
     let mut tags = Map::new();
     tags.insert("title".into(), Value::String(clean_str(title)));
-    tags.insert("artist".into(), Value::String(clean_str(artist)));
+    tags.insert("artist".into(), Value::String(artist.clone()));
     let path = episode_path_for(tracklist_path);
     if read_object(&path) != tags {
         write_object(&path, &tags)?;
     }
-    remember_artist_in(config_dir, &clean_str(artist));
+    remember_artist_in(config_dir, &artist);
     Ok(())
 }
 
@@ -226,6 +229,8 @@ mod tests {
             ("2026-09-2_tracklist.md", ""),
             ("2026-02-29_tracklist.md", ""),
             ("2028-02-29x_tracklist.md", "February 29, 2028"),
+            ("0999-01-02_tracklist.md", "January 2, 999"),
+            ("0000-01-01_tracklist.md", ""),
             ("Ä026-09-23_tracklist.md", ""),
             // Python's \d is any decimal digit, so an Arabic-Indic one blocks the date too.
             ("2026-09-23\u{663}_tracklist.md", ""),

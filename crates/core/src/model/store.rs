@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 use super::corrections::CorrectionsDb;
 use super::fileio::atomic_write;
 use super::markdown::{Parsed, parse_markdown_tracklist};
+use super::track::Tracklist;
 
 /// The audio a set can be made from, in the order a sibling is looked for. Python searched a
 /// `set`, whose order changes from run to run; MP3 is what Ray's sets are.
@@ -121,7 +122,7 @@ pub(crate) fn truthy(v: Option<&Value>) -> bool {
 /// `.md` over an old sidecar would re-join a corrected track to the stale Shazam URL it was
 /// corrected away from (#30).
 pub fn save_tracklist(
-    tracklist: &super::Tracklist,
+    tracklist: &Tracklist,
     tracklist_path: &Path,
     corrections: Option<&CorrectionsDb>,
 ) -> io::Result<()> {
@@ -160,7 +161,7 @@ pub fn resolve_audio_path(audio: Option<&Path>, tracklist_path: &Path) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Track, Tracklist};
+    use crate::model::Track;
     use serde_json::json;
 
     const TWO: &str = "# Tracklist: test.mp3\n\n*Generated on 2026-01-31 20:00*\n\n\

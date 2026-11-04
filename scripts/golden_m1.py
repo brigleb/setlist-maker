@@ -193,9 +193,41 @@ EPISODES = [
 ]
 
 
+def generate_sidecar(rng: random.Random, markdown: bytes) -> bytes:
+    """A sidecar for the generated markdown, hand-edited in the ways the join must survive:
+    keys equal under Python's ``==`` (``180.0``, ``true``), truthy strings, wrong types, and
+    rows or top levels Python's loader gives up on."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        seconds = [t.timestamp for t in parse_markdown_tracklist(markdown.decode()).tracks]
+    values = [True, False, 0, 1, "false", "", [], {}, None, "yes"]
+    rows: list = []
+    for s in seconds + [rng.randrange(0, 20000)]:
+        row: dict = {"timestamp": rng.choice([s, s, float(s), s + 0.5, str(s), True, False])}
+        if rng.random() < 0.8:
+            row["coverart_url"] = rng.choice(
+                ["https://x/a.jpg", "upload:" + "a" * 24 + ".jpg", "", 42, None]
+            )
+        for key in ("artwork_pinned", "episode_cover"):
+            if rng.random() < 0.6:
+                row[key] = rng.choice(values)
+        rows.append(row)
+    rng.shuffle(rows)
+    if rng.random() < 0.15:
+        rows.append(
+            rng.choice(["has timestamp", "plain", ["timestamp"], [1], None, 3, {"timestamp": [1]}])
+        )
+    top: object = rows
+    if rng.random() < 0.05:
+        top = rng.choice([None, 42, "x", {"timestamp": 0}])
+    text = json.dumps(top)
+    return (text if rng.random() < 0.97 else text[:-1]).encode()
+
+
 def generate_set(rng: random.Random, i: int) -> Case:
     name = f"{rng.choice(SET_NAMES)}{i}_tracklist.md"
     case = {name: generate(rng).encode()}
+    if rng.random() < 0.6:
+        case[name.replace(".md", ".json")] = generate_sidecar(rng, case[name])
     episode = rng.choice(EPISODES)
     if episode is not None:
         case[name.replace("_tracklist.md", "_episode.json")] = episode
@@ -283,11 +315,16 @@ def main() -> int:
     real = len(sets)
     rng = random.Random(args.seed)
     sets += [generate_set(rng, i) for i in range(args.fuzz)]
-    results = [None] + [
-        probe["result"]
-        for case in progress
-        for probe in json.loads(next(iter(case.values()))).get("probes", [])
-    ]
+    results: list = [None]
+    for case in progress:
+        try:
+            data = json.loads(next(iter(case.values())))
+        except ValueError:
+            continue
+        if isinstance(data, dict):  # v2
+            results += [p.get("result") for p in data.get("probes", []) if isinstance(p, dict)]
+        elif isinstance(data, list):  # legacy [[seconds, info], ...]
+            results += [row[1] for row in data if isinstance(row, list) and len(row) == 2]
     real_progress = len(progress)
     progress += [generate_progress(rng, i, results) for i in range(args.fuzz // 50)]
 
@@ -362,13 +399,12 @@ def main() -> int:
         report(py, rs, [] if _same_json(py, rs) else ["progress differs"])
     for py, rs in zip(py_corrections, rs_corrections):
         report(py, rs, [] if _same_json(py, rs) else ["corrections differ"])
-    config = Path("hindsight/config.json"), Path("setlist-maker/config.json")
+    rs_remembered = rs_config / "hindsight/config.json"
+    py_remembered = py_config / "setlist-maker/config.json"
     report(
         py_config,
         rs_config,
-        []
-        if _same_json(py_config / config[1], rs_config / config[0])
-        else ["remembered artist differs"],
+        [] if _same_json(py_remembered, rs_remembered) else ["remembered artist differs"],
     )
 
     print(
