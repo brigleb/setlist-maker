@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "The page may listen for drop events through window.__TAURI__.",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}

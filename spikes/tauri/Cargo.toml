@@ -1,0 +1,14 @@
+[package]
+name = "tauri-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-or-later"
+description = "M0 spike 3: the existing page in a Tauri window through hindsight://, audio Range streaming, file drops (throwaway)"
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.5", features = [] }
+serde_json = "1"

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hindsight Spike",
+  "version": "0.0.0",
+  "identifier": "com.brigleb.hindsight-spike3",
+  "build": {},
+  "app": {
+    "withGlobalTauri": true,
+    "security": { "csp": null },
+    "windows": []
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns"],
+    "fileAssociations": [
+      { "ext": ["mp3"], "name": "MP3 audio", "role": "Viewer", "mimeType": "audio/mpeg" }
+    ]
+  }
+}

@@ -188,6 +188,57 @@ Each spike's exit is a measured result written into this file.
 3. **Tauri.** The existing page in a window through the custom scheme. Pass: `<audio>` plays
    and scrubs a 300MB MP3 through Range requests in WKWebView; a window drop and a Dock-icon
    drop both yield a path.
+   **Result (2026-11-03, `spikes/tauri/`, Tauri 2.12.5 / tauri-cli 2.12.4, the 09-28 set's
+   352MB MP3; the page's `/api/tracklist`, `/probes` and `/peaks` were captured from Python's
+   server and served as files):** pass. The handler is `register_asynchronous_uri_scheme_protocol`
+   with a thread per request. An autotest inside the page did the playing and seeking; Ray did
+   the drags by hand.
+   - **The page runs unchanged under `hindsight://localhost/`:** ES modules, the import map,
+     62 rows, 340 sample pins, the waveform. `localStorage` works, `<input type=file>` opens
+     the picker, and `window.__TAURI__` is there. Listening for events from the page only
+     needs a capability granting `core:event:default`.
+   - **Range:** WebKit sends `bytes=0-1`, then `0-7`, then only closed ranges, mostly 64KB
+     and at most 145KB. Over 3 runs that was 992 requests, none open-ended and none without
+     a Range header, each answered in ≤0.6ms. So the response being a whole `Vec` costs
+     nothing. The handler still caps a response at 4MB in case.
+   - **Playback**, in the same webview, `hindsight://` against Python's http server
+     (`SPIKE_URL`):
+     | | `hindsight://` | http (Python) |
+     |---|---:|---|
+     | `play()` to playing | 146–162ms | 506–573ms |
+     | seek to `seeked`, 18 seeks per run | median ~119ms, max 164 | median ~124ms, max 232 |
+     | scrubber drag (20 positions), each seek | 56–250ms | 59–239ms |
+
+     Every seek landed within 5ms of its target, and playback moved on after it. The app
+     uses 105–138MB of memory (its own process; WebKit's helpers aren't counted).
+   - **The window drop** reaches Rust (`WindowEvent::DragDrop(Drop { paths, position })`) and
+     the page (`tauri://drag-drop` through `window.__TAURI__`) within 1ms, with the real path.
+     The dropped 4h MP3 then loaded in 103ms. The position is in NSView points, even though
+     its type says `PhysicalPosition`. That's from wry's source, and it fits where Ray dropped.
+   - **The page's own drop zones are dead in the app.** Tauri's drop handler always claims
+     the drop (wry's `perform_drag_operation` never passes it on to WebKit), and across Ray's
+     4 drags the page saw no `dragenter`, `dragover` or `drop` at all. So the episode section
+     and the artwork dialog never light up or take an image (Ray: "no dashed-line box"; the
+     outline only shows during `dragover`). Turning `dragDropEnabled` off would bring them
+     back, but WebKit gives the page a `File` with no path, so an MP3 would have to be
+     re-uploaded. M5 keeps the native drop instead: the page maps `position` to an element
+     (`elementFromPoint`), an image over a drop zone becomes an upload read from its path,
+     and anything else opens a set.
+   - **Dock icon and `open -a`** both arrive as `RunEvent::Opened { urls }`. Ray dragged a
+     4h MP3 onto the Dock icon, and it loaded in 19ms. The URLs are percent-encoded (the 🎧
+     folder), and `to_file_path()` decodes them. On a cold `open -a` the event comes ~100ms
+     after start, *before* the page has loaded (~250–300ms), so M5 must hold the path until
+     the page asks for it. The path never appears in argv on macOS. Finder's "Open With" sends
+     the same Apple event but wasn't tried (unverified).
+   - **Background throttling:** in a window that isn't in front, WebKit slows page timers to
+     once a second after about 10 ticks, in both modes. Media is unaffected. That's fine for
+     the live poll (3s), but it's why the spike measured seeks from media events.
+   - `cargo tauri build --bundles app` makes a 9.7MB bundle. It carries only the linker's
+     ad-hoc signature on the binary (identifier `tauri_spike-…`), not a bundle signature, so
+     M6 should set `bundle.macOS.signingIdentity: "-"` (not tried). Launching it registered it
+     with LaunchServices as an MP3 Viewer. `lsregister -u` it afterwards (done here), or it
+     stays in Open With.
+   Verdict: continue on Tauri with the custom scheme; no loopback fallback needed.
 4. **ID3.** The `id3` crate writes v2.3 CHAP/CTOC with per-chapter APIC; ffprobe lists the
    chapters in time order. If the crate keeps insertion order, the #33 byte-permuting fix is
    not needed.
@@ -249,6 +300,8 @@ centre-cropped, resized and JPEG-compressed, or nothing. Episode cover precedenc
 The Tauri shell, the router (every endpoint in the inventory), live mode, click-to-sample,
 saves with revisions. Front-end changes:
 - the two fixes from spike 0 (dialog Tab, drag), first
+- the episode and artwork drop zones re-wired to `tauri://drag-drop` (spike 3: the native
+  drop hides every HTML5 drop from the page)
 - a drop screen when no set is open
 - Done returns to the drop screen instead of a "closed" page
 - Finish now in the live toolbar; Continue identifying for a run that didn't converge;

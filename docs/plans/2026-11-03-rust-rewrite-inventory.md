@@ -122,6 +122,8 @@ Unchanged apart from:
 - a Generate button for summaries
 - Finish now, Continue identifying, and a throttled/paused state
 - the dialog Tab and drag fixes from spike 0
+- the episode and artwork drop zones fed from `tauri://drag-drop` by position, since the
+  native drop hides HTML5 drops from the page (spike 3)
 
 Drop events come through `window.__TAURI__` (`withGlobalTauri`), so there's still no npm and no
 build step. Vendored Preact/htm stay; `web/LICENSES.md` gains the GPL note.
