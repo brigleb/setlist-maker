@@ -133,6 +133,27 @@ impl Decoder {
         Ok(frames)
     }
 
+    /// How many frames the rest of the file holds, from its packets' lengths, trimmed as the
+    /// decoder trims them, without decoding any: an MP3's frame headers, read in well under
+    /// the ~10s a four-hour decode takes.
+    pub fn count_remaining_frames_undecoded(&mut self) -> Result<u64, AudioError> {
+        let mut frames = 0u64;
+        loop {
+            let packet = match self.format.next_packet() {
+                Ok(Some(p)) => p,
+                Ok(None) => return Ok(frames),
+                Err(SymError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    return Ok(frames);
+                }
+                Err(e) => return Err(e.into()),
+            };
+            if packet.track_id == self.track {
+                let trim = packet.trim_start.get() + packet.trim_end.get();
+                frames += packet.dur.get().saturating_sub(trim);
+            }
+        }
+    }
+
     /// `count` frames of the first channel from `first`. With `seek`, starts [`PREROLL`]
     /// frames early and discards them; without, decodes from the top (to check the seek).
     pub fn first_channel(
@@ -141,25 +162,37 @@ impl Decoder {
         count: usize,
         seek: bool,
     ) -> Result<Vec<i16>, AudioError> {
+        let mut out = Vec::with_capacity(count);
+        self.for_each_frame(first, count, seek, |frame| out.push(frame[0]))?;
+        Ok(out)
+    }
+
+    /// Calls `each` with every frame (all its channels) in `[first, first + count)`, or up to
+    /// the end, seeking as [`Decoder::first_channel`] does. Returns how many there were.
+    pub fn for_each_frame(
+        &mut self,
+        first: u64,
+        count: usize,
+        seek: bool,
+        mut each: impl FnMut(&[i16]),
+    ) -> Result<usize, AudioError> {
         if seek && first > 0 {
             self.seek(first.saturating_sub(PREROLL))?;
         }
-        let mut out = Vec::with_capacity(count);
+        let mut done = 0;
         let mut buf = Vec::new();
-        while out.len() < count {
+        while done < count {
             buf.clear();
             let Some((at, _)) = self.next_chunk(&mut buf)? else {
                 break;
             };
             let ch = self.channels.max(1);
             let skip = (first as i64 - at).max(0) as usize;
-            out.extend(
-                buf.chunks(ch)
-                    .skip(skip)
-                    .map(|frame| frame[0])
-                    .take(count - out.len()),
-            );
+            for frame in buf.chunks(ch).skip(skip).take(count - done) {
+                each(frame);
+                done += 1;
+            }
         }
-        Ok(out)
+        Ok(done)
     }
 }

@@ -20,7 +20,7 @@ use std::sync::LazyLock;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
-use image::{ImageReader, imageops};
+use image::{ImageReader, RgbImage, imageops};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
@@ -109,6 +109,18 @@ pub fn read_upload(artwork_dir: Option<&Path>, reference: &str) -> Option<Vec<u8
     (!data.is_empty()).then_some(data)
 }
 
+/// The middle square of an image (itself when it's square already). Every consumer of a
+/// cover is square: uploads, chapter pictures and the episode cover.
+pub fn centre_square(image: RgbImage) -> RgbImage {
+    let (width, height) = image.dimensions();
+    if width == height {
+        return image;
+    }
+    let edge = width.min(height);
+    let (left, top) = ((width - edge) / 2, (height - edge) / 2);
+    imageops::crop_imm(&image, left, top, edge, edge).to_image()
+}
+
 /// Decodes, centre-crops to square, caps the edge and re-encodes as JPEG.
 ///
 /// Square because every consumer is square; re-encoding means what's stored is known to
@@ -119,14 +131,8 @@ pub fn normalize_image(data: &[u8], max_edge: u32) -> Result<Vec<u8>, UploadErro
         .map_err(|_| UploadError::Unreadable)?
         .decode()
         .map_err(|_| UploadError::Unreadable)?;
-    let mut image = decoded.to_rgb8();
-    let (width, height) = image.dimensions();
-    let edge = width.min(height);
-    if width != height {
-        let (left, top) = ((width - edge) / 2, (height - edge) / 2);
-        image = imageops::crop_imm(&image, left, top, edge, edge).to_image();
-    }
-    if edge > max_edge {
+    let mut image = centre_square(decoded.to_rgb8());
+    if image.width() > max_edge {
         image = imageops::resize(&image, max_edge, max_edge, FilterType::Lanczos3);
     }
     let mut out = Vec::new();

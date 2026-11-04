@@ -149,6 +149,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
 
 [[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+
+[[package]]
 name = "byteorder-lite"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -554,6 +560,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "hindsight-core",
+ "log",
  "serde_json",
 ]
 
@@ -565,6 +572,7 @@ dependencies = [
  "chfft",
  "chrono",
  "crc32fast",
+ "id3",
  "image",
  "indexmap",
  "log",
@@ -781,6 +789,17 @@ dependencies = [
  "zerofrom",
  "zerotrie",
  "zerovec",
+]
+
+[[package]]
+name = "id3"
+version = "1.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef8be496a46468ba3d43690775aa3a79102ce4daf7d99e8072589aae1a3cd955"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "flate2",
 ]
 
 [[package]]

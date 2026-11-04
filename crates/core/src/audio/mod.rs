@@ -10,6 +10,7 @@
 
 mod decoder;
 mod mp3;
+pub mod peaks;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -142,6 +143,14 @@ impl Recording {
         let pcm = self.window_first_channel(start, window)?;
         Ok(resample_linear(&pcm, self.rate, crate::shazam::SAMPLE_RATE))
     }
+}
+
+/// A recording's length in seconds from its packets, without decoding it ([`Decoder::
+/// count_remaining_frames_undecoded`]): what the chapters embed ends the last chapter at.
+pub fn undecoded_seconds(path: &Path) -> Result<f64, AudioError> {
+    let mut dec = Decoder::open(path)?;
+    let frames = dec.count_remaining_frames_undecoded()?;
+    Ok(frames as f64 / dec.rate() as f64)
 }
 
 /// Fails when the decode fell well short of the length the container states. Nothing stated,

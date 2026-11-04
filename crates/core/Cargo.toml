@@ -14,6 +14,10 @@ base64 = "0.22"
 chfft = "0.3.4"
 crc32fast = "1.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Pinned: spike 4 measured that this version writes frames in the order they're added (so the
+# CHAPs need no reordering, #33), and worked around its gaps (UTF-8 in v2.3, CTOC's one-byte
+# count, no v2.4 conversion). Re-check those before moving it.
+id3 = { version = "=1.17.2", default-features = false }
 indexmap = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 log = "0.4"

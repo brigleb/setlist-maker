@@ -25,6 +25,19 @@ pub fn config_base(xdg_config_home: Option<&OsStr>, home: &Path) -> PathBuf {
     }
 }
 
+/// `$XDG_CACHE_HOME/hindsight`, else `~/.cache/hindsight` (ADR 0003): artwork and peaks.
+pub fn cache_dir() -> PathBuf {
+    cache_base(std::env::var_os("XDG_CACHE_HOME").as_deref(), &home()).join(APP_DIR)
+}
+
+/// [`config_base`]'s rule for the cache folder.
+pub fn cache_base(xdg_cache_home: Option<&OsStr>, home: &Path) -> PathBuf {
+    match xdg_cache_home {
+        Some(v) if !v.is_empty() => PathBuf::from(v),
+        _ => home.join(".cache"),
+    }
+}
+
 fn home() -> PathBuf {
     std::env::home_dir().unwrap_or_default()
 }
@@ -55,6 +68,46 @@ pub fn adopt_python_config(base: &Path) -> io::Result<bool> {
     Ok(true)
 }
 
+/// The Python cache's subfolders that carry over, and which of their files: the artwork
+/// sources, negative-result markers and picker candidates, and the waveform peaks. Python's
+/// chapter composites (`.jpg`) aren't, since nothing reads them now.
+const ADOPTED_CACHE: [(&str, &[&str]); 2] = [
+    ("artwork", &["src", "fallback", "cands"]),
+    ("peaks", &["peaks"]),
+];
+
+/// [`adopt_python_config`] for `~/.cache`: copies `setlist-maker/artwork` and `/peaks` into
+/// `hindsight` the first time, so lookups Python already made aren't made again. The keys
+/// are the same strings, so the copies hit.
+pub fn adopt_python_cache(base: &Path) -> io::Result<bool> {
+    let ours = base.join(APP_DIR);
+    let theirs = base.join(PYTHON_APP_DIR);
+    if ours.exists() || !theirs.is_dir() {
+        return Ok(false);
+    }
+    let staging = tempfile::Builder::new()
+        .prefix(".hindsight.")
+        .tempdir_in(base)?;
+    for (sub, extensions) in ADOPTED_CACHE {
+        let Ok(entries) = fs::read_dir(theirs.join(sub)) else {
+            continue;
+        };
+        let into = staging.path().join(sub);
+        fs::create_dir(&into)?;
+        for entry in entries {
+            let path = entry?.path();
+            let wanted = path
+                .extension()
+                .is_some_and(|e| extensions.iter().any(|x| e == *x));
+            if wanted && fs::metadata(&path).is_ok_and(|m| m.is_file()) {
+                fs::copy(&path, into.join(path.file_name().unwrap_or_default()))?;
+            }
+        }
+    }
+    fs::rename(staging.keep(), &ours)?;
+    Ok(true)
+}
+
 /// Replaces `path` with `data` so a reader never sees a partial file.
 ///
 /// Written to a temp file in the same folder, synced, then renamed over the target: a crash,
@@ -63,6 +116,17 @@ pub fn adopt_python_config(base: &Path) -> io::Result<bool> {
 /// did (the file it points at is what's replaced). A new file gets `0o666` less the umask,
 /// which the kernel applies when the temp file is created.
 pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
+    atomic_replace(path, |file| file.write_all(data))
+}
+
+/// [`atomic_write`] for contents too big to hold in memory: `fill` writes them into the temp
+/// file (the chapters embed copies a 350MB recording this way). Same guarantees: the temp file
+/// is synced, takes the replaced file's permissions, and is renamed over the file a symlink
+/// ends at, or removed if anything fails.
+pub fn atomic_replace(
+    path: &Path,
+    fill: impl FnOnce(&mut fs::File) -> io::Result<()>,
+) -> io::Result<()> {
     let path = resolve_links(path)?;
     let dir = match path.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
@@ -80,7 +144,8 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
         .suffix(".tmp")
         .permissions(fs::Permissions::from_mode(0o666))
         .tempfile_in(&dir)?;
-    tmp.write_all(data)?;
+    fill(tmp.as_file_mut())?;
+    tmp.as_file_mut().flush()?;
     tmp.as_file().sync_all()?;
     if let Some(mode) = mode {
         tmp.as_file()
@@ -236,6 +301,11 @@ mod tests {
             config_base(Some(OsStr::new("")), home),
             home.join(".config")
         );
+        assert_eq!(
+            cache_base(Some(OsStr::new("/x/c")), home),
+            Path::new("/x/c")
+        );
+        assert_eq!(cache_base(None, home), home.join(".cache"));
     }
 
     #[test]
@@ -281,9 +351,38 @@ mod tests {
     }
 
     #[test]
+    fn pythons_cache_is_copied_once_without_its_composites() {
+        let base = tempfile::tempdir().unwrap();
+        let theirs = base.path().join(PYTHON_APP_DIR);
+        fs::create_dir_all(theirs.join("artwork")).unwrap();
+        fs::create_dir_all(theirs.join("peaks")).unwrap();
+        for name in ["k.src", "k.jpg", "j.fallback", "j.cands", "x.tmp"] {
+            fs::write(theirs.join("artwork").join(name), name).unwrap();
+        }
+        fs::write(theirs.join("peaks/p.peaks"), "SMPK").unwrap();
+        fs::write(theirs.join("stray"), "").unwrap();
+
+        assert!(adopt_python_cache(base.path()).unwrap());
+        let ours = base.path().join(APP_DIR);
+        assert_eq!(names(&ours), ["artwork", "peaks"]);
+        assert_eq!(
+            names(&ours.join("artwork")),
+            ["j.cands", "j.fallback", "k.src"]
+        );
+        assert_eq!(names(&ours.join("peaks")), ["p.peaks"]);
+        assert_eq!(
+            fs::read_to_string(ours.join("artwork/k.src")).unwrap(),
+            "k.src"
+        );
+        assert_eq!(names(base.path()), [APP_DIR, PYTHON_APP_DIR]);
+        assert!(!adopt_python_cache(base.path()).unwrap());
+    }
+
+    #[test]
     fn nothing_to_adopt_creates_nothing() {
         let base = tempfile::tempdir().unwrap();
         assert!(!adopt_python_config(base.path()).unwrap());
+        assert!(!adopt_python_cache(base.path()).unwrap());
         assert!(names(base.path()).is_empty());
     }
 }

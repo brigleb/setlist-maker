@@ -119,6 +119,15 @@ fn a_recording_is_measured_by_decoding_it() {
 }
 
 #[test]
+fn the_packets_add_up_to_the_decoded_length() {
+    for name in ["stereo48_cbr.mp3", "mono44_info.mp3", "tone8k.flac"] {
+        let rec = Recording::open(&fixture(name), false).unwrap();
+        let undecoded = undecoded_seconds(&fixture(name)).unwrap();
+        assert_eq!(undecoded, rec.decoded_seconds(), "{name}");
+    }
+}
+
+#[test]
 fn seeked_windows_match_a_continuous_decode() {
     for (name, positions) in [
         ("stereo48_cbr.mp3", &[0.0, 0.37, 2.5, 5.0123, 9.9, 11.5][..]),
