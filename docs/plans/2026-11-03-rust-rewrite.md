@@ -436,8 +436,8 @@ untouched (835 pass).
    **Limit:** the guard can't catch a zero-tailed MP3 with no Xing/Info/VBRI frame, which is
    what Ray's Logic exports are. Possible follow-up: notice unread trailing bytes.
 3. **End to end:** 340 probes, converged, 87 minutes. Two real 429s, each cleared by the
-   first 20s retry; Python's client could not have told them apart from "unidentified". The
-   truth is 2026-09-28's corrected list (62 identified tracks), which was corrected from a
+   first 20s retry. shazamio would have retried those inside the call, unseen; what Hindsight
+   changes is a 429 that persists, which Python recorded as unidentified. The truth is 2026-09-28's corrected list (62 identified tracks), which was corrected from a
    Python run, so it leans towards Python's names and starts. Both runs are scored with no
    corrections applied:
 
