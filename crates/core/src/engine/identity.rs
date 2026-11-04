@@ -17,19 +17,23 @@ pub type Key = (String, String);
 
 // Python's `\b` counts a character as part of a word when `str.isalnum()` says so (letters
 // and numbers) or it's `_`; the regex crate's also counts marks and connectors. Every
-// non-ASCII character ends up a space anyway, so it's first replaced by `_` (a word
-// character) or `#` (not one), which leaves the patterns below ASCII-only and both regex
-// engines in agreement.
+// non-ASCII character ends up a space anyway, so it's first replaced by an ASCII stand-in,
+// which leaves the patterns below ASCII-only and both regex engines in agreement:
+// - `ı` (dotless i) and `ſ` (long s) by `I` and `S`. Python's IGNORECASE matches them as
+//   `i` and `s`, so "Remıx" is a remix tag, while `[^a-z0-9]` still makes them a space
+//   anywhere else ("Lıvely" is "l vely"). The text is lowercase, so nothing else is `I`/`S`.
+// - another letter or number by `_`, a word character that no pattern matches;
+// - anything else by `#`, which isn't a word character.
 static NON_ASCII: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([\p{L}\p{N}&&[^\x00-\x7F]])|[^\x00-\x7F]").unwrap());
 static BRACKETED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[(\[{].*?[)\]}]").unwrap());
-// Python compiles these two IGNORECASE; the text is already lowercase.
+// IGNORECASE, as in Python, for the `I` and `S` above.
 static FEAT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b(feat\.?|ft\.?|featuring|with)\b.*").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)\b(feat\.?|ft\.?|featuring|with)\b.*").unwrap());
 // Tokens that describe a *version* of a track rather than the track.
 static VERSION_TOKENS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"\b(radio edit|original mix|extended mix|club mix|remaster(?:ed)?|remix|re-?edit|edit|version|vip|bootleg|mono|stereo|live|acoustic|instrumental)\b",
+        r"(?i)\b(radio edit|original mix|extended mix|club mix|remaster(?:ed)?|remix|re-?edit|edit|version|vip|bootleg|mono|stereo|live|acoustic|instrumental)\b",
     )
     .unwrap()
 });
@@ -38,10 +42,12 @@ static NON_ALNUM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-z0-9]+").u
 /// Lowercased, with version and featuring tags, brackets and punctuation removed.
 pub fn normalize_text(text: &str) -> String {
     let text = text.to_lowercase();
-    let text = NON_ASCII.replace_all(
-        &text,
-        |c: &Captures| if c.get(1).is_some() { "_" } else { "#" },
-    );
+    let text = NON_ASCII.replace_all(&text, |c: &Captures| match &c[0] {
+        "ı" => "I",
+        "ſ" => "S",
+        _ if c.get(1).is_some() => "_",
+        _ => "#",
+    });
     let text = BRACKETED.replace_all(&text, " ");
     let text = FEAT.replace_all(&text, " ");
     let text = VERSION_TOKENS.replace_all(&text, " ");
@@ -117,6 +123,11 @@ mod tests {
         assert_eq!(normalize_text("éLive"), "live");
         // ...a mark doesn't (Python's \b, not the regex crate's).
         assert_eq!(normalize_text("\u{301}live"), "");
+        // Python's IGNORECASE reads ı as i and ſ as s inside a tag, and nowhere else.
+        assert_eq!(normalize_text("Remıx"), "");
+        assert_eq!(normalize_text("Song wıth X"), "song");
+        assert_eq!(normalize_text("ſtereo mix"), "mix");
+        assert_eq!(normalize_text("Lıvely"), "l vely");
     }
 
     #[test]

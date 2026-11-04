@@ -365,9 +365,12 @@ both fixtures.
   parsed back), `round()` half to even, first-wins `max`/`min`, `statistics.median`, and
   `repr(float)` for the dump. `engine::difflib` ports `SequenceMatcher.ratio()`, autojunk
   included. Python's `\b` treats a combining mark as a non-word character and the regex
-  crate doesn't, so non-ASCII is mapped to `_`/`#` before the identity regexes. The oracle
-  runs on a port of Python's Mersenne Twister, so the property tests also pin Python's exact
-  numbers per seed (220 probes, p90 4.144984684561678, 43 impostors of 89), not just bounds.
+  crate doesn't, so non-ASCII is mapped to `_`/`#` before the identity regexes; `ı` and `ſ`
+  map to `I`/`S` instead, because Python's IGNORECASE reads them as `i`/`s` inside a tag
+  ("Remıx"). The review found that one; the old binary fails 97 of 700 once those names are
+  in the corpus. The oracle runs on a port of Python's Mersenne Twister, so the property
+  tests also pin Python's exact numbers per seed (220 probes, p90 4.144984684561678, 43
+  impostors of 89), not just bounds.
 - **What's compared.** At every prefix: the events, segments and drops, `next_probe()`,
   `boundary_stats()`, the probes-remaining estimate, `max_ratio` and `max_boundary_width`,
   written as Python's `json.dumps` writes them.
@@ -375,7 +378,7 @@ both fixtures.
   fixtures. Generated on top: 2144 oracle runs (blur, jitter, offset dropout,
   misidentification, gaps, cut-ins, editor probes, stopped early or converged), 714 each of
   shuffled/subsampled runs with twins at one midpoint, hand-edit value shapes, names near the
-  clustering thresholds, and legacy lists. 474,476 prefixes, **0 differ**.
+  clustering thresholds, and legacy lists. 473,286 prefixes, **0 differ**.
 - **The check bites.** Each of these mutants is caught, out of 700 generated files:
   - half-away rounding: 272
   - no fingerprint lead: 331

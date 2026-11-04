@@ -149,6 +149,10 @@ VARIANTS = [
     ("Nobody", "x" * 210 + "y" * 5),
     ("Nobody", "x" * 205 + "y" * 7),
     ("Tab\tCo", "Line\nBreak"),
+    ("Tarkan", "Şımarık (Remıx)"),
+    ("Tarkan", "Şımarık"),
+    ("Lıve Band", "ſtereo Love"),
+    ("Live Band", "Stereo Love (Lıvely Edit)"),
 ]
 
 # Two 204-character titles that score 0.95 as they are but 0.08 once difflib's "autojunk"
@@ -310,7 +314,7 @@ def _names(rng: random.Random, real: list[Path]) -> dict:
     return _v2(duration, rows)
 
 
-def _legacy(rng: random.Random, real: list[Path]) -> tuple[list, float]:
+def _legacy(rng: random.Random) -> tuple[list, float]:
     duration = rng.choice([600.0, 3600.0, 14400.0])
     rows, t = [], 0.0
     while t < duration and len(rows) < 300:
@@ -324,11 +328,16 @@ def generate(kind: str, seed: int, real: list[Path], path: Path) -> float | None
     """Writes one generated case; returns the duration replay needs, if the file lacks one."""
     rng = random.Random(seed)
     if kind == "legacy":
-        rows, duration = _legacy(rng, real)
+        rows, duration = _legacy(rng)
         path.write_text(json.dumps(rows))
         return duration
-    make = {"oracle": lambda r, _: _oracle(r), "shuffle": _shuffle, "values": _values}
-    data = make.get(kind, _names)(rng, real)
+    make = {
+        "oracle": lambda r, _: _oracle(r),
+        "shuffle": _shuffle,
+        "values": _values,
+        "names": _names,
+    }
+    data = make[kind](rng, real)
     path.write_text(json.dumps(data, indent=1))
     return None
 

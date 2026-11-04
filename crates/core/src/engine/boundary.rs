@@ -760,7 +760,9 @@ impl BoundaryEngine {
     fn coverage_gap(&self, left: Evidence, right: Evidence) -> (f64, f64) {
         let (mut lo, mut hi) = (0.0, self.duration);
         for e in self.points() {
-            let anchored = e.probe.is_none_or(|i| self.probes[i].purpose == "coverage");
+            let anchored = e
+                .probe
+                .is_none_or(|i| self.probes[i].purpose == Purpose::Coverage.as_str());
             if anchored && e.mid <= left.mid {
                 lo = e.mid;
             }
@@ -779,7 +781,7 @@ impl BoundaryEngine {
         let n = self
             .probes
             .iter()
-            .filter(|p| p.purpose == "refine" && lo <= p.mid() && p.mid() <= hi)
+            .filter(|p| p.purpose == Purpose::Refine.as_str() && lo <= p.mid() && p.mid() <= hi)
             .count();
         n >= self.cfg.max_refines_per_gap
     }
