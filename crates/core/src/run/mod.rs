@@ -14,8 +14,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::sha256_hex;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::audio::{AudioError, Recording, format_timestamp};
 use crate::engine::boundary::{BoundaryEngine, EngineConfig, Purpose, Segment};
@@ -282,13 +282,6 @@ pub fn existing(paths: &SetPaths) -> Existing {
         }
         _ => Existing::Finished(parsed.tracklist),
     }
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 
 /// Resume: the saved probes, unless `fresh`. A legacy sequential list reads as coverage

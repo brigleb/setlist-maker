@@ -22,7 +22,6 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{ImageReader, RgbImage, imageops};
 use regex::Regex;
-use sha2::{Digest, Sha256};
 
 use super::fileio::atomic_write;
 
@@ -145,8 +144,7 @@ pub fn normalize_image(data: &[u8], max_edge: u32) -> Result<Vec<u8>, UploadErro
 /// Normalizes and stores an uploaded image; returns its `upload:` reference.
 pub fn store_upload(artwork_dir: &Path, data: &[u8]) -> Result<String, UploadError> {
     let stored = normalize_image(data, MAX_STORED_EDGE)?;
-    let digest = Sha256::digest(&stored);
-    let name: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    let name = crate::sha256_hex(&stored);
     let name = &name[..24];
     let path = artwork_dir.join(format!("{name}.jpg"));
     if !path.exists() {

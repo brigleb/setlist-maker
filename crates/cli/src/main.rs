@@ -48,22 +48,21 @@ fn adopt_python_folders() {
     use hindsight_core::model::fileio::{
         adopt_python_cache, adopt_python_config, cache_dir, config_dir,
     };
-    let folders = [
-        (
-            config_dir(),
-            adopt_python_config as fn(&std::path::Path) -> std::io::Result<bool>,
-        ),
-        (cache_dir(), adopt_python_cache),
-    ];
-    for (ours, adopt) in folders {
-        if let Some(base) = ours.parent()
-            && let Err(e) = adopt(base)
-        {
-            eprintln!(
-                "Warning: couldn't copy setlist-maker's {}: {e}",
-                base.display()
-            );
-        }
+    let warn = |base: &std::path::Path, e: std::io::Error| {
+        eprintln!(
+            "Warning: couldn't copy setlist-maker's {}: {e}",
+            base.display()
+        )
+    };
+    if let Some(base) = config_dir().parent()
+        && let Err(e) = adopt_python_config(base)
+    {
+        warn(base, e);
+    }
+    if let Some(base) = cache_dir().parent()
+        && let Err(e) = adopt_python_cache(base)
+    {
+        warn(base, e);
     }
 }
 

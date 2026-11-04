@@ -20,8 +20,6 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use sha2::{Digest, Sha256};
-
 use super::{AudioError, Decoder};
 use crate::model::fileio::{atomic_write, cache_dir};
 
@@ -163,10 +161,7 @@ pub fn cache_key(path: &Path) -> std::io::Result<String> {
         FORMAT_VERSION.to_string(),
     ]
     .join("\x1f");
-    Ok(Sha256::digest(raw.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    Ok(crate::sha256_hex(raw.as_bytes()))
 }
 
 static LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =

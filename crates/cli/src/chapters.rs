@@ -108,11 +108,11 @@ pub fn run(args: Args) -> ExitCode {
                 track.time_str(),
                 chapters::chapter_title(track)
             ),
-            Progress::Looked { art, .. } => println!(
+            Progress::Looked(art) => println!(
                 "{}",
                 match art {
                     Art::Found => "",
-                    Art::None => " (no artwork found)",
+                    Art::NotFound => " (no artwork found)",
                     Art::UploadMissing => " (its uploaded artwork is missing; not synced yet?)",
                     Art::Unidentified => " (unidentified, skipped)",
                 }

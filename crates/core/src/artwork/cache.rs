@@ -20,8 +20,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 
-use sha2::{Digest, Sha256};
-
 use super::{ArtworkCandidate, CHAPTER_IMAGE_SIZE, Fetch, sources};
 use crate::model::fileio::{atomic_write, cache_dir};
 use crate::model::uploads::{is_upload_ref, read_upload};
@@ -40,10 +38,7 @@ pub fn default_dir() -> PathBuf {
 /// a new key: there is no invalidation to forget.
 pub fn cache_key(artist: &str, title: &str, coverart_url: Option<&str>, size: u32) -> String {
     let raw = [artist, title, coverart_url.unwrap_or(""), &size.to_string()].join("\0");
-    Sha256::digest(raw.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    crate::sha256_hex(raw.as_bytes())
 }
 
 static KEY_LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
@@ -97,10 +92,6 @@ impl<F: Fetch> ArtworkCache<F> {
             dir: dir.into(),
             fetch,
         }
-    }
-
-    pub fn dir(&self) -> &Path {
-        &self.dir
     }
 
     fn path(&self, key: &str, ext: &str) -> PathBuf {

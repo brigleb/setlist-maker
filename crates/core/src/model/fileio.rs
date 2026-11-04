@@ -19,10 +19,7 @@ pub fn config_dir() -> PathBuf {
 /// The XDG rule without the process environment, so tests needn't set variables that every
 /// test thread shares. An empty variable counts as unset, as in Python's `or`.
 pub fn config_base(xdg_config_home: Option<&OsStr>, home: &Path) -> PathBuf {
-    match xdg_config_home {
-        Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => home.join(".config"),
-    }
+    xdg_base(xdg_config_home, home, ".config")
 }
 
 /// `$XDG_CACHE_HOME/hindsight`, else `~/.cache/hindsight` (ADR 0003): artwork and peaks.
@@ -32,9 +29,13 @@ pub fn cache_dir() -> PathBuf {
 
 /// [`config_base`]'s rule for the cache folder.
 pub fn cache_base(xdg_cache_home: Option<&OsStr>, home: &Path) -> PathBuf {
-    match xdg_cache_home {
+    xdg_base(xdg_cache_home, home, ".cache")
+}
+
+fn xdg_base(var: Option<&OsStr>, home: &Path, fallback: &str) -> PathBuf {
+    match var {
         Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => home.join(".cache"),
+        _ => home.join(fallback),
     }
 }
 

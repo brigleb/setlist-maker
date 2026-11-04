@@ -180,7 +180,7 @@ const V24_ONLY: [&str; 18] = [
 ///
 /// From a v2.4 tag, as mutagen's `update_to_v23`: the recording date `TDRC` becomes `TYER`
 /// (and `TDAT`/`TIME` when it has them), `TDOR` becomes `TORY`, the other v2.4-only frames go,
-/// and text loses the trailing NUL v2.4 ends values with (the crate would write it as `/`).
+/// and text, `TXXX` values and comments lose the trailing NUL v2.4 ends them with.
 /// `TIPL`/`TMCL` are dropped rather than merged into `IPLS`. Any tag: UTF-8 and UTF-16BE, which
 /// v2.3 lacks, become UTF-16.
 fn to_v23(read: &Tag) -> Tag {
@@ -213,20 +213,34 @@ fn to_v23(read: &Tag) -> Tag {
     read.frames()
         .filter(|f| !(v24 && V24_ONLY.contains(&f.id())))
         .cloned()
-        .map(|f| match (v24, f.content()) {
-            (true, Content::Text(t)) if t.ends_with('\0') => {
-                let encoding = f.encoding();
-                Frame::with_content(f.id(), Content::Text(trim_nul(t).to_string()))
-                    .set_encoding(encoding)
-            }
-            _ => f,
-        })
+        .map(|f| if v24 { trim_value(f) } else { f })
         .chain(added)
         .map(|f| match f.encoding() {
             Some(Encoding::UTF8 | Encoding::UTF16BE) => f.set_encoding(Some(Encoding::UTF16)),
             _ => f,
         })
         .collect()
+}
+
+/// A v2.4 frame's text without the NUL v2.4 ends values with, which the crate would write
+/// into v2.3 as `/`: plain text, `TXXX` values and comments.
+fn trim_value(f: Frame) -> Frame {
+    let content = match f.content() {
+        Content::Text(t) if t.ends_with('\0') => Content::Text(trim_nul(t).into()),
+        Content::ExtendedText(x) if x.value.ends_with('\0') => {
+            let mut x = x.clone();
+            x.value = trim_nul(&x.value).into();
+            Content::ExtendedText(x)
+        }
+        Content::Comment(c) if c.text.ends_with('\0') => {
+            let mut c = c.clone();
+            c.text = trim_nul(&c.text).into();
+            Content::Comment(c)
+        }
+        _ => return f,
+    };
+    let encoding = f.encoding();
+    Frame::with_content(f.id(), content).set_encoding(encoding)
 }
 
 fn trim_nul(t: &str) -> &str {

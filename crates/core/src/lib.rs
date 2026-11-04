@@ -13,3 +13,12 @@ pub mod model;
 pub mod run;
 pub mod shazam;
 pub mod summary;
+
+/// Lowercase hex sha256, the form every cache key and hash on disk takes.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}

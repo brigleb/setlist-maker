@@ -378,10 +378,7 @@ fn finalize_writes_the_tracklist_then_records_how_the_run_ended() {
     assert!(String::from_utf8_lossy(&md).contains("**Bee** - Beta (Live)"));
     let saved = load_progress(&set.paths.progress).unwrap();
     assert_eq!(saved.ended, Some(Ended::Converged));
-    let sha: String = Sha256::digest(&md)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let sha = crate::sha256_hex(&md);
     assert_eq!(saved.tracklist_sha256, Some(sha));
     assert_eq!(saved.probes, outcome.probes);
 }

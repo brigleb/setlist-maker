@@ -347,6 +347,13 @@ fn a_v24_tag_is_converted() {
     for fr in &top {
         assert_ne!(fr.encoding, Some(3), "{} is UTF-8 in a v2.3 tag", fr.id);
     }
+    // TXXX's value loses its NUL too (the crate would write it as '/').
+    let tag = Tag::read_from_path(&f).unwrap();
+    let txxx: Vec<(&str, &str)> = tag
+        .extended_texts()
+        .map(|t| (t.description.as_str(), t.value.as_str()))
+        .collect();
+    assert_eq!(txxx, [("note", "Café 🎧")]);
     assert_eq!(audio_after_tag(&out), &bare[..]);
 }
 

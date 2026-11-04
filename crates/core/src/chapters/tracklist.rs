@@ -18,7 +18,7 @@ pub enum Art {
     /// A cover, found or uploaded.
     Found,
     /// No source has one, or it doesn't decode: no picture, no APIC.
-    None,
+    NotFound,
     /// Its uploaded image isn't in the set's `_artwork/` folder (not synced yet?).
     UploadMissing,
     /// Unidentified: a chapter, but nothing to look up.
@@ -43,10 +43,7 @@ pub enum Progress<'a> {
         of: usize,
         track: &'a Track,
     },
-    Looked {
-        index: usize,
-        art: Art,
-    },
+    Looked(Art),
     /// `<set>_cover.jpg` is there but isn't an image.
     SavedCoverUnreadable,
 }
@@ -81,14 +78,14 @@ fn ms(seconds: i64) -> u32 {
     u32::try_from(seconds.max(0).saturating_mul(1000)).unwrap_or(u32::MAX)
 }
 
-/// The chapters and episode tags for a tracklist: every kept track (unidentified ones too,
-/// with no picture), each ending where the next starts and the last at `duration_ms`.
+/// The chapters and episode tags for a tracklist: every kept track in time order (unidentified
+/// ones too, with no picture), each ending where the next starts and the last at `duration_ms`.
 ///
 /// With `fetch_art`, each identified track's cover is looked up through `artwork` (uploads
 /// from the set's `_artwork/` folder). The episode cover is, in order: `cover` (from
 /// `--cover`, already a chapter picture), `<set>_cover.jpg`, the starred track's picture, the
 /// first track with one. The first two are used with or without `fetch_art`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // separate inputs the CLI and the editor each supply
 pub fn prepare<F: Fetch>(
     tracklist: &Tracklist,
     tracklist_path: &Path,
@@ -99,7 +96,10 @@ pub fn prepare<F: Fetch>(
     artwork: &ArtworkCache<F>,
     progress: &mut dyn FnMut(Progress),
 ) -> Prepared {
-    let kept: Vec<&Track> = tracklist.tracks.iter().filter(|t| !t.rejected).collect();
+    let mut kept: Vec<&Track> = tracklist.tracks.iter().filter(|t| !t.rejected).collect();
+    // In time order whatever order the file lists them in: the CHAPs go in as added (#33), and
+    // each chapter ends where the next starts.
+    kept.sort_by_key(|t| t.timestamp);
     let uploads = artwork_dir_for(tracklist_path);
 
     let mut cover_from = cover.as_ref().map(|_| CoverFrom::Given);
@@ -143,18 +143,21 @@ pub fn prepare<F: Fetch>(
                 match (&chapters[i].image, &src) {
                     (Some(_), _) => Art::Found,
                     (None, None) if is_upload_ref(url) => Art::UploadMissing,
-                    _ => Art::None,
+                    _ => Art::NotFound,
                 }
             };
-            progress(Progress::Looked { index: i, art });
+            progress(Progress::Looked(art));
         }
         if cover.is_none() {
-            let starred = kept.iter().position(|t| t.is_episode_cover);
+            let identified = |&i: &usize| !kept[i].is_unidentified();
+            let starred = (0..kept.len())
+                .filter(identified)
+                .find(|&i| kept[i].is_episode_cover);
             let order = starred
                 .into_iter()
                 .chain((0..kept.len()).filter(|&i| Some(i) != starred));
             if let Some(i) = order
-                .filter(|&i| !kept[i].is_unidentified())
+                .filter(identified)
                 .find(|&i| chapters[i].image.is_some())
             {
                 (cover, cover_from) = (chapters[i].image.clone(), Some(CoverFrom::Track(i)));
@@ -295,6 +298,38 @@ mod tests {
     }
 
     #[test]
+    fn chapters_are_in_time_order_whatever_order_the_file_has() {
+        // A hand-edited .md can list tracks out of order; the CHAPs still go in by start
+        // (#33), and every chapter ends after it starts.
+        let tracks = vec![
+            track(120, "C", "x"),
+            track(0, "A", "x"),
+            track(60, "B", "x"),
+        ];
+        let s = set(&tracks, &[]);
+        let p = run(&s, tracks, None, true);
+        let got: Vec<(u32, u32)> = p.chapters.iter().map(|c| (c.start_ms, c.end_ms)).collect();
+        assert_eq!(got, [(0, 60_000), (60_000, 120_000), (120_000, 600_000)]);
+        assert_eq!(p.chapters[0].title, "A - x");
+    }
+
+    #[test]
+    fn an_unidentified_star_doesnt_hide_an_identified_one() {
+        let mut tracks = vec![
+            track(0, "", ""),
+            track(60, "Red", "x"),
+            track(120, "Blue", "x"),
+        ];
+        tracks[0].is_episode_cover = true;
+        tracks[2].is_episode_cover = true;
+        let s = set(&tracks, &[("Red", RED), ("Blue", BLUE)]);
+        assert_eq!(
+            run(&s, tracks, None, true).cover_from,
+            Some(CoverFrom::Track(2))
+        );
+    }
+
+    #[test]
     fn the_cover_is_the_starred_tracks_else_the_first_with_art() {
         let tracks = vec![
             track(0, "Bare", "x"),
@@ -402,7 +437,7 @@ mod tests {
             true,
             &s.cache,
             &mut |n| {
-                if let Progress::Looked { art, .. } = n {
+                if let Progress::Looked(art) = n {
                     arts.push(art)
                 }
             },
