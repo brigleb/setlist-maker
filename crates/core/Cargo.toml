@@ -8,17 +8,28 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64 = "0.22"
+# The FFT shazamio-core uses; current SongRec's realfft isn't known to give the same bits.
+# Cargo.lock pins it, and the signature test checks the bytes.
+chfft = "0.3.4"
+crc32fast = "1.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 indexmap = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 log = "0.4"
 regex = "1"
+# Blocking: the core has no async runtime, and a run makes one request at a time.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "gzip", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: a loaded file re-saves with its keys in the order the user had them.
 # float_roundtrip: the default parser can be off by an ulp, so 108.76374218699999 read
 # from a progress file came back as 108.763742187. M2's engine parity reads those floats.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.10"
+# 0.6 rather than 0.5: the same PCM for every MP3 (spike 2). `id3v2`, or an MP3 that starts
+# with an ID3 tag won't open.
+symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "aac", "alac", "flac", "pcm", "wav", "isomp4", "opt-simd", "id3v2"] }
 tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
