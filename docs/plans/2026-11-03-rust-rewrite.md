@@ -347,6 +347,11 @@ candidate list, `is_fetchable_url`, a source-only cache whose key strings match 
 (a test checks a few against values computed in Python). The chapter image is the cover,
 centre-cropped, resized and JPEG-compressed, or nothing. Episode cover precedence. The
 `chapters` CLI. Peaks in the `SMPK` format.
+The embed follows spike 4: the `id3` crate with mutagen's padding rule, so a tag that fits
+is written in place. When it doesn't fit, the crate would move the audio inside the original
+file, and a crash or sleep partway through would leave the recording half-moved. So in that
+case, write the tag and a copy of the audio to a temporary file beside the original, then
+rename it over the original (about 350MB of writing, once per recording).
 
 ### M5 The app (7–10 days)
 
