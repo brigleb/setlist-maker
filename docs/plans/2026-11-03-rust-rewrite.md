@@ -128,7 +128,7 @@ Each spike's exit is a measured result written into this file.
    MP3s (CBR 192k, 48 kHz, no LAME delay), 2025-02-27's (44.1 kHz, LAME delay 1105), a real
    TASCAM 24-bit WAV (2h04), the real 09-28 `.caf` (16-bit BE PCM), and AAC m4a, ALAC m4a and
    FLAC transcoded from the 08-26 MP3 (none exist on disk). For M3: use 0.6.1, seek one frame
-   early, trust only a stated length, and decide about CAF.
+   early, and trust only a stated length.
    - **Use 0.6.1.** Whole-file PCM hashes equal 0.5.5's for every MP3 (including the gapless
      LAME one), FLAC, ALAC, WAV and CAF, so spike 1's fingerprint parity carries over. AAC
      differs by at most 1 LSB in 0.09% of samples. 0.6 needs the `id3v2` feature, or it can't
@@ -182,8 +182,8 @@ Each spike's exit is a measured result written into this file.
      bytes: a 12-byte stereo layout plus 20 of padding. symphonia reads the 12 and doesn't
      skip the rest, so it misreads every chunk after. With the padding turned into a `free`
      chunk (patched APFS clone), both versions open it, report 14430.443s as ffprobe does, and
-     their windows match a continuous decode. CAF isn't in the planned file associations. If
-     it should be, M3 needs an upstream fix or a workaround.
+     their windows match a continuous decode. Ray only uses MP3s like the ones in that
+     folder (2026-11-03), so CAF stays unsupported and M3 does nothing about it.
    Verdict: continue, on symphonia 0.6.1 with `id3v2`.
 3. **Tauri.** The existing page in a window through the custom scheme. Pass: `<audio>` plays
    and scrubs a 300MB MP3 through Range requests in WKWebView; a window drop and a Dock-icon
