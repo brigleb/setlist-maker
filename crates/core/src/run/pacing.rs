@@ -33,6 +33,16 @@ impl StopSignal {
     pub fn requested(&self) -> bool {
         *self.stop.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    /// Waits `d`, or until a stop is requested; whether one was.
+    pub fn wait_for(&self, d: Duration) -> bool {
+        let guard = self.stop.lock().unwrap_or_else(|e| e.into_inner());
+        let (guard, _) = self
+            .changed
+            .wait_timeout_while(guard, d, |stop| !*stop)
+            .unwrap_or_else(|e| e.into_inner());
+        *guard
+    }
 }
 
 /// Real time.
@@ -52,13 +62,7 @@ impl Clock {
 
 impl Pacing for Clock {
     fn wait(&mut self, d: Duration) -> bool {
-        let guard = self.stop.stop.lock().unwrap_or_else(|e| e.into_inner());
-        let (guard, _) = self
-            .stop
-            .changed
-            .wait_timeout_while(guard, d, |stop| !*stop)
-            .unwrap_or_else(|e| e.into_inner());
-        *guard
+        self.stop.wait_for(d)
     }
 
     fn stopped(&self) -> bool {

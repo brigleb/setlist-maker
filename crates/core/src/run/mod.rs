@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::audio::{AudioError, Recording, format_timestamp};
-use crate::engine::boundary::{BoundaryEngine, Dropped, EngineConfig, Segment};
+use crate::engine::boundary::{BoundaryEngine, EngineConfig, Purpose, Segment};
 use crate::model::progress::{Ended, Probe, Progress, load_progress, save_progress};
 use crate::model::{CorrectionsDb, Track, Tracklist, save_tracklist};
 use crate::shazam::{self, Client, Heard, NoAnswer};
@@ -35,6 +35,10 @@ pub const BACKOFF: [Duration; 4] = [
     Duration::from_secs(80),
     Duration::from_secs(160),
 ];
+
+/// A probe's purpose when the editor asked for it (click-to-sample). The engine never plans
+/// one, so it has no [`Purpose`] variant.
+pub const MANUAL: &str = "manual";
 
 /// Where a set's files go: beside the audio, or in `output_dir`.
 #[derive(Clone, Debug, PartialEq)]
@@ -205,7 +209,7 @@ pub fn identify(
 
     let (segments, drops) = engine.segments();
     for drop in &drops {
-        events.write(drop_value(drop))?;
+        events.write(serde_json::to_value(drop).expect("drops serialize"))?;
     }
     events
         .write(json!({"type": "finalized", "probes": progress.probes.len(), "reason": reason}))?;
@@ -217,10 +221,6 @@ pub fn identify(
         segments,
         gave_up,
     })
-}
-
-fn drop_value(drop: &Dropped) -> Value {
-    serde_json::to_value(drop).expect("drops serialize")
 }
 
 /// One sample, retried with backoff while Shazam doesn't answer.
@@ -251,6 +251,44 @@ fn ask(
             return Err(why);
         }
     }
+}
+
+/// What a set already has beside it.
+#[derive(Debug, PartialEq)]
+pub enum Existing {
+    /// No tracklist (or one with no tracks): identify, resuming any saved probes.
+    Nothing,
+    /// A finished run's tracklist: nothing to do. A Python run, which records no `ended`,
+    /// always finished.
+    Finished(Tracklist),
+    /// A run that stopped early (throttled, budget, Ctrl-C) and can carry on. `edited`: the
+    /// tracklist changed since the run wrote it, so carrying on would replace those edits.
+    Unfinished { ended: Ended, edited: bool },
+}
+
+pub fn existing(paths: &SetPaths) -> Existing {
+    let Ok(parsed) = crate::model::load_tracklist(&paths.tracklist) else {
+        return Existing::Nothing;
+    };
+    if parsed.tracklist.tracks.is_empty() {
+        return Existing::Nothing;
+    }
+    let progress = load_progress(&paths.progress).unwrap_or_default();
+    match progress.ended {
+        Some(ended) if ended != Ended::Converged => {
+            let written = std::fs::read(&paths.tracklist).unwrap_or_default();
+            let edited = progress.tracklist_sha256.as_deref() != Some(&sha256_hex(&written));
+            Existing::Unfinished { ended, edited }
+        }
+        _ => Existing::Finished(parsed.tracklist),
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Resume: the saved probes, unless `fresh`. A legacy sequential list reads as coverage
@@ -313,12 +351,11 @@ pub fn segments_to_tracklist(
 pub fn finalize(tracklist: &Tracklist, outcome: &Outcome, paths: &SetPaths) -> io::Result<()> {
     save_tracklist(tracklist, &paths.tracklist, None)?;
     let written = std::fs::read(&paths.tracklist)?;
-    let sha = Sha256::digest(&written);
     let progress = Progress {
         audio_duration: Some(outcome.duration),
         probes: outcome.probes.clone(),
         ended: Some(outcome.ended),
-        tracklist_sha256: Some(sha.iter().map(|b| format!("{b:02x}")).collect()),
+        tracklist_sha256: Some(sha256_hex(&written)),
     };
     save_progress(&paths.progress, &progress)
 }
@@ -331,9 +368,9 @@ pub fn now_stamp() -> String {
 /// One plain line per probe: `  > 5:10  +   90%  B - Beta`.
 pub fn probe_line(probe: &Probe) -> String {
     let tag = match probe.purpose.as_str() {
-        "coverage" => '.',
-        "refine" => '>',
-        "manual" => '*',
+        p if p == Purpose::Coverage.as_str() => '.',
+        p if p == Purpose::Refine.as_str() => '>',
+        MANUAL => '*',
         _ => ' ',
     };
     let time = format_timestamp(probe.t as i64);

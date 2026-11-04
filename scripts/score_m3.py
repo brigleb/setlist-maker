@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import statistics
 from pathlib import Path
+from typing import NamedTuple
 
 from setlist_maker.adaptive import live_snapshot
 from setlist_maker.identify import ARTIST_SIMILARITY_THRESHOLD, SIMILARITY_THRESHOLD
@@ -46,7 +47,13 @@ def fmt(seconds: float) -> str:
     return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}"
 
 
-def score(truth: list[Track], run: list[Track], window: float) -> dict:
+class Score(NamedTuple):
+    errors: list[float]  # seconds between each found track's start and the truth's
+    missed: list[Track]  # truth tracks the run doesn't have
+    extra: list[Track]  # the run's identified tracks that match nothing in the truth
+
+
+def score(truth: list[Track], run: list[Track], window: float) -> Score:
     errors: list[float] = []
     missed: list[Track] = []
     used: set[int] = set()
@@ -63,7 +70,7 @@ def score(truth: list[Track], run: list[Track], window: float) -> dict:
         else:
             missed.append(t)
     extra = [r for i, r in enumerate(run) if i not in used and not r.is_unidentified]
-    return {"errors": errors, "missed": missed, "extra": extra}
+    return Score(errors, missed, extra)
 
 
 def main() -> None:
@@ -80,7 +87,7 @@ def main() -> None:
         tracklist, _plan, probes, _duration = live_snapshot(path, path.name)
         tracks = tracklist.tracks
         r = score(truth, tracks, args.window)
-        errs = sorted(r["errors"])
+        errs = sorted(r.errors)
         print(f"{path.name}: {len(probes)} probes, {len(tracks)} tracks")
         print(f"  found {len(errs)} of {len(truth)}")
         if errs:
@@ -90,11 +97,11 @@ def main() -> None:
                 f"p90 {p90:.1f}s, max {errs[-1]:.1f}s; "
                 f"within 5s {sum(e <= 5 for e in errs)}, within 15s {sum(e <= 15 for e in errs)}"
             )
-        print(f"  missed: {len(r['missed'])}, not in the truth: {len(r['extra'])}")
+        print(f"  missed: {len(r.missed)}, not in the truth: {len(r.extra)}")
         if args.verbose:
-            for t in r["missed"]:
+            for t in r.missed:
                 print(f"    missed  {fmt(t.timestamp)}  {t.artist} - {t.title}")
-            for t in r["extra"]:
+            for t in r.extra:
                 print(f"    extra   {fmt(t.timestamp)}  {t.artist} - {t.title}")
         print()
 

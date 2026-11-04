@@ -18,8 +18,6 @@ pub use decoder::Decoder;
 
 /// One MP3 frame: how far before a window the decoder starts.
 pub const PREROLL: u64 = 1152;
-/// The rate Shazam's signature is made at.
-pub const SHAZAM_RATE: u32 = crate::shazam::SAMPLE_RATE;
 
 /// The guard trips only when less than this share of the stated length decoded...
 pub const DECODE_SHORTFALL_REL_TOLERANCE: f64 = 0.02;
@@ -108,10 +106,6 @@ impl Recording {
         Ok(rec)
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
     pub fn rate(&self) -> u32 {
         self.rate
     }
@@ -131,7 +125,7 @@ impl Recording {
     /// The length a run records and plans against, in seconds, rounded to the millisecond as
     /// pydub's `len()` was, so a resumed Python run folds against the same duration.
     pub fn duration(&self) -> f64 {
-        (1000.0 * (self.frames as f64 / self.rate as f64)).round_ties_even() / 1000.0
+        (1000.0 * self.decoded_seconds()).round_ties_even() / 1000.0
     }
 
     /// `[start, start + window)` of the first channel at the file's own rate, clamped to the
@@ -146,7 +140,7 @@ impl Recording {
     /// The window as Shazam's signature wants it: first channel, 16 kHz.
     pub fn window_16k(&self, start: f64, window: f64) -> Result<Vec<i16>, AudioError> {
         let pcm = self.window_first_channel(start, window)?;
-        Ok(resample_linear(&pcm, self.rate, SHAZAM_RATE))
+        Ok(resample_linear(&pcm, self.rate, crate::shazam::SAMPLE_RATE))
     }
 }
 

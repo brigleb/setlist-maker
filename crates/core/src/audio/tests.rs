@@ -184,8 +184,9 @@ fn the_guard_trips_on_a_cut_or_zero_tailed_file() {
 
 #[test]
 fn the_guard_skips_a_file_that_states_no_length() {
-    // Cut or zero-tailed, a CBR MP3 with no Xing frame can't be judged: symphonia's estimate
-    // shrinks with the file. (Ray's exports are like this; see the plan's M3 result.)
+    // A zero-tailed CBR MP3 with no Xing frame (Ray's Logic exports have none). symphonia's
+    // size-based estimate would catch this one, but the same estimate is far off for VBR and
+    // can't see a cut file, so the plan trusts only stated lengths, and this goes unguarded.
     let (_d, mp3) = edited("stereo48_cbr.mp3", |b| {
         let from = b.len() * 6 / 10;
         b[from..].fill(0);

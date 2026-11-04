@@ -387,6 +387,56 @@ fn finalize_writes_the_tracklist_then_records_how_the_run_ended() {
 }
 
 #[test]
+fn a_finished_tracklist_is_reused_and_an_unfinished_run_carries_on() {
+    let set = set();
+    assert_eq!(existing(&set.paths), Existing::Nothing);
+    let finish = |options: &Options| {
+        let outcome = run(&set, &mut Fake::new(), &mut FakeClock::default(), options);
+        let tl = segments_to_tracklist(&outcome.segments, "set.mp3", None, "now".into());
+        finalize(&tl, &outcome, &set.paths).unwrap();
+        outcome
+    };
+    let budget = Options {
+        budget: Some(Duration::from_secs(60)),
+        ..Options::default()
+    };
+    let stopped = finish(&budget);
+    assert_eq!(
+        existing(&set.paths),
+        Existing::Unfinished {
+            ended: Ended::Budget,
+            edited: false
+        }
+    );
+    // Carrying on resumes the saved probes rather than starting over.
+    let resumed = finish(&Options::default());
+    assert_eq!(resumed.probes[..4], stopped.probes[..]);
+    assert!(matches!(existing(&set.paths), Existing::Finished(_)));
+
+    // Stopped again, then edited by hand: carrying on would lose the edit.
+    fs::remove_file(&set.paths.progress).unwrap();
+    finish(&budget);
+    let mut md = fs::read_to_string(&set.paths.tracklist).unwrap();
+    md = md.replace("Alpha", "Alpha (corrected)");
+    fs::write(&set.paths.tracklist, md).unwrap();
+    assert_eq!(
+        existing(&set.paths),
+        Existing::Unfinished {
+            ended: Ended::Budget,
+            edited: true
+        }
+    );
+
+    // A Python run records no `ended`: it finished.
+    fs::write(
+        &set.paths.progress,
+        r#"{"version": 2, "audio_duration": 900, "probes": []}"#,
+    )
+    .unwrap();
+    assert!(matches!(existing(&set.paths), Existing::Finished(_)));
+}
+
+#[test]
 fn an_unidentified_segment_is_a_blank_row() {
     let segments = vec![Segment {
         start: 12.5,

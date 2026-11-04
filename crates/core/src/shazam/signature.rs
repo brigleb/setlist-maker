@@ -8,7 +8,7 @@
 //!
 //! One deliberate difference from current SongRec: the FFT is `chfft` (as in shazamio-core),
 //! not `realfft`. That is what makes the output byte-identical to shazamio-core's, which
-//! is what the Python version sends (`tests/fingerprint.rs`). Whether `realfft` gives the
+//! is what the Python version sends (the test below). Whether `realfft` gives the
 //! same bits is unverified. Only the centred excerpt below is shazamio-core's own.
 
 use super::hanning::HANNING_WINDOW_2048_MULTIPLIERS;

@@ -48,9 +48,8 @@ async def main() -> None:
             w.setframerate(RATE)
             w.writeframes(b"".join(s.to_bytes(2, "little", signed=True) for s in pcm))
         sig = await Recognizer().recognize_path(str(path))
-    out = OUT
-    out.write_text(sig.signature.uri + "\n")
-    print(f"{out}: samplems={sig.signature.samples}, {len(sig.signature.uri)} chars")
+    OUT.write_text(sig.signature.uri + "\n")
+    print(f"{OUT}: samplems={sig.signature.samples}, {len(sig.signature.uri)} chars")
 
 
 if __name__ == "__main__":

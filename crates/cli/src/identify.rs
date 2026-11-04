@@ -10,21 +10,35 @@ use std::time::Duration;
 
 use hindsight_core::audio::{AudioError, Recording, format_timestamp};
 use hindsight_core::engine::boundary::Confidence;
+use hindsight_core::model::CorrectionsDb;
 use hindsight_core::model::fileio::{adopt_python_config, config_dir};
 use hindsight_core::model::progress::Ended;
-use hindsight_core::model::store::AUDIO_EXTENSIONS;
-use hindsight_core::model::{CorrectionsDb, load_tracklist};
 use hindsight_core::run::{
-    self, Clock, Note, Options, Outcome, SetPaths, ShazamListener, StopSignal,
+    self, Clock, Existing, Note, Options, Outcome, SetPaths, ShazamListener, StopSignal,
 };
 use hindsight_core::summary;
 
+/// What symphonia is built to decode here.
+const EXTENSIONS: [&str; 4] = [".mp3", ".m4a", ".wav", ".flac"];
+
+#[derive(clap::Args)]
 pub struct Args {
+    /// The recording (MP3, M4A, WAV or FLAC).
     pub audio: PathBuf,
+    /// Write the tracklist and run files here instead of beside the audio.
+    #[arg(short, long, value_name = "DIR")]
     pub output_dir: Option<PathBuf>,
+    /// Stop after about this long and write what was found: 45m, 2h, 90s, or minutes.
+    #[arg(long, value_name = "DURATION", value_parser = parse_budget)]
     pub budget: Option<Duration>,
+    /// Identify a file that decodes shorter than it says it is (still syncing?).
+    #[arg(long)]
     pub allow_partial: bool,
+    /// Ask the `claude` CLI for a one-paragraph description of the set.
+    #[arg(long)]
     pub summary: bool,
+    /// Ignore an existing tracklist and progress file and start over.
+    #[arg(long)]
     pub fresh: bool,
 }
 
@@ -66,11 +80,11 @@ pub fn run(args: Args) -> ExitCode {
     if !audio.is_file() {
         return fail(format!("not a file: {}", audio.display()));
     }
-    if !AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+    if !EXTENSIONS.contains(&ext.as_str()) {
         return fail(format!(
             "not a supported audio file: {} (supported: {})",
             audio.display(),
-            AUDIO_EXTENSIONS.join(", ")
+            EXTENSIONS.join(", ")
         ));
     }
     // The first launch takes over the corrections Python learned (a copy).
@@ -86,16 +100,32 @@ pub fn run(args: Args) -> ExitCode {
     }
     let paths = SetPaths::new(audio, args.output_dir.as_deref());
 
-    if !args.fresh
-        && let Ok(existing) = load_tracklist(&paths.tracklist)
-        && !existing.tracklist.tracks.is_empty()
-    {
-        println!(
-            "Found existing tracklist: {} (use --fresh to identify again)",
-            paths.tracklist.display()
-        );
-        println!("\n{}", existing.tracklist.to_markdown());
-        return ExitCode::SUCCESS;
+    match run::existing(&paths) {
+        _ if args.fresh => {}
+        Existing::Nothing => {}
+        Existing::Finished(tracklist) => {
+            println!(
+                "Found existing tracklist: {} (use --fresh to identify again)",
+                paths.tracklist.display()
+            );
+            println!("\n{}", tracklist.to_markdown());
+            return ExitCode::SUCCESS;
+        }
+        Existing::Unfinished { edited: true, .. } => {
+            return fail(format!(
+                "{} was edited since its run stopped early, and carrying on would replace \
+                 those edits. Move it aside to carry on, or pass --fresh to start over.",
+                paths.tracklist.display()
+            ));
+        }
+        Existing::Unfinished { ended, .. } => {
+            let why = match ended {
+                Ended::Throttled => "Shazam was throttling",
+                Ended::Budget => "its budget ran out",
+                _ => "it was stopped",
+            };
+            println!("Carrying on with the run that stopped early ({why}).");
+        }
     }
 
     println!("Loading audio: {}", audio.display());
