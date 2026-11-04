@@ -157,7 +157,9 @@ pub fn run(args: Args) -> ExitCode {
         println!("  Embedded the episode cover ({from})");
     }
     if written == Written::Rewritten {
-        println!("  (The tag outgrew its room, so the MP3 was rewritten with space to spare.)");
+        println!(
+            "  (The tag no longer fit its old room, so the MP3 was rewritten with fresh padding.)"
+        );
     }
     ExitCode::SUCCESS
 }

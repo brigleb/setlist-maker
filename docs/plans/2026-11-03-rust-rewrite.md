@@ -495,8 +495,8 @@ rename it over the original (about 350MB of writing, once per recording).
   - Embedding again went in place: same inode, 0.3s.
   - `--no-artwork` shrinks the tag past the padding rule's 10KB + 1%, so it rewrites too, as
     mutagen would.
-- **Artwork.** Fresh lookups found art for all 62 tracks: 60 cached sources plus one upload.
-  Of the 60, 56 are byte-identical to the `.src` Python cached under the same key. The other 4
+- **Artwork.** Fresh lookups found art for all 62 tracks: 60 distinct covers, since two
+  tracks are played twice (same names, same key). Of the 60, 56 are byte-identical to the `.src` Python cached under the same key. The other 4
   are pixel-identical, differing in 24 header bytes (the CDN's metadata). Artwork and peaks
   keys match Python's (artwork against computed values in a test; peaks on two real paths).
 - **Peaks.**
