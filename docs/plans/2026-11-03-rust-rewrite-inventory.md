@@ -1,7 +1,7 @@
 # Rust rewrite: inventory
 
 Companion to `2026-11-03-rust-rewrite.md`. What happens to each Python module, and the
-contracts the Rust version must keep.
+contracts Hindsight must keep, and the behaviour settled in the 2026-11-03 grilling.
 
 ## Python modules
 
@@ -9,7 +9,7 @@ contracts the Rust version must keep.
 |---|---:|---|
 | `boundary.py` | 893 | **Port verbatim** to `engine::boundary`. Pure. Parity-tested. |
 | `identity.py` | 66 | **Port** to `engine::identity`. |
-| `adaptive.py` | 447 | **Port** to `run::`. Drop the legacy-to-adaptive *resume* path, keep the reader. |
+| `adaptive.py` | 447 | **Port** to `run::`. Resume from a legacy list too (it is the same replay); the first save writes v2. |
 | `tracklist.py` | 713 | **Port** to `model::`. Every markdown rule carries over, see below. |
 | `fileio.py` | 66 | **Port.** Atomic write that keeps the mode and symlinks; XDG config dir. |
 | `episode.py` | 109 | **Port.** |
@@ -23,8 +23,8 @@ contracts the Rust version must keep.
 | `chapters.py` | 391 | **Port** the embed and episode-cover precedence. The #33 frame reorder only if spike 4 needs it. |
 | `web_editor.py` | 1224 | **Port** the router and the save/revision logic. **Drop** the host guard in the app (kept in `serve`). |
 | `identify.py` | 522 | **Keep** `finalize_outputs` and `results_to_tracklist`. **Drop** the sequential scan, dedup and smoothing pipeline. |
-| `cli.py` | 884 | **Rewrite** small with clap: `identify`, `chapters`, plus dev `replay` / `serve`. |
-| `summary.py` | 67 | **Keep, optional**: detect `claude` on PATH, run on demand from the Set tab. |
+| `cli.py` | 884 | **Rewrite** small with clap: `identify`, `chapters`, plus hidden dev `replay` / `serve`. Flags below. |
+| `summary.py` | 67 | **Keep, optional**: find `claude` (see below), run on demand from the Set tab or `identify --summary`. |
 | `editor.py` | 496 | **Drop** (Textual TUI). |
 | `playback.py` | 112 | **Drop** (ffplay). |
 | `progress.py` | 731 | **Drop** (rich panels). The CLI prints one plain line per probe. |
@@ -49,13 +49,18 @@ Ray's existing sets open unchanged. M1's golden check proves it.
 - **`<set>_tracklist.json`** sidecar: a **bare list**, joined to the `.md` by timestamp.
   - Carries `coverart_url`, `artwork_pinned`, `is_episode_cover`.
   - Written before the `.md` (#30). A bad sidecar degrades to the markdown alone.
-- **`<set>_progress.json`**: v2 `{version, audio_duration, probes}` read and written. The
-  legacy bare list is read, so old sets still show their probes on the timeline.
+- **`<set>_progress.json`**: v2 `{version, audio_duration, probes}` read and written, plus two
+  new keys Python's reader ignores (checked: it reads keys by name): `ended`
+  (`converged` | `finished_early` | `budget` | `throttled`) and the sha256 of the tracklist the
+  run wrote. The legacy bare list is read, so old sets show their probes and can resume.
 - `<set>_events.jsonl` (append), `<set>_episode.json`, `<set>_cover.jpg`,
   `<set>_artwork/<hash>.jpg` with `upload:<hash>.jpg` refs validated against the same regex.
-- **`~/.config/setlist-maker/`**: `corrections.json` (a corrupt file is renamed, never
+- **`~/.config/hindsight/`**: `corrections.json` (a corrupt file is renamed, never
   overwritten; #64) and `config.json` (`episode_artist`). Use the XDG rule, not the `dirs`
-  crate, which would pick `~/Library/Application Support` and lose Ray's corrections.
+  crate (ADR 0003). On first launch, if it doesn't exist and `~/.config/setlist-maker/` does,
+  **copy** (never move) the old files, so Python keeps working. Same for `~/.cache/hindsight`
+  (artwork sources, `.fallback` markers, candidates, peaks), whose sha256 key strings match
+  Python's exactly.
 - **MP3 tags**: ID3**v2.3** only (#17); CHAP frames in time order (#33); top-level
   `TIT2`/`TALB`/`TPE1`, and a blank value writes nothing.
 
@@ -78,6 +83,36 @@ Ray's existing sets open unchanged. M1's golden check proves it.
   `finish()` clears `live` last.
 - **Uploads**: an `image/*` content type only; an oversized body is drained before the 413.
 
+## Settled behaviour (grilling, 2026-11-03)
+
+- **CLI flags.** `hindsight identify`: `-o/--output-dir`, `--budget`, `--allow-partial`,
+  `--summary` (opt-in), `--fresh` (ignore the existing tracklist and progress). `hindsight
+  chapters`: `--audio`, `--cover`, `--no-artwork`. Everything else is a constant (delay 15s,
+  precision, stride, refine window, identity thresholds) or gone (`--sequential`, the dedup
+  flags, `--edit`/`--web-edit`/`--watch`, `--no-panel`, the call-log flags, `--no-learn`,
+  `identify --chapters`). No live mode in the CLI.
+- **Throttling.** Exponential backoff for about 5 minutes in total. Then the app pauses ("Shazam
+  is throttling", Resume) and the run stays live; the CLI finishes early, writes the tracklist,
+  records `ended: "throttled"`, names the gap and exits non-zero. Re-running resumes only the
+  missing samples. A throttled answer never looks like "unidentified".
+- **What a drop opens.**
+  - Tracklist present: the editor. If the progress file's `ended` isn't `converged`, the editor
+    offers **Continue identifying**, warning first if the tracklist's hash no longer matches
+    (continuing replaces edits made since).
+  - No tracklist, v2 or legacy progress: resume as a live run without asking.
+  - Nothing beside it: a new live run.
+  - A dropped `_tracklist.md`: opens its set.
+  - Audio missing or unreadable: the editor without audio or waveform; the decode guard refuses
+    a half-synced file when a run starts.
+- **Stopping and closing.** One set, one window. **Finish now** in the live toolbar does what the
+  first Ctrl-C does. Closing or quitting mid-run asks Finish now / Keep running / Stop; Stop keeps
+  the progress file, so dropping the file again resumes. A second drop asks first: Done's Save &
+  close / Discard / Cancel when editing, the same three as closing during a run.
+- **Finding `claude`.** A Finder-launched app gets only `/usr/bin:/bin:/usr/sbin:/sbin`. Resolve
+  once at startup, off the main path, with `$SHELL -lc 'command -v claude'`; fall back to
+  `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.claude/local`. Call it as today:
+  `-p --strict-mcp-config`, from a temp dir, best effort. The CLI uses its own PATH.
+
 ## Front end (`setlist_maker/web/`, ~5.2k lines incl. CSS/HTML)
 
 Unchanged apart from:
@@ -85,6 +120,8 @@ Unchanged apart from:
 - Done returning to the drop screen
 - the artwork panel showing the plain cover
 - a Generate button for summaries
+- Finish now, Continue identifying, and a throttled/paused state
+- the dialog Tab and drag fixes from spike 0
 
 Drop events come through `window.__TAURI__` (`withGlobalTauri`), so there's still no npm and no
 build step. Vendored Preact/htm stay; `web/LICENSES.md` gains the GPL note.
