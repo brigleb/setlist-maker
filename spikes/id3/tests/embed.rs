@@ -320,3 +320,16 @@ fn a_v24_file_comes_out_v23_with_no_utf8() {
         assert_ne!(fr.encoding, Some(3), "{} is UTF-8 in a v2.3 tag", fr.id);
     }
 }
+
+/// A file cut short (an iCloud placeholder mid-download) can declare a tag longer than the file.
+/// That is an error, not a panic, and the file is left alone.
+#[test]
+fn a_tag_longer_than_the_file_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("cut.mp3");
+    let mut bytes = b"ID3\x03\x00\x00\x00\x00\x7f\x7f".to_vec();
+    bytes.extend_from_slice(b"TIT2\x00\x00\x00\x02\x00\x00\x00a");
+    std::fs::write(&f, &bytes).unwrap();
+    assert!(embed(&f, &episode(), &chapters(1)).is_err());
+    assert_eq!(std::fs::read(&f).unwrap(), bytes);
+}

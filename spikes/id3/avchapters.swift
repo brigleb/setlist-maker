@@ -1,6 +1,6 @@
-// Spike 4's second player: list an MP3's chapters the way AVFoundation (Apple's media stack)
-// reads them, after the duration and top-level tags. `swift avchapters.swift <file.mp3>` prints one line per chapter: start, title,
-// artwork bytes.
+// Spike 4's second player: what AVFoundation (Apple's media stack) reads from an MP3.
+// `swift avchapters.swift <file.mp3>` prints the duration and top-level tags, then one line
+// per chapter: start, title, artwork bytes.
 import AVFoundation
 
 let url = URL(fileURLWithPath: CommandLine.arguments[1])

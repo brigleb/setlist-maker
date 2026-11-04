@@ -145,7 +145,13 @@ fn write(tag: &Tag, path: &Path) -> id3::Result<()> {
         .version(Version::Id3v23)
         .encode(tag, &mut bare)?;
     let need = bare.len() as u64;
-    let audio = size - room;
+    // A header claiming more than the file holds: a file cut short, or still downloading.
+    let audio = size.checked_sub(room).ok_or_else(|| {
+        id3::Error::new(
+            id3::ErrorKind::InvalidInput,
+            "the tag claims more bytes than the file has",
+        )
+    })?;
     let (low, high) = (1024 + audio / 1000, 10 * 1024 + audio / 100);
     let padding = match room.checked_sub(need) {
         Some(spare) if spare <= high => spare,

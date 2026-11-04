@@ -47,7 +47,7 @@ def main(mp3: str, out: str) -> None:
     sizes = sorted((out_dir / c["image"]).stat().st_size for c in chapters if c["image"])
     print(
         f"{len(chapters)} chapters, {len(sizes)} with art ({sizes[0]}-{sizes[-1]} bytes),"
-        f" cover {cover.data.__len__()} bytes"
+        f" cover {len(cover.data)} bytes"
     )
 
 
