@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# The M0 spikes are throwaway packages with their own lockfiles.
+exclude = ["spikes/id3", "spikes/shazam", "spikes/tauri"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+publish = false

@@ -1,0 +1,21 @@
+[package]
+name = "hindsight-core"
+version = "0.1.0"
+description = "Hindsight's model, engine, audio, Shazam, artwork and chapters: everything with no UI"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+log = "0.4"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+# preserve_order: a loaded file re-saves with its keys in the order the user had them.
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tempfile = "3"
+
+[dev-dependencies]
