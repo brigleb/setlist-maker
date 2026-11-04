@@ -1,12 +1,16 @@
 """M1's golden check: Python and Hindsight read and save the same sets, and must agree.
 
 Every set found under the given folders is copied twice into an output folder (the
-originals are only read). Python's ``load_tracklist`` + ``save_tracklist`` rewrites one copy,
-``cargo run --example resave`` the other. Each ``.md`` must be byte-equal, and each ``.json``
-must parse to the same values (Hindsight writes UTF-8 where Python writes ``\\uXXXX``).
+originals are only read). Python rewrites one copy, ``cargo run --example resave`` the
+other: the tracklist (``load_tracklist`` + ``save_tracklist``), the episode tags
+(``episode_tags`` + ``save_episode_tags``, each side with its own empty config folder) and
+every progress file (``load_probes`` + ``save_progress_v2``). Each ``.md`` must be
+byte-equal, and each ``.json`` must parse to the same values (Hindsight writes UTF-8 where
+Python writes ``\\uXXXX``).
 
 ``--fuzz N`` adds N generated tracklists built from the shapes that have broken the format
-before (#16, #44, #45): fences, escaped markers, CRs, partial rows, times inside titles.
+before (#16, #44, #45): fences, escaped markers, CRs, partial rows, times inside titles, plus
+hand-edited episode files and set names with and without a date.
 
     uv run python scripts/golden_m1.py -o <scratch> [--fuzz 2000] [folder ...]
 """
@@ -18,6 +22,8 @@ import contextlib
 import hashlib
 import io
 import json
+import logging
+import os
 import random
 import re
 import shutil
@@ -25,6 +31,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from setlist_maker.adaptive import load_probes, save_progress_v2
+from setlist_maker.episode import episode_tags, save_episode_tags
 from setlist_maker.tracklist import load_tracklist, parse_markdown_tracklist, save_tracklist
 
 REPO = Path(__file__).resolve().parent.parent
@@ -34,24 +42,41 @@ DEFAULT_FOLDERS = [
 ]
 
 
-def find_sets(folders: list[Path], skip: Path) -> list[tuple[str, bytes, bytes | None]]:
-    """Distinct (name, markdown, sidecar) triples under the folders, outside ``skip``."""
+Case = dict[str, bytes]  # file name -> contents; the tracklist is the one ending _tracklist.md
+
+
+def _distinct(files: list[Case]) -> list[Case]:
     seen: set[str] = set()
-    found = []
+    out = []
+    for case in files:
+        digest = hashlib.sha256(repr(sorted(case.items())).encode()).hexdigest()
+        if digest not in seen:
+            seen.add(digest)
+            out.append(case)
+    return out
+
+
+def find_sets(folders: list[Path], skip: Path) -> tuple[list[Case], list[Case]]:
+    """Distinct sets (tracklist, sidecar, episode file) and progress files under the
+    folders, outside ``skip``."""
+    sets: list[Case] = []
+    progress: list[Case] = []
     for folder in folders:
         if not folder.exists():
             continue
-        for md in sorted(folder.rglob("*_tracklist.md")):
-            if md.resolve().is_relative_to(skip):
+        for path in sorted(folder.rglob("*.*")):
+            if path.resolve().is_relative_to(skip) or not path.is_file():
                 continue
-            sidecar = md.with_suffix(".json")
-            md_bytes = md.read_bytes()
-            json_bytes = sidecar.read_bytes() if sidecar.exists() else None
-            digest = hashlib.sha256(md_bytes + b"\0" + (json_bytes or b"")).hexdigest()
-            if digest not in seen:
-                seen.add(digest)
-                found.append((md.name, md_bytes, json_bytes))
-    return found
+            if path.name.endswith("_tracklist.md"):
+                case = {path.name: path.read_bytes()}
+                stem = path.name[: -len("_tracklist.md")]
+                for sibling in (path.with_suffix(".json"), path.with_name(f"{stem}_episode.json")):
+                    if sibling.exists():
+                        case[sibling.name] = sibling.read_bytes()
+                sets.append(case)
+            elif "_progress" in path.name and path.suffix == ".json":
+                progress.append({path.name: path.read_bytes()})
+    return _distinct(sets), _distinct(progress)
 
 
 # --- generated cases ---------------------------------------------------------------------
@@ -147,6 +172,52 @@ def generate(rng: random.Random) -> str:
     return sep.join(lines) + rng.choice(["\n", "", "\n\n"])
 
 
+SET_NAMES = ["2026-09-23-Keys-Lounge", "2026-01-05", "Keys", "2026-13-40-x", "2028-02-29b", ""]
+EPISODES = [
+    None,
+    None,
+    b'{"title": "  Keys \\n Lounge ", "artist": "DJ Disarray"}',
+    b'{"title": 5}',
+    b'{"artist": ""}',
+    b"not json",
+    b"[1, 2]",
+    b'{"artist": "' + "\u0131".encode() * 300 + b'"}',
+]
+
+
+def generate_set(rng: random.Random, i: int) -> Case:
+    name = f"{rng.choice(SET_NAMES)}{i}_tracklist.md"
+    case = {name: generate(rng).encode()}
+    episode = rng.choice(EPISODES)
+    if episode is not None:
+        case[name.replace("_tracklist.md", "_episode.json")] = episode
+    return case
+
+
+def generate_progress(rng: random.Random, i: int, results: list) -> Case:
+    """A legacy list or a v2 file made from real answers, with awkward floats."""
+    floats = [0.1 + 0.2, 1e-7, 1e16, 108.76374218699999, 7200.252, 0.0, 5.0]
+    picked = rng.sample(results, k=min(len(results), rng.randrange(0, 12)))
+    if rng.random() < 0.5:
+        rows = [[rng.choice([30 * n, rng.choice(floats)]), r] for n, r in enumerate(picked)]
+        data: object = rows
+    else:
+        probes = [
+            {
+                "t": rng.choice(floats),
+                "window": rng.choice([30.0, 12.0, 30]),
+                "purpose": rng.choice(["coverage", "refine", "manual"]),
+                "result": r,
+                "offsets": rng.choice(
+                    [None, [], [{"offset": rng.choice(floats), "timeskew": 1e-5}]]
+                ),
+            }
+            for r in picked
+        ]
+        data = {"version": 2, "audio_duration": rng.choice(floats + [None]), "probes": probes}
+    return {f"gen{i}_progress.json": json.dumps(data, indent=rng.choice([None, 2])).encode()}
+
+
 # --- running and comparing ----------------------------------------------------------------
 
 _STAMP = re.compile(r"^\*Generated on [^\n]*\*$", re.MULTILINE)
@@ -162,58 +233,114 @@ def _unstamped(md: bytes, original: bytes) -> bytes:
     return _STAMP.sub("*Generated on <now>*", md.decode(), count=1).encode()
 
 
+def _copy(cases: list[Case], root: Path) -> list[Path]:
+    """Writes each case into its own folder; returns each one's main file."""
+    mains = []
+    for i, case in enumerate(cases):
+        d = root / f"{i:05d}"
+        d.mkdir(parents=True)
+        for name, data in case.items():
+            (d / name).write_bytes(data)
+        mains.append(d / next(n for n in case if not n.endswith("_episode.json")))
+    return mains
+
+
+def _same_json(a: Path, b: Path) -> bool:
+    if not a.exists() or not b.exists():
+        return a.exists() == b.exists()
+    return json.loads(a.read_text()) == json.loads(b.read_text())
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("-o", "--out", type=Path, required=True, help="scratch folder (emptied)")
     ap.add_argument("--fuzz", type=int, default=0, help="generated cases to add")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("folders", nargs="*", type=Path, default=DEFAULT_FOLDERS)
     args = ap.parse_args()
 
-    cases = find_sets(args.folders, args.out.resolve())
-    real = len(cases)
+    logging.disable(logging.WARNING)  # "ignoring unreadable ..." for the junk episode files
+    sets, progress = find_sets(args.folders, args.out.resolve())
+    real = len(sets)
     rng = random.Random(args.seed)
-    for i in range(args.fuzz):
-        cases.append((f"fuzz{i}_tracklist.md", generate(rng).encode(), None))
+    sets += [generate_set(rng, i) for i in range(args.fuzz)]
+    results = [None] + [
+        probe["result"]
+        for case in progress
+        for probe in json.loads(next(iter(case.values()))).get("probes", [])
+    ]
+    real_progress = len(progress)
+    progress += [generate_progress(rng, i, results) for i in range(args.fuzz // 50)]
 
     if args.out.exists():
         shutil.rmtree(args.out)
-    py_paths, rs_paths = [], []
-    for i, (name, md, sidecar) in enumerate(cases):
-        for side, paths in (("py", py_paths), ("rs", rs_paths)):
-            d = args.out / side / f"{i:05d}"
-            d.mkdir(parents=True)
-            (d / name).write_bytes(md)
-            if sidecar is not None:
-                (d / name).with_suffix(".json").write_bytes(sidecar)
-            paths.append(d / name)
+    side = {}
+    for name in ("py", "rs"):
+        side[name] = (
+            _copy(sets, args.out / name / "sets"),
+            _copy(progress, args.out / name / "progress"),
+            args.out / name / "config",
+        )
 
+    py_sets, py_progress, py_config = side["py"]
+    os.environ["XDG_CONFIG_HOME"] = str(py_config)
     with contextlib.redirect_stdout(io.StringIO()):  # the parse warnings
-        for p in py_paths:
+        for p in py_sets:
             save_tracklist(load_tracklist(p), p)
-    subprocess.run(
-        ["cargo", "run", "-q", "-p", "hindsight-core", "--example", "resave", "--", "tracklist"]
-        + [str(p) for p in rs_paths],
-        cwd=REPO,
-        check=True,
-        stderr=subprocess.DEVNULL,
-    )
+            tags = episode_tags(p)
+            save_episode_tags(p, tags["title"], tags["artist"])
+    for p in py_progress:
+        probes, duration = load_probes(p)
+        save_progress_v2(duration, probes, p)  # pyright: ignore[reportArgumentType] # None stays null
+
+    rs_sets, rs_progress, rs_config = side["rs"]
+    resave = ["cargo", "run", "-q", "-p", "hindsight-core", "--example", "resave", "--"]
+    env = {**os.environ, "XDG_CONFIG_HOME": str(rs_config)}
+    for kind, paths in (("tracklist", rs_sets), ("episode", rs_sets), ("progress", rs_progress)):
+        subprocess.run(
+            resave + [kind] + [str(p) for p in paths],
+            cwd=REPO,
+            env=env,
+            check=True,
+            stderr=subprocess.DEVNULL,
+        )
 
     failures = 0
-    for (_, original, _), py, rs in zip(cases, py_paths, rs_paths):
-        problems = []
-        if _unstamped(py.read_bytes(), original) != _unstamped(rs.read_bytes(), original):
-            problems.append("markdown differs")
-        if json.loads(py.with_suffix(".json").read_text()) != json.loads(
-            rs.with_suffix(".json").read_text()
-        ):
-            problems.append("sidecar differs")
+
+    def report(py: Path, rs: Path, problems: list[str]) -> None:
+        nonlocal failures
         if problems:
             failures += 1
             if failures <= 10:
                 print(f"{py.parent.name} {py.name}: {', '.join(problems)}")
                 print(f"  diff -u {py} {rs}")
-    print(f"{len(cases)} sets ({real} found on disk, {args.fuzz} generated): {failures} differ")
+
+    for case, py, rs in zip(sets, py_sets, rs_sets):
+        original = case[py.name]
+        problems = []
+        if _unstamped(py.read_bytes(), original) != _unstamped(rs.read_bytes(), original):
+            problems.append("markdown differs")
+        if not _same_json(py.with_suffix(".json"), rs.with_suffix(".json")):
+            problems.append("sidecar differs")
+        episode = py.name.replace("_tracklist.md", "_episode.json")
+        if not _same_json(py.with_name(episode), rs.with_name(episode)):
+            problems.append("episode differs")
+        report(py, rs, problems)
+    for py, rs in zip(py_progress, rs_progress):
+        report(py, rs, [] if _same_json(py, rs) else ["progress differs"])
+    config = Path("hindsight/config.json"), Path("setlist-maker/config.json")
+    report(
+        py_config,
+        rs_config,
+        []
+        if _same_json(py_config / config[1], rs_config / config[0])
+        else ["remembered artist differs"],
+    )
+
+    print(
+        f"{len(sets)} sets ({real} found on disk, {args.fuzz} generated) and "
+        f"{len(progress)} progress files ({real_progress} found on disk): {failures} differ"
+    )
     return 1 if failures else 0
 
 

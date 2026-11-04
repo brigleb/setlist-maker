@@ -9,3 +9,7 @@ edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-or-later"
 publish = false
+
+# Image decoding and resizing are slow unoptimized; the tests resize a 3000px upload.
+[profile.dev.package."*"]
+opt-level = 2

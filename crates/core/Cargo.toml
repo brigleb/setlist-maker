@@ -14,7 +14,9 @@ log = "0.4"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 # preserve_order: a loaded file re-saves with its keys in the order the user had them.
-serde_json = { version = "1", features = ["preserve_order"] }
+# float_roundtrip: the default parser can be off by an ulp, so 108.76374218699999 read
+# from a progress file came back as 108.763742187. M2's engine parity reads those floats.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.10"
 tempfile = "3"
 
