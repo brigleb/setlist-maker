@@ -7,7 +7,7 @@ pub mod boundary;
 mod difflib;
 pub mod identity;
 #[cfg(test)]
-mod oracle;
+pub(crate) mod oracle;
 #[cfg(test)]
 mod properties;
 pub mod py;
