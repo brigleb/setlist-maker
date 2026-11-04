@@ -423,6 +423,50 @@ Exit, three checks:
    `2026-09-28-Keys_tracklist.md` (beside `2026-09-28-Keys.mp3`) as a substitute. It has
    already been corrected, so it's scored the same way but isn't an untouched baseline.
 
+**Result (2026-11-04, `hindsight identify` and `scripts/score_m3.py`):** pass, with two
+differences explained below. 231 Rust tests (229 core, 2 cli); clippy and fmt clean; Python
+untouched (835 pass).
+1. **Fingerprint:** `signature_is_byte_identical_to_shazamio_cores` runs on a 12s fixture
+   shazamio-core made (`scripts/fingerprint_fixture.py`), with `Cargo.lock` pinning chfft 0.3.4.
+   This covers the generator only. On real windows the bytes can't match, because Python
+   re-encodes each window to MP3 first (see the end-to-end result).
+2. **Decode:** seeked windows equal a continuous decode; against ffmpeg they're within 2 LSB at
+   shift 0 (skipped without ffmpeg unless `CI` is set). The guard trips on a cut WAV and FLAC
+   and on a zero-tailed MP3 with an Info frame, and not on a CBR MP3 with no stated length.
+   **Limit:** the guard can't catch a zero-tailed MP3 with no Xing/Info/VBRI frame, which is
+   what Ray's Logic exports are. Possible follow-up: notice unread trailing bytes.
+3. **End to end:** 340 probes, converged, 87 minutes. Two real 429s, each cleared by the
+   first 20s retry; Python's client could not have told them apart from "unidentified". The
+   truth is 2026-09-28's corrected list (62 identified tracks), which was corrected from a
+   Python run, so it leans towards Python's names and starts. Both runs are scored with no
+   corrections applied:
+
+   | | found | missed | median | p90 | max | ≤5s | ≤15s | not in the truth |
+   |---|---|---|---|---|---|---|---|---|
+   | Python (09-28) | 53 | 9 | 0.0s | 8.0s | 28.0s | 47 | 50 | 4 |
+   | Hindsight | 53 | 9 | 0.0s | 8.0s | 90.0s | 47 | 49 | 14 |
+
+   - **The same 9 missed**, mostly tracks Ray added by hand.
+   - **The 90s outlier:** Harry Mudie's *Roman Dub*. The 30s coverage probe at 6465s answered
+     Lloyd Jones's *Rome* for Hindsight and *Roman Dub* for Python. *Roman Dub* is the dub of
+     *Rome*, on the same riddim.
+   - **The 10 extra tracks at 0:42–0:43:** one-probe synthwave answers inside Altın Gün's
+     *Kesik Çayır*. Re-asked on 2026-11-04, Python's own path got three of four of those
+     windows wrong too (Scandroid, Sandrom twice). Hindsight's identical signature got a
+     different answer on one of them. So Shazam is unstable on this stretch, and the re-encode
+     tips 2 of 4 windows differently. Spike 1's 10 clean windows agreed; contested audio
+     doesn't have to.
+- **Decided along the way:**
+  - A non-429 failure (network, non-JSON) also backs off. If it doesn't clear, the run ends
+    early (`no_answer`) rather than recording the probe as unidentified, as Python did.
+  - A throttled stop's message names the starts still rough. It doesn't name unprobed
+    stretches.
+  - `--summary` is opt-in.
+  - A run that stopped early is carried on by the next `identify`, which refuses to do so if
+    the tracklist was edited since.
+- **Still untested:** rodio restarts its resampler per packet at 44.1 kHz on the live path.
+  This set is 48 kHz.
+
 ### M4 Artwork, chapters, peaks (4–6 days)
 
 Artwork sources (Shazam CDN, iTunes, Deezer with the plain-query retry, MusicBrainz/CAA), the
