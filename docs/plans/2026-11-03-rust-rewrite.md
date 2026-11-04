@@ -123,6 +123,62 @@ Each spike's exit is a measured result written into this file.
    Verdict: continue.
 2. **symphonia.** Decode the 4-hour MP3: wall time, seek accuracy to an arbitrary second, and
    decoded length vs. the header duration (the decode guard). Also m4a, flac and wav.
+   **Result (2026-11-03, `spikes/shazam/src/bin/decode.rs`, symphonia 0.5.5 and 0.6.1 side by
+   side):** pass, with three things for M3. Files: both 4h Keys MP3s (CBR 192k, 48 kHz), a
+   real TASCAM 24-bit WAV (2h04), the real 2026-09-28 `.caf` (16-bit BE PCM), and AAC m4a,
+   ALAC m4a and FLAC transcoded from the 08-26 MP3 (none exist on disk).
+   - **Use 0.6.1.** Its PCM is identical to 0.5.5's (whole-file hash) for MP3, FLAC, ALAC, WAV
+     and CAF, so the fingerprint parity from spike 1 holds. AAC differs by at most 1 LSB in
+     0.09% of samples. 0.6 needs the `id3v2` feature, or it can't open an MP3 with an ID3 tag
+     ("no suitable format reader").
+   - **Full decode, one thread:** MP3 9.5s (0.6) / 9.8s (0.5) for 4h; FLAC 9.4s; AAC 9.1s;
+     ALAC 30s; CAF 3.7s; WAV 2.0s for 2h04. No decode errors, no timestamp gaps.
+   - **Peaks:** 8 seeked segments on 8 threads take 1.2s for the 4h MP3 (serial 8.3s; Python
+     ~4s). With one frame of preroll, every one of 723,450 bins equals the serial pass; with
+     none, 5 bins at the seams differ.
+   - **Seeking:** 30 random positions per MP3 (12s and 30s windows), each compared with one
+     continuous decode, all channels. Seeking straight to the frame: 40 of 60 windows differ
+     in their first ≤1047 samples (22ms), by up to 27832 LSB. Seeking **1152 samples (one MP3
+     frame) early and discarding them makes all 60 sample-identical**, on both versions, at
+     8–44ms per seek. That settles spike 1's "seek a frame early". WAV, CAF, FLAC and ALAC
+     seeks are exact with no preroll (2–25ms). AAC seeks land on the right sample (best shift
+     0) but 20–40% of samples differ for the whole window, preroll or not, so AAC windows are
+     not reproducible; noise substitution state is the likely cause (unverified).
+   - **Against ffmpeg** (Python's windows came from ffmpeg): WAV is identical. MP3 aligns
+     exactly (shift 0 at 6 positions) but isn't bit-equal: mean 1.5–14 LSB, 0.06–0.32% of
+     samples off by more than 2, peaks up to 20913 (cause not investigated). M3's "decode,
+     offline" check needs a tolerance stated in those terms, not "near-identical". symphonia
+     doesn't trim AAC priming, so an m4a timeline sits 1024 samples (21.3ms) later than
+     ffmpeg's, and `n_frames` is 1024 long.
+   - **Decode guard.** What symphonia reports as the length (`n_frames`), against the decode:
+     | Case | Reported | Decoded | Guard |
+     |---|---:|---:|---|
+     | 4h MP3, whole | 14468.3 | 14468.3 | passes |
+     | MP3 cut to 60% | 8596.8 | 8596.8 | **misses** |
+     | MP3, full size, last 40% zeros | 14468.3 | 8615.1 | trips |
+     | WAV cut to 1GB | 7452.8 | 3472.2 | trips |
+     | FLAC cut to 60% | 14468.3 | 8670.6 | trips |
+     | CAF cut to 60% | (open fails: end of stream) | | refuses, as an error |
+     | 2019-04-23 MP3 (no Xing) | 19235.1 | 12012.8 | **trips on a good file** |
+     | 2019-10-22 MP3 (no Xing) | 12156.2 | 12156.2 | passes |
+
+     None of Ray's MP3s checked has a Xing/Info header except 2025-02-27's, so the length is
+     estimated from the file size. For CBR that estimate is exact, but it shrinks with a
+     truncated file, which can never trip. ffprobe has the same blind spot (8596.8 for the cut
+     file), so Python's guard missed this too. On the 2019-04-23 file both estimates are wrong
+     (ffprobe says 16303), so Python's guard would refuse it too. M3: trust `n_frames` only when
+     the container states it (WAV/CAF/FLAC/MP4 headers, or an MP3 Xing/Info frame, which M3
+     must look for itself because symphonia doesn't say where the number came from), and
+     otherwise skip the guard, as Python did when ffprobe failed. Also, reading an iCloud
+     placeholder (`dataless`) **blocks while macOS downloads it**; it doesn't return a short
+     file. The zero tail stands in for a partly written file.
+   - **CAF: symphonia can't open Ray's real `.caf`** (both versions). Its `chan` chunk is 32
+     bytes: a 12-byte stereo layout plus 20 bytes of padding. symphonia reads the 12 and
+     doesn't skip the rest, so every chunk after it is misread. With the padding turned into a
+     `free` chunk (an APFS clone, patched), both versions open it, the length matches ffprobe
+     (14430.443s), and seeks are exact. CAF isn't in the planned file associations. If it
+     should be, M3 needs an upstream fix or a workaround.
+   Verdict: continue, on symphonia 0.6.1 with `id3v2`.
 3. **Tauri.** The existing page in a window through the custom scheme. Pass: `<audio>` plays
    and scrubs a 300MB MP3 through Range requests in WKWebView; a window drop and a Dock-icon
    drop both yield a path.
@@ -168,7 +224,9 @@ Exit, three checks:
    corrected 60-track `_tracklist.md` finds at least the tracks one Python adaptive run (kept
    as the baseline, scored the same way) found, with boundary errors in the same range.
    As of 2026-11-03 that `_tracklist.md` is missing from beside the MP3 and from anywhere
-   searched on disk; only the MP3 is left. Find it before M3.
+   searched on disk; only the MP3 is left. Find it before M3. Ray suggests
+   `2026-09-28-Keys_tracklist.md` (beside `2026-09-28-Keys.mp3`) as a substitute. It has
+   already been corrected, so it's scored the same way but isn't an untouched baseline.
 
 ### M4 Artwork, chapters, peaks (4–6 days)
 
