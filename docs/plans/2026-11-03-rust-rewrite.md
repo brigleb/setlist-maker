@@ -272,14 +272,25 @@ Each spike's exit is a measured result written into this file.
      crate doesn't write the trailing UTF-16 NUL on text, which v2.3 makes optional, so each
      text frame is 2 bytes shorter. It rewrites the frames it didn't touch (Logic's `TSSE`, the
      `iTunNORM`/`iTunSMPB` comments) from Latin-1 to UTF-16, with the same text. Whether Apple's
-     gapless playback still reads `iTunSMPB` in UTF-16 is unverified. The frames keep the
-     file's order, with new ones after (the cover before the chapters, CTOC last).
+     gapless playback still reads `iTunSMPB` in UTF-16 is unverified. The frame order differs
+     too: Python's is TIT2, TPE1, TALB, TSSE, the comments, CTOC, the CHAPs, then the cover;
+     the spike's is TSSE, the comments, the cover, TIT2, TALB, TPE1, the CHAPs, then CTOC
+     (`set_title` and its kind remove a frame and append a new one).
    - **Two crate gaps, both needed in M4:**
      - A frame carried over from a v2.4 tag keeps its UTF-8, and the crate writes encoding
        byte 3 into the v2.3 tag (a test with ffmpeg's v2.4 tag caught a `TXXX`). The spike
        re-marks UTF-8 and UTF-16BE frames as UTF-16 before writing.
      - CTOC's child count is one byte, and the crate writes `len() as u8` unchecked, so 256
        chapters would make a table listing none. The spike refuses more than 255.
+   - **A third gap, not fixed in the spike:** the crate doesn't convert a v2.4 tag's frames to
+     v2.3 the way mutagen's `update_to_v23` does. Embedding into ffmpeg's v2.4 tag carried its
+     `TDRC` (a v2.4-only date frame) into the v2.3 tag unchanged, and turned the title `x`
+     into `x/`: v2.4 text ends in a NUL, and the crate writes every NUL as `/` in v2.3. Ray's
+     recordings come from Logic as v2.3, so M4 only needs this for a file tagged elsewhere:
+     convert or drop v2.4-only frames, and trim trailing NULs, before writing.
+   - The room the spike pads into counts zero bytes after the declared tag, as the crate's
+     `locate_id3v2` does; mutagen doesn't, so the two can differ on such a file (not seen
+     here).
    - **Write cost:** `write_to_path` writes no padding, so any change in the tag's size moves
      the audio. The first run shrank the tag by Python's 347KB of padding and moved 352MB in
      place (111ms). The spike instead encodes the tag first and applies mutagen's padding rule
@@ -294,7 +305,8 @@ Each spike's exit is a measured result written into this file.
      spike's, so it can't judge chapters. It reads the same duration, title, album, artist and
      78KB cover from both. Apple Podcasts wasn't tried (unverified).
 
-   Verdict: use the `id3` crate with the two fixes and the padding rule; don't port the reorder.
+   Verdict: use the `id3` crate with the two fixes, the padding rule and a v2.4 conversion;
+   don't port the reorder.
 
 If spike 3's Range streaming fails, fall back to a loopback server inside the app (and keep the
 host guard). If spike 1 fails, the plan stops here.

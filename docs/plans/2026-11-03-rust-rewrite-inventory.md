@@ -63,7 +63,8 @@ Ray's existing sets open unchanged. M1's golden check proves it.
   Python's exactly.
 - **MP3 tags**: ID3**v2.3** only (#17); CHAP frames in time order (#33), so they're added
   sorted by start; top-level `TIT2`/`TALB`/`TPE1`, and a blank value writes nothing. From
-  spike 4: no UTF-8 inside v2.3 (frames read from a v2.4 tag are re-marked UTF-16), at most
+  spike 4: no UTF-8 inside v2.3 (frames read from a v2.4 tag are re-marked UTF-16, v2.4-only
+  frames such as `TDRC` converted or dropped, trailing NULs trimmed), at most
   255 chapters (CTOC's count is one byte), and mutagen's padding rule, so a re-embed doesn't
   move the audio.
 
