@@ -33,7 +33,12 @@ from pathlib import Path
 
 from setlist_maker.adaptive import load_probes, save_progress_v2
 from setlist_maker.episode import episode_tags, save_episode_tags
-from setlist_maker.tracklist import load_tracklist, parse_markdown_tracklist, save_tracklist
+from setlist_maker.tracklist import (
+    CorrectionsDB,
+    load_tracklist,
+    parse_markdown_tracklist,
+    save_tracklist,
+)
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_FOLDERS = [
@@ -218,6 +223,17 @@ def generate_progress(rng: random.Random, i: int, results: list) -> Case:
     return {f"gen{i}_progress.json": json.dumps(data, indent=rng.choice([None, 2])).encode()}
 
 
+NAMES = ["İstanbul", "ΟΔΟΣ", "Straße", "STRASSE", "ǅemal", "  Padded  ", "Ⅻ", "Björk", "ﬁn"]
+
+
+def generate_corrections(rng: random.Random, path: Path) -> None:
+    """Corrections Python itself writes, keyed by its own lowercasing of awkward names."""
+    db = CorrectionsDB(db_path=path)
+    for _ in range(200):
+        db.add_correction(rng.choice(NAMES), rng.choice(NAMES), rng.choice(NAMES), "T")
+    db.save()
+
+
 # --- running and comparing ----------------------------------------------------------------
 
 _STAMP = re.compile(r"^\*Generated on [^\n]*\*$", re.MULTILINE)
@@ -274,15 +290,22 @@ def main() -> int:
 
     if args.out.exists():
         shutil.rmtree(args.out)
+    corrections = [Path.home() / ".config/setlist-maker/corrections.json"]
+    corrections = [p.read_bytes() for p in corrections if p.exists()]
+    if args.fuzz:
+        made = args.out / "generated_corrections.json"
+        generate_corrections(rng, made)
+        corrections.append(made.read_bytes())
     side = {}
     for name in ("py", "rs"):
         side[name] = (
             _copy(sets, args.out / name / "sets"),
             _copy(progress, args.out / name / "progress"),
             args.out / name / "config",
+            _copy([{"corrections.json": c} for c in corrections], args.out / name / "corrections"),
         )
 
-    py_sets, py_progress, py_config = side["py"]
+    py_sets, py_progress, py_config, py_corrections = side["py"]
     os.environ["XDG_CONFIG_HOME"] = str(py_config)
     with contextlib.redirect_stdout(io.StringIO()):  # the parse warnings
         for p in py_sets:
@@ -292,18 +315,24 @@ def main() -> int:
     for p in py_progress:
         probes, duration = load_probes(p)
         save_progress_v2(duration, probes, p)  # pyright: ignore[reportArgumentType] # None stays null
+    for p in py_corrections:
+        CorrectionsDB(db_path=p).save()
 
-    rs_sets, rs_progress, rs_config = side["rs"]
+    rs_sets, rs_progress, rs_config, rs_corrections = side["rs"]
     resave = ["cargo", "run", "-q", "-p", "hindsight-core", "--example", "resave", "--"]
     env = {**os.environ, "XDG_CONFIG_HOME": str(rs_config)}
-    for kind, paths in (("tracklist", rs_sets), ("episode", rs_sets), ("progress", rs_progress)):
-        subprocess.run(
-            resave + [kind] + [str(p) for p in paths],
-            cwd=REPO,
-            env=env,
-            check=True,
-            stderr=subprocess.DEVNULL,
+    for kind, paths in (
+        ("tracklist", rs_sets),
+        ("episode", rs_sets),
+        ("progress", rs_progress),
+        ("corrections", rs_corrections),
+    ):
+        run = subprocess.run(
+            resave + [kind] + [str(p) for p in paths], cwd=REPO, env=env, capture_output=True
         )
+        if run.returncode != 0:  # parse warnings alone exit 0
+            print(f"resave {kind} failed:\n{run.stderr.decode()[-2000:]}")
+            return 1
 
     failures = 0
 
@@ -328,6 +357,8 @@ def main() -> int:
         report(py, rs, problems)
     for py, rs in zip(py_progress, rs_progress):
         report(py, rs, [] if _same_json(py, rs) else ["progress differs"])
+    for py, rs in zip(py_corrections, rs_corrections):
+        report(py, rs, [] if _same_json(py, rs) else ["corrections differ"])
     config = Path("hindsight/config.json"), Path("setlist-maker/config.json")
     report(
         py_config,
@@ -339,7 +370,8 @@ def main() -> int:
 
     print(
         f"{len(sets)} sets ({real} found on disk, {args.fuzz} generated) and "
-        f"{len(progress)} progress files ({real_progress} found on disk): {failures} differ"
+        f"{len(progress)} progress files ({real_progress} found on disk) and "
+        f"{len(corrections)} corrections files: {failures} differ"
     )
     return 1 if failures else 0
 
