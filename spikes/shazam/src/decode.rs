@@ -20,7 +20,12 @@ pub type Error = Box<dyn std::error::Error>;
 
 /// `[start_s, start_s + window_s)` of `path`, as 16 kHz mono. `seek` false decodes from the
 /// top of the file instead, to check that seeking lands on the same samples.
-pub fn window_16k_mono(path: &Path, start_s: f64, window_s: f64, seek: bool) -> Result<Vec<i16>, Error> {
+pub fn window_16k_mono(
+    path: &Path,
+    start_s: f64,
+    window_s: f64,
+    seek: bool,
+) -> Result<Vec<i16>, Error> {
     let (rate, left) = window_first_channel(path, start_s, window_s, seek)?;
     Ok(resample_linear(&left, rate, crate::signature::SAMPLE_RATE))
 }
@@ -37,19 +42,37 @@ pub fn window_first_channel(
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
     }
-    let fmt_opts = FormatOptions { enable_gapless: true, ..Default::default() };
-    let probed = symphonia::default::get_probe().format(&hint, mss, &fmt_opts, &MetadataOptions::default())?;
+    let fmt_opts = FormatOptions {
+        enable_gapless: true,
+        ..Default::default()
+    };
+    let probed = symphonia::default::get_probe().format(
+        &hint,
+        mss,
+        &fmt_opts,
+        &MetadataOptions::default(),
+    )?;
     let mut format = probed.format;
     let track = format.default_track().ok_or("no audio track")?.clone();
-    let rate = track.codec_params.sample_rate.ok_or("unknown sample rate")?;
-    let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
+    let rate = track
+        .codec_params
+        .sample_rate
+        .ok_or("unknown sample rate")?;
+    let mut decoder =
+        symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
 
     let first = (start_s * rate as f64).round() as u64;
     let wanted = (window_s * rate as f64).round() as usize;
     if seek && first > 0 {
         let secs = first / rate as u64;
         let frac = (first % rate as u64) as f64 / rate as f64;
-        format.seek(SeekMode::Accurate, SeekTo::Time { time: Time::new(secs, frac), track_id: Some(track.id) })?;
+        format.seek(
+            SeekMode::Accurate,
+            SeekTo::Time {
+                time: Time::new(secs, frac),
+                track_id: Some(track.id),
+            },
+        )?;
         decoder.reset();
     }
 
@@ -58,7 +81,11 @@ pub fn window_first_channel(
     while out.len() < wanted {
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(symphonia::core::errors::Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(symphonia::core::errors::Error::IoError(e))
+                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break
+            }
             Err(e) => return Err(e.into()),
         };
         if packet.track_id() != track.id {
@@ -116,5 +143,9 @@ pub fn resample_linear(input: &[i16], from: u32, to: u32) -> Vec<i16> {
 }
 
 fn gcd(a: u32, b: u32) -> u32 {
-    if b == 0 { a } else { gcd(b, a % b) }
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
 }

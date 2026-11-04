@@ -41,7 +41,9 @@ impl Dec {
             .find(|t| matches!(t.codec_params, Some(CodecParameters::Audio(_))))
             .ok_or("no audio track")?
             .clone();
-        let Some(CodecParameters::Audio(p)) = &track.codec_params else { unreachable!() };
+        let Some(CodecParameters::Audio(p)) = &track.codec_params else {
+            unreachable!()
+        };
         let rate = p.sample_rate.ok_or("unknown sample rate")?;
         let reported_s = track.num_frames.map(|n| match track.time_base {
             Some(tb) => tb
@@ -66,7 +68,13 @@ impl Dec {
         };
         let decoder = symphonia06::default::get_codecs()
             .make_audio_decoder(p, &AudioDecoderOptions::default())?;
-        Ok(Dec { format, decoder, track: track.id, info, errors: 0 })
+        Ok(Dec {
+            format,
+            decoder,
+            track: track.id,
+            info,
+            errors: 0,
+        })
     }
 }
 
@@ -76,7 +84,10 @@ impl Source for Dec {
     }
 
     fn seek(&mut self, frame: u64) -> Result<i64, Error> {
-        let to = SeekTo::Timestamp { ts: Timestamp::new(frame as i64), track_id: self.track };
+        let to = SeekTo::Timestamp {
+            ts: Timestamp::new(frame as i64),
+            track_id: self.track,
+        };
         let seeked = self.format.seek(SeekMode::Accurate, to)?;
         self.decoder.reset();
         Ok(seeked.actual_ts.get())

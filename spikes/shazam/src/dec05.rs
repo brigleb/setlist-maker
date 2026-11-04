@@ -27,15 +27,24 @@ impl Dec {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
-        let fmt_opts = FormatOptions { enable_gapless: true, ..Default::default() };
-        let probed =
-            symphonia::default::get_probe().format(&hint, mss, &fmt_opts, &MetadataOptions::default())?;
+        let fmt_opts = FormatOptions {
+            enable_gapless: true,
+            ..Default::default()
+        };
+        let probed = symphonia::default::get_probe().format(
+            &hint,
+            mss,
+            &fmt_opts,
+            &MetadataOptions::default(),
+        )?;
         let format = probed.format;
         // Not `default_track()`: pick the first track that is actually audio.
         let track = format
             .tracks()
             .iter()
-            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL && t.codec_params.sample_rate.is_some())
+            .find(|t| {
+                t.codec_params.codec != CODEC_TYPE_NULL && t.codec_params.sample_rate.is_some()
+            })
             .ok_or("no audio track")?
             .clone();
         let p = &track.codec_params;
@@ -62,7 +71,14 @@ impl Dec {
             reported_s,
         };
         let decoder = symphonia::default::get_codecs().make(p, &DecoderOptions::default())?;
-        let mut dec = Dec { format, decoder, track: track.id, info, buf: None, errors: 0 };
+        let mut dec = Dec {
+            format,
+            decoder,
+            track: track.id,
+            info,
+            buf: None,
+            errors: 0,
+        };
         // 0.5's MP4 reader leaves the channel count unset (0.6 fills it in): learn it from
         // the first decoded packet, then rewind so callers start at the top.
         if dec.info.channels == 0 {
@@ -79,7 +95,10 @@ impl Source for Dec {
     }
 
     fn seek(&mut self, frame: u64) -> Result<i64, Error> {
-        let to = SeekTo::TimeStamp { ts: frame, track_id: self.track };
+        let to = SeekTo::TimeStamp {
+            ts: frame,
+            track_id: self.track,
+        };
         let seeked = self.format.seek(SeekMode::Accurate, to)?;
         self.decoder.reset();
         Ok(seeked.actual_ts as i64)
@@ -110,7 +129,9 @@ impl Source for Dec {
                 self.info.channels = spec.channels.count();
             }
             let cap = decoded.capacity();
-            let b = self.buf.get_or_insert_with(|| SampleBuffer::new(cap as u64, spec));
+            let b = self
+                .buf
+                .get_or_insert_with(|| SampleBuffer::new(cap as u64, spec));
             if b.capacity() < cap * spec.channels.count() {
                 *b = SampleBuffer::new(cap as u64, spec);
             }

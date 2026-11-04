@@ -116,7 +116,10 @@ impl Signature {
         for _ in 0..2 {
             put(&mut b, 0);
         }
-        put(&mut b, self.number_samples + (SAMPLE_RATE as f32 * 0.24) as u32);
+        put(
+            &mut b,
+            self.number_samples + (SAMPLE_RATE as f32 * 0.24) as u32,
+        );
         put(&mut b, (15 << 19) + 0x40000);
         put(&mut b, 0x40000000);
         put(&mut b, 0); // size minus header again, filled in below

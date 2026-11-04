@@ -143,11 +143,11 @@ Each spike's exit is a measured result written into this file.
      windows are identical with no preroll (2–25ms). AAC windows land at shift 0 but 20–40% of
      samples differ throughout, with or without preroll, so they aren't reproducible; noise
      substitution state is the likely cause (unverified).
-   - **Against ffmpeg**, which Python's windows came from (native rate, first channel): WAV
-     identical. MP3 aligns exactly (shift 0 at 6 positions) but isn't bit-equal: mean 1.5–14
-     LSB, 0.06–0.32% of samples off by more than 2, peaks up to 20913 (cause not
-     investigated). AAC sits 1024 frames (21.3ms) later than ffmpeg's, because symphonia
-     doesn't trim the priming; its `n_frames` is 1024 long too.
+   - **Against ffmpeg**, which Python's windows came from (native rate, first channel, with
+     ffmpeg started 2s early because its own `-ss` has the same warm-up): WAV identical. MP3
+     aligns exactly (shift 0 at 6 positions) and differs by **at most 2 LSB**, mean 0.5, which
+     looks like float-to-integer rounding. AAC sits 1024 frames (21.3ms) later than ffmpeg's,
+     because symphonia doesn't trim the priming; its `n_frames` is 1024 long too.
    - **Peaks** (M4, measured while here): 8 seeked segments on 8 threads, each with the same
      one-frame preroll, take 1.2s for the 4h MP3 against 8.3s serial, and all 723,450 bins
      match the serial pass. An earlier run without preroll differed in 5 bins, all at seams.
@@ -225,8 +225,8 @@ Exit, three checks:
 1. **Fingerprint, offline:** identical 16 kHz mono PCM gives byte-identical signatures from
    Hindsight and shazamio-core (a fixture shazamio-core produced once; runs in `cargo test`).
 2. **Decode, offline:** seeked windows (one MP3 frame of preroll) are sample-identical to a
-   continuous decode; against ffmpeg they align at shift 0 and stay within spike 2's measured
-   MP3 error (mean ≤14 LSB, ≤0.5% of samples off by more than 2); and the decode guard trips
+   continuous decode; against ffmpeg (both warmed up) they align at shift 0 and differ by at
+   most 2 LSB, as spike 2 measured; and the decode guard trips
    on a cut WAV/FLAC and a zero-tailed MP3 but not on a good file with no stated length.
 3. **End to end, once, online:** a ground-truth run (`-o <scratch>`) scored against Ray's
    corrected 60-track `_tracklist.md` finds at least the tracks one Python adaptive run (kept

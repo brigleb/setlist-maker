@@ -62,7 +62,9 @@ pub fn window(
     let mut out = Vec::with_capacity(count * ch);
     let mut buf = Vec::new();
     while out.len() < count * ch {
-        let Some(ts) = src.next_chunk(&mut buf)? else { break };
+        let Some(ts) = src.next_chunk(&mut buf)? else {
+            break;
+        };
         for (i, frame) in buf.chunks(ch).enumerate() {
             let at = ts + i as i64;
             if at < first as i64 {
@@ -109,7 +111,10 @@ pub struct Diff {
 }
 
 pub fn diff(a: &[i16], b: &[i16]) -> Diff {
-    let mut d = Diff { len: [a.len(), b.len()], ..Default::default() };
+    let mut d = Diff {
+        len: [a.len(), b.len()],
+        ..Default::default()
+    };
     for (i, (x, y)) in a.iter().zip(b).enumerate() {
         if x != y {
             d.differing += 1;

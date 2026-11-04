@@ -32,14 +32,29 @@ fn main() -> Result<(), Error> {
         Some("info") => info(Path::new(&a[2])),
         Some("full") => full(version(&a[2]), Path::new(&a[3])),
         Some("sweep") => {
-            let prerolls = a[5].split(',').map(|p| p.parse().unwrap()).collect::<Vec<u64>>();
-            let pos = a[6..].iter().map(|p| p.parse().unwrap()).collect::<Vec<f64>>();
-            sweep(version(&a[2]), Path::new(&a[3]), a[4].parse()?, &prerolls, &pos)
+            let prerolls = a[5]
+                .split(',')
+                .map(|p| p.parse().unwrap())
+                .collect::<Vec<u64>>();
+            let pos = a[6..]
+                .iter()
+                .map(|p| p.parse().unwrap())
+                .collect::<Vec<f64>>();
+            sweep(
+                version(&a[2]),
+                Path::new(&a[3]),
+                a[4].parse()?,
+                &prerolls,
+                &pos,
+            )
         }
         Some("parallel") => parallel(version(&a[2]), Path::new(&a[3]), a[4].parse()?),
         Some("vdiff") => vdiff(Path::new(&a[2])),
         Some("ffcmp") => {
-            let pos = a[5..].iter().map(|p| p.parse().unwrap()).collect::<Vec<f64>>();
+            let pos = a[5..]
+                .iter()
+                .map(|p| p.parse().unwrap())
+                .collect::<Vec<f64>>();
             ffcmp(version(&a[2]), Path::new(&a[3]), a[4].parse()?, &pos)
         }
         _ => {
@@ -55,7 +70,10 @@ fn info(path: &Path) -> Result<(), Error> {
         let r = source::open(v, path).map(|s| s.info().clone());
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         match r {
-            Ok(i) => println!("{}", json!({"v": format!("{v:?}"), "open_ms": ms, "info": i})),
+            Ok(i) => println!(
+                "{}",
+                json!({"v": format!("{v:?}"), "open_ms": ms, "info": i})
+            ),
             Err(e) => println!("{}", json!({"v": format!("{v:?}"), "error": e.to_string()})),
         }
     }
@@ -112,8 +130,10 @@ fn sweep(v: Version, path: &Path, win: f64, prerolls: &[u64], pos: &[f64]) -> Re
     let mut src = source::open(v, path)?;
     let (rate, ch) = (src.info().rate as f64, src.info().channels);
     let count = (win * rate).round() as usize;
-    let mut wins: Vec<(u64, Vec<i16>)> =
-        pos.iter().map(|p| ((p * rate).round() as u64, Vec::with_capacity(count * ch))).collect();
+    let mut wins: Vec<(u64, Vec<i16>)> = pos
+        .iter()
+        .map(|p| ((p * rate).round() as u64, Vec::with_capacity(count * ch)))
+        .collect();
     wins.sort_by_key(|w| w.0);
     let t = Instant::now();
     let mut buf = Vec::new();
@@ -129,7 +149,10 @@ fn sweep(v: Version, path: &Path, win: f64, prerolls: &[u64], pos: &[f64]) -> Re
             w.extend_from_slice(&buf[lo * ch..hi * ch]);
         }
     }
-    eprintln!("continuous decode {:.0}ms", t.elapsed().as_secs_f64() * 1000.0);
+    eprintln!(
+        "continuous decode {:.0}ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
     for (first, truth) in &wins {
         for &pre in prerolls {
             let t = Instant::now();
@@ -155,15 +178,21 @@ fn sweep(v: Version, path: &Path, win: f64, prerolls: &[u64], pos: &[f64]) -> Re
 /// The shift `s` (frames) minimising |got[i] - truth[i + s]| on channel 0 over 4800 frames
 /// from the middle: how far a seeked window sits from where it should.
 fn best_shift(got: &[i16], truth: &[i16], ch: usize, reach: i64) -> i64 {
-    let (a, b): (Vec<i16>, Vec<i16>) =
-        (got.iter().step_by(ch).copied().collect(), truth.iter().step_by(ch).copied().collect());
+    let (a, b): (Vec<i16>, Vec<i16>) = (
+        got.iter().step_by(ch).copied().collect(),
+        truth.iter().step_by(ch).copied().collect(),
+    );
     let (mid, span) = (a.len() / 2, 4800usize.min(a.len() / 4));
     (-reach..=reach)
         .min_by_key(|&s| {
             (0..span)
                 .map(|i| {
                     let j = (mid + i) as i64 + s;
-                    if j < 0 || j as usize >= b.len() { 1 << 16 } else { (a[mid + i] as i64 - b[j as usize] as i64).abs() }
+                    if j < 0 || j as usize >= b.len() {
+                        1 << 16
+                    } else {
+                        (a[mid + i] as i64 - b[j as usize] as i64).abs()
+                    }
                 })
                 .sum::<i64>()
         })
@@ -183,14 +212,21 @@ fn parallel(v: Version, path: &Path, n: u64) -> Result<(), Error> {
     let serial = peaks(v, path, 0, secs * rate, per_bin)?;
     let serial_ms = t.elapsed().as_secs_f64() * 1000.0;
     let t = Instant::now();
-    let bounds: Vec<(u64, u64)> = (0..n).map(|i| (secs * i / n * rate, secs * (i + 1) / n * rate)).collect();
+    let bounds: Vec<(u64, u64)> = (0..n)
+        .map(|i| (secs * i / n * rate, secs * (i + 1) / n * rate))
+        .collect();
     let parts: Vec<Vec<(i16, i16)>> = std::thread::scope(|sc| {
-        let hs: Vec<_> = bounds.iter().map(|&(a, b)| sc.spawn(move || peaks(v, path, a, b, per_bin).unwrap())).collect();
+        let hs: Vec<_> = bounds
+            .iter()
+            .map(|&(a, b)| sc.spawn(move || peaks(v, path, a, b, per_bin).unwrap()))
+            .collect();
         hs.into_iter().map(|h| h.join().unwrap()).collect()
     });
     let par_ms = t.elapsed().as_secs_f64() * 1000.0;
     let par: Vec<(i16, i16)> = parts.into_iter().flatten().collect();
-    let differing: Vec<usize> = (0..serial.len().min(par.len())).filter(|&i| serial[i] != par[i]).collect();
+    let differing: Vec<usize> = (0..serial.len().min(par.len()))
+        .filter(|&i| serial[i] != par[i])
+        .collect();
     println!(
         "{}",
         json!({"v": format!("{v:?}"), "segments": n, "serial_ms": serial_ms, "parallel_ms": par_ms,
@@ -259,7 +295,11 @@ fn vdiff(path: &Path) -> Result<(), Error> {
         if q5.ts != q6.ts {
             misaligned += 1;
             // Drop the earlier side's head until they line up.
-            if q5.ts < q6.ts { q5.pop(ch); } else { q6.pop(ch); }
+            if q5.ts < q6.ts {
+                q5.pop(ch);
+            } else {
+                q6.pop(ch);
+            }
             continue;
         }
         let (a, b) = (q5.pop(ch), q6.pop(ch));
@@ -307,6 +347,8 @@ impl Pending {
 
 /// A seeked window against ffmpeg's accurate `-ss` decode of the same span. Reports the
 /// alignment (ffmpeg is what Python's windows came from) and the residual difference.
+const FF_LEAD: f64 = 2.0;
+
 fn ffcmp(v: Version, path: &Path, win: f64, pos: &[f64]) -> Result<(), Error> {
     for &p in pos {
         let mut src = source::open(v, path)?;
@@ -315,11 +357,33 @@ fn ffcmp(v: Version, path: &Path, win: f64, pos: &[f64]) -> Result<(), Error> {
         let count = (win * rate).round() as usize;
         let ours = source::window(src.as_mut(), first, count, true, PREROLL)?;
         let out = Command::new("ffmpeg")
-            .args(["-nostdin", "-v", "error", "-ss", &format!("{p}"), "-i"])
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-ss",
+                &format!("{}", p - FF_LEAD),
+                "-i",
+            ])
             .arg(path)
-            .args(["-t", &format!("{win}"), "-map", "0:a:0", "-f", "s16le", "-"])
+            .args([
+                "-t",
+                &format!("{}", win + FF_LEAD),
+                "-map",
+                "0:a:0",
+                "-f",
+                "s16le",
+                "-",
+            ])
             .output()?;
-        let ff: Vec<i16> = out.stdout.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+        // ffmpeg's own seek has decoder warm-up too: start it FF_LEAD early and drop that.
+        let lead = (FF_LEAD * rate).round() as usize * ch;
+        let ff: Vec<i16> = out
+            .stdout
+            .chunks_exact(2)
+            .skip(lead)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect();
         let c0 = |x: &[i16]| x.iter().step_by(ch).copied().collect::<Vec<i16>>();
         let (a, b) = (c0(&ours), c0(&ff));
         // Best shift of ffmpeg against ours over 1s from the middle of the window.
@@ -328,7 +392,11 @@ fn ffcmp(v: Version, path: &Path, win: f64, pos: &[f64]) -> Result<(), Error> {
             (0..span)
                 .map(|i| {
                     let j = (mid + i) as i64 + s;
-                    if j < 0 || j as usize >= b.len() { 1 << 16 } else { (a[mid + i] as i64 - b[j as usize] as i64).abs() }
+                    if j < 0 || j as usize >= b.len() {
+                        1 << 16
+                    } else {
+                        (a[mid + i] as i64 - b[j as usize] as i64).abs()
+                    }
                 })
                 .sum()
         };
@@ -339,7 +407,10 @@ fn ffcmp(v: Version, path: &Path, win: f64, pos: &[f64]) -> Result<(), Error> {
                 (j >= 0 && (j as usize) < b.len()).then(|| (a[i], b[j as usize]))
             })
             .collect();
-        let errs: Vec<i32> = aligned.iter().map(|(x, y)| (*x as i32 - *y as i32).abs()).collect();
+        let errs: Vec<i32> = aligned
+            .iter()
+            .map(|(x, y)| (*x as i32 - *y as i32).abs())
+            .collect();
         let max = errs.iter().copied().max().unwrap_or(0);
         let mean = errs.iter().map(|&e| e as f64).sum::<f64>() / errs.len().max(1) as f64;
         let over2 = errs.iter().filter(|&&e| e > 2).count();
