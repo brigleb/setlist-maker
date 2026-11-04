@@ -8,6 +8,9 @@ every progress file (``load_probes`` + ``save_progress_v2``). Each ``.md`` must 
 byte-equal, and each ``.json`` must parse to the same values (Hindsight writes UTF-8 where
 Python writes ``\\uXXXX``).
 
+The default folders are Ray's set folder and old sessions' scratch copies under
+``/private/tmp/claude-501``, which macOS clears; fewer sets found later is that, not a bug.
+
 ``--fuzz N`` adds N generated tracklists built from the shapes that have broken the format
 before (#16, #44, #45): fences, escaped markers, CRs, partial rows, times inside titles, plus
 hand-edited episode files and set names with and without a date.

@@ -51,8 +51,10 @@ Ray's existing sets open unchanged. M1's golden check proves it.
   - Written before the `.md` (#30). A bad sidecar degrades to the markdown alone.
 - **`<set>_progress.json`**: v2 `{version, audio_duration, probes}` read and written, plus two
   new keys Python's reader ignores (checked: it reads keys by name): `ended`
-  (`converged` | `finished_early` | `budget` | `throttled`) and the sha256 of the tracklist the
-  run wrote. The legacy bare list is read, so old sets show their probes and can resume.
+  (`converged` | `finished_early` | `budget` | `throttled`) and `tracklist_sha256`, the hash of
+  the tracklist the run wrote. The legacy bare list is read, so old sets show their probes and
+  can resume. `Probe` and the file live in `model::progress` (M1), so the engine and `run::`
+  both use that one type.
 - `<set>_events.jsonl` (append), `<set>_episode.json`, `<set>_cover.jpg`,
   `<set>_artwork/<hash>.jpg` with `upload:<hash>.jpg` refs validated against the same regex.
 - **`~/.config/hindsight/`**: `corrections.json` (a corrupt file is renamed, never
