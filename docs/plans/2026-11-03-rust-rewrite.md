@@ -320,6 +320,32 @@ Ray's disk (copied) is read and saved by both Python and Hindsight. The `.md` mu
 byte-equal to Python's output (not to the input: a legacy file comes back fenced, #16). Each
 `.json` must parse to the same values; Hindsight writes raw UTF-8 where Python escapes `\uXXXX`.
 
+**Result (2026-11-03, `scripts/golden_m1.py` with `crates/core/examples/resave.rs`):** pass.
+`hindsight-core::model` has 129 tests, Python's ported plus the cases below.
+- **Corpus.** Ray's disk has one set, 2026-09-28-Keys, in 14 distinct versions across old
+  scratch copies. Its 3 progress files are all v2: the one legacy file (08-26's) is lost. So
+  the script also generates cases from the shapes that broke the format before: 5000
+  tracklists (with hand-edited episode files and dated and undated set names), 100 progress
+  files (half legacy lists), and 200 corrections whose lowercasing is unusual (İ, final Σ, ß).
+  Tracklists, sidecars, episode files, the remembered artist, progress files and
+  corrections: **0 differ**.
+- **The check bites.** Making the title span nullable (#45) shows up as 210 of 2000; ASCII-only
+  lowercasing fails the corrections key check.
+- **Found:** serde_json's default float parser is an ulp off on some values: a real progress
+  file's offset 108.76374218699999 came back as 108.763742187. `float_roundtrip` is on. M2's
+  replay parity reads those floats.
+- **Differences on purpose.** The reader's two warnings are returned, not printed. Invalid UTF-8
+  in a sidecar degrades and in `corrections.json` is quarantined (Python crashed). Progress
+  files carry `ended` and `tracklist_sha256`. A new upload gets a different hash, since the
+  `image` crate's JPEG isn't Pillow's (old `upload:` refs still resolve). A sibling audio file
+  is looked for `.mp3` first (Python's order changed from run to run).
+- **Differences no writer can produce:** `\x1c`–`\x1f` aren't stripped, a time in non-ASCII
+  digits isn't read as a time, a time past `i64` drops the row, and `NaN` in a JSON file makes
+  it unreadable.
+- **Left for later:** copying `~/.cache/setlist-maker` (M4, with the cache) and
+  `tracklist_output_path` (M3, with the CLI). The config copy is `adopt_python_config`; nothing
+  calls it until there's a CLI or an app to launch.
+
 ### M2 Engine (7–10 days)
 
 `identity` and `boundary` as pure Rust, with the oracle (`boundary_oracle.py`, `misid_rate`
