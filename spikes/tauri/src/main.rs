@@ -47,11 +47,26 @@ struct Spike {
     autotest: bool,
 }
 
+fn is_mp3(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
+}
+
+/// A plain file name (no separators, no `..`) with one of `exts`: all a request may name.
+fn plain_name<'a>(name: &'a str, exts: &[&str]) -> Option<&'a str> {
+    let ok = !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+        && exts.iter().any(|e| name.ends_with(e));
+    ok.then_some(name)
+}
+
 fn first_mp3(dir: &Path) -> Option<PathBuf> {
     std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp3")))
+        .find(|p| is_mp3(p))
 }
 
 fn mime(path: &str) -> &'static str {
@@ -95,7 +110,8 @@ fn page(spike: &Spike) -> Response<Vec<u8>> {
     respond(StatusCode::OK, mime(".html"), html.into_bytes())
 }
 
-/// `/api/audio`: at most `cap` bytes per response, since the body is one `Vec`.
+/// `/api/audio`: a ranged answer is at most `cap` bytes, since the body is one `Vec`. A request
+/// with no usable Range gets the whole file in one `Vec`; WebKit never sent one (spike 3).
 fn audio(spike: &Spike, req: &Request<Vec<u8>>) -> (Response<Vec<u8>>, String) {
     let Some(path) = spike.audio.lock().unwrap().clone() else {
         return (not_found(), "no audio".into());
@@ -159,23 +175,19 @@ fn handle(spike: &Spike, req: Request<Vec<u8>>) -> Response<Vec<u8>> {
             String::new(),
         ),
         p if p.starts_with("/web/") => {
-            let name = &p[5..];
-            let ok = !name.is_empty()
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
-                && (name.ends_with(".js") || name.ends_with(".css"));
-            let r = if ok {
-                file(&Path::new(WEB).join("web").join(name), mime(name))
-            } else {
-                not_found()
+            let r = match plain_name(&p[5..], &[".js", ".css"]) {
+                Some(name) => file(&Path::new(WEB).join("web").join(name), mime(name)),
+                None => not_found(),
             };
             (r, String::new())
         }
-        p if p.starts_with("/spike/") && p.ends_with(".js") => (
-            file(&Path::new(SPIKE_JS).join(&p[7..]), mime(".js")),
-            String::new(),
-        ),
+        p if p.starts_with("/spike/") && p.ends_with(".js") => {
+            let r = match plain_name(&p[7..], &[".js"]) {
+                Some(name) => file(&Path::new(SPIKE_JS).join(name), mime(".js")),
+                None => not_found(),
+            };
+            (r, String::new())
+        }
         "/spike/report" => {
             let body = String::from_utf8_lossy(req.body()).to_string();
             let pid = std::process::id().to_string();
@@ -220,10 +232,7 @@ fn handle(spike: &Spike, req: Request<Vec<u8>>) -> Response<Vec<u8>> {
 fn arrived(app: &tauri::AppHandle, how: &str, paths: Vec<PathBuf>) {
     let spike = app.state::<Arc<Spike>>();
     spike.log.line(format!("{how} {paths:?}"));
-    if let Some(mp3) = paths
-        .into_iter()
-        .find(|p| p.extension().is_some_and(|e| e == "mp3"))
-    {
+    if let Some(mp3) = paths.into_iter().find(|p| is_mp3(p)) {
         *spike.audio.lock().unwrap() = Some(mp3);
         if let Some(w) = app.get_webview_window("main") {
             let _ = w.eval(
@@ -314,6 +323,6 @@ fn main() {
             let paths = urls.iter().filter_map(|u| u.to_file_path().ok()).collect();
             arrived(app, &format!("OPENED urls={urls:?} ->"), paths);
         }
-        let _ = app;
+        let _ = app; // used only by the macOS arm above
     });
 }

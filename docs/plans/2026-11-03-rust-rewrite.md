@@ -194,34 +194,42 @@ Each spike's exit is a measured result written into this file.
    with a thread per request. An autotest inside the page did the playing and seeking; Ray did
    the drags by hand.
    - **The page runs unchanged under `hindsight://localhost/`:** ES modules, the import map,
-     62 rows, 340 sample pins, the waveform. `localStorage` works, `<input type=file>` opens
-     the picker, and `window.__TAURI__` is there. Listening for events from the page only
+     62 rows, 340 sample pins, the waveform. `localStorage` works and `window.__TAURI__` is
+     there. Listening for events from the page only
      needs a capability granting `core:event:default`.
    - **Range:** WebKit sends `bytes=0-1`, then `0-7`, then only closed ranges, mostly 64KB
      and at most 145KB. Over 3 runs that was 992 requests, none open-ended and none without
      a Range header, each answered in ≤0.6ms. So the response being a whole `Vec` costs
-     nothing. The handler still caps a response at 4MB in case.
+     nothing. The handler caps a ranged response at 4MB in case; a request with no Range
+     would still get the whole file in one `Vec`, which M5 should refuse or cap.
    - **Playback**, in the same webview, `hindsight://` against Python's http server
-     (`SPIKE_URL`):
+     (`SPIKE_URL`), 4 runs each (the first with 9 seeks, the rest 18; the autotest grew
+     between runs, and only the last run used the committed script). Seeking sets
+     `currentTime`, which is what the page's scrubber does (`player.js`):
      | | `hindsight://` | http (Python) |
-     |---|---:|---|
-     | `play()` to playing | 146–162ms | 506–573ms |
-     | seek to `seeked`, 18 seeks per run | median ~119ms, max 164 | median ~124ms, max 232 |
-     | scrubber drag (20 positions), each seek | 56–250ms | 59–239ms |
+     |---|---|---|
+     | `play()` to playing | 115–162ms | 411–573ms |
+     | seek to `seeked`, median per run | 119–123ms | 121–155ms |
+     | seek to `seeked`, slowest | 164ms (673ms in run 1's first 3 seeks) | 234ms |
+     | 20 positions set in a row, each seek (last run) | 56–250ms | 59–239ms |
 
-     Every seek landed within 5ms of its target, and playback moved on after it. The app
-     uses 105–138MB of memory (its own process; WebKit's helpers aren't counted).
+     The "20 positions" were meant 50ms apart, but timer throttling (below) spaced the last
+     ten 1s apart, so WebKit made 10–11 seeks rather than a fast drag; a real drag on the
+     `#seek` slider wasn't tried. Every seek landed within 7ms of its target, and playback
+     moved on after it. The app uses 105–138MB of memory (its own process; WebKit's helpers
+     aren't counted).
    - **The window drop** reaches Rust (`WindowEvent::DragDrop(Drop { paths, position })`) and
-     the page (`tauri://drag-drop` through `window.__TAURI__`) within 1ms, with the real path.
+     the page (`tauri://drag-drop` through `window.__TAURI__`) ~1ms apart, with the real path.
      The dropped 4h MP3 then loaded in 103ms. The position is in NSView points, even though
      its type says `PhysicalPosition`. That's from wry's source, and it fits where Ray dropped.
    - **The page's own drop zones are dead in the app.** Tauri's drop handler always claims
      the drop (wry's `perform_drag_operation` never passes it on to WebKit), and across Ray's
-     4 drags the page saw no `dragenter`, `dragover` or `drop` at all. So the episode section
-     and the artwork dialog never light up or take an image (Ray: "no dashed-line box"; the
-     outline only shows during `dragover`). Turning `dragDropEnabled` off would bring them
-     back, but WebKit gives the page a `File` with no path, so an MP3 would have to be
-     re-uploaded. M5 keeps the native drop instead: the page maps `position` to an element
+     3 window drags (an MP3, then a JPG twice) the page saw no `dragenter` or `drop` at all
+     (`dragover` wasn't logged). So the episode section and the artwork dialog never light up
+     or take an image (Ray: "no dashed-line box"; the outline only shows during `dragover`).
+     Turning `dragDropEnabled` off should bring them back, but a page's `File` carries no
+     path, so an MP3 would have to be re-uploaded (both unverified). M5 keeps the native drop
+     instead: the page maps `position` to an element
      (`elementFromPoint`), an image over a drop zone becomes an upload read from its path,
      and anything else opens a set.
    - **Dock icon and `open -a`** both arrive as `RunEvent::Opened { urls }`. Ray dragged a
@@ -238,6 +246,9 @@ Each spike's exit is a measured result written into this file.
      M6 should set `bundle.macOS.signingIdentity: "-"` (not tried). Launching it registered it
      with LaunchServices as an MP3 Viewer. `lsregister -u` it afterwards (done here), or it
      stays in Open With.
+   - `<input type=file>` works: Ray's "Upload cover…" reached the handler as
+     `POST /api/upload` (a 404 here, since the spike has no upload route).
+
    Verdict: continue on Tauri with the custom scheme; no loopback fallback needed.
 4. **ID3.** The `id3` crate writes v2.3 CHAP/CTOC with per-chapter APIC; ffprobe lists the
    chapters in time order. If the crate keeps insertion order, the #33 byte-permuting fix is
