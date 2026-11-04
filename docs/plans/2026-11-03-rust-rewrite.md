@@ -480,6 +480,46 @@ file, and a crash or sleep partway through would leave the recording half-moved.
 case, write the tag and a copy of the audio to a temporary file beside the original, then
 rename it over the original (about 350MB of writing, once per recording).
 
+**Result (2026-11-04, on copies of the 09-28 set in scratch; commits 397464f, 0e7fc64,
+676b673):** pass. 286 Rust tests; clippy and fmt clean; Python's 835 still pass.
+- **Chapters, against Python's embed of the same tracklist.** ffprobe's `-show_chapters`
+  JSON is byte-identical: 62 chapters with the same titles and times. The last chapter ends at
+  14430.504 in both. Rust takes that end from summing packet lengths without decoding (0.05s),
+  and it equals mutagen's `info.length` and the decoded length. Top-level tags are the same,
+  in another order. The audio after the tag hashes the same in the original and in both copies.
+- **The two write paths.**
+  - Over Python's 6.0MB tag, Rust's 7.8MB tag didn't fit. Its plain covers are 39–185KB,
+    median 122KB; Python's composites were 33–145KB. So the file was rewritten beside itself
+    and renamed over, with mutagen's 1KB + 0.1% padding: 5.6s in all, including fetching all
+    62 covers from an empty cache.
+  - Embedding again went in place: same inode, 0.3s.
+  - `--no-artwork` shrinks the tag past the padding rule's 10KB + 1%, so it rewrites too, as
+    mutagen would.
+- **Artwork.** Fresh lookups found art for all 62 tracks: 60 cached sources plus one upload.
+  Of the 60, 56 are byte-identical to the `.src` Python cached under the same key. The other 4
+  are pixel-identical, differing in 24 header bytes (the CDN's metadata). Artwork and peaks
+  keys match Python's (artwork against computed values in a test; peaks on two real paths).
+- **Peaks.**
+  - Same header and pair count as Python's (721,526), aligned (envelope correlation 0.97 at lag
+    0, 0.79 at ±1).
+  - Rust's spans are a median 7% taller, 26% at p90. It keeps the file's own rate where ffmpeg
+    low-passed to 8 kHz.
+  - 1.3s against Python's 4.2s.
+- **Decisions taken:**
+  - The peaks mix is the channels' mean at the native rate, not ffmpeg's 8 kHz.
+  - v2.4's `TIPL`/`TMCL` are dropped rather than merged into `IPLS`.
+  - A cover that doesn't decode gives no picture (Python drew the gradient card).
+  - A rewrite replaces the file, so Finder tags, other extended attributes and the creation
+    date don't survive it. Mode and symlinks do.
+  - The CLI now prints library warnings on stderr.
+- **Found in review and fixed:**
+  - Chapters go in sorted by start whatever order the `.md` lists them in.
+  - A v2.4 `TXXX`/comment value had kept its trailing NUL (written as `/`).
+  - An unidentified starred track hid an identified one.
+- **Untested:** the cap of 4 concurrent fetches against real servers (it's tested with a slow
+  fake). `options()` (the picker) and `peaks_for()` have no caller until M5. `~/.cache/hindsight`
+  doesn't exist yet: the first real run makes it, copying Python's 35MB cache.
+
 ### M5 The app (7–10 days)
 
 The Tauri shell, the router (every endpoint in the inventory), live mode, click-to-sample,
