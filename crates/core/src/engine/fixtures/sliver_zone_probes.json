@@ -1,0 +1,246 @@
+{
+ "version": 2,
+ "audio_duration": 14468.304,
+ "probes": [
+  {
+   "t": 4035.0,
+   "window": 30.0,
+   "purpose": "coverage",
+   "result": {
+    "title": "Rise",
+    "artist": "Herb Alpert",
+    "album": "Rise",
+    "confidence": 0.999
+   },
+   "offsets": [
+    {
+     "offset": 57.674335937,
+     "timeskew": 0.0004247427
+    },
+    {
+     "offset": 71.7606875,
+     "timeskew": -0.00060915947
+    },
+    {
+     "offset": 87.968992187,
+     "timeskew": -0.0048264265
+    },
+    {
+     "offset": 72.2058125,
+     "timeskew": 0.0062918663
+    },
+    {
+     "offset": 71.855226562,
+     "timeskew": 0.0034848452
+    },
+    {
+     "offset": 71.676203125,
+     "timeskew": -0.0006079078
+    }
+   ]
+  },
+  {
+   "t": 3945.0,
+   "window": 30.0,
+   "purpose": "coverage",
+   "result": {
+    "title": "Pricilla's Theme",
+    "artist": "Roy Ayers",
+    "album": "Coffy (Soundtrack from the Motion Picture)",
+    "confidence": 0.667
+   },
+   "offsets": [
+    {
+     "offset": 215.431515625,
+     "timeskew": 7.104874e-05
+    }
+   ]
+  },
+  {
+   "t": 3972.3398339845,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Hypnotize",
+    "artist": "The Notorious B.I.G.",
+    "album": "Life After Death (2014 Remaster)",
+    "confidence": 0.999
+   },
+   "offsets": [
+    {
+     "offset": 0.08095975400000001,
+     "timeskew": -0.0011401176
+    },
+    {
+     "offset": 0.138448883,
+     "timeskew": -0.0004671216
+    },
+    {
+     "offset": 0.498409851,
+     "timeskew": 9.5009804e-05
+    },
+    {
+     "offset": 0.049978214,
+     "timeskew": 0.0066028833
+    },
+    {
+     "offset": -0.016649627,
+     "timeskew": 0.0026980639
+    },
+    {
+     "offset": 0.05754497099999999,
+     "timeskew": -0.0010076165
+    }
+   ]
+  },
+  {
+   "t": 4008.16991699225,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Rise",
+    "artist": "Herb Alpert",
+    "album": "Rise",
+    "confidence": 0.999
+   },
+   "offsets": [
+    {
+     "offset": 21.844037109000002,
+     "timeskew": 0.0001399517
+    },
+    {
+     "offset": 35.947597656,
+     "timeskew": -0.0007824898
+    },
+    {
+     "offset": 36.126,
+     "timeskew": 0.007416129
+    },
+    {
+     "offset": 35.927867187000004,
+     "timeskew": 0.0026379824
+    },
+    {
+     "offset": 35.867964843,
+     "timeskew": -0.00064504147
+    }
+   ]
+  },
+  {
+   "t": 3990.2548754883746,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Rise",
+    "artist": "Herb Alpert",
+    "album": "Rise",
+    "confidence": 0.999
+   },
+   "offsets": [
+    {
+     "offset": 8.750902343,
+     "timeskew": 0.00010681152
+    },
+    {
+     "offset": 18.039134765,
+     "timeskew": -0.00036907196
+    },
+    {
+     "offset": 18.086,
+     "timeskew": 0.007617712
+    },
+    {
+     "offset": 17.962648437,
+     "timeskew": 0.0030372143
+    },
+    {
+     "offset": 17.959363281,
+     "timeskew": -0.00030070543
+    }
+   ]
+  },
+  {
+   "t": 3963.16991699225,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Pricilla's Theme",
+    "artist": "Roy Ayers",
+    "album": "Coffy (Soundtrack from the Motion Picture)",
+    "confidence": 0.666
+   },
+   "offsets": [
+    {
+     "offset": 224.601921875,
+     "timeskew": 0.00037634373
+    }
+   ]
+  },
+  {
+   "t": 3981.2973547364372,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Hypnotize",
+    "artist": "The Notorious B.I.G.",
+    "album": "Life After Death (2014 Remaster)",
+    "confidence": 0.999
+   },
+   "offsets": [
+    {
+     "offset": 9.023829100999999,
+     "timeskew": -0.0013208985
+    },
+    {
+     "offset": 9.087326171,
+     "timeskew": -0.0007812381
+    },
+    {
+     "offset": 9.064857421000001,
+     "timeskew": 0.006828785
+    },
+    {
+     "offset": 8.969702148,
+     "timeskew": 0.0033706427
+    },
+    {
+     "offset": 9.013885742000001,
+     "timeskew": -0.0010166764
+    }
+   ]
+  },
+  {
+   "t": 3985.776115112406,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Rise",
+    "artist": "Herb Alpert",
+    "album": "Rise",
+    "confidence": 0.999
+   },
+   "offsets": [
+    {
+     "offset": 13.566773437,
+     "timeskew": -0.00037264824
+    },
+    {
+     "offset": 4.265044433,
+     "timeskew": 0.00073826313
+    },
+    {
+     "offset": 13.573165039,
+     "timeskew": 0.007608652
+    },
+    {
+     "offset": 13.463979492,
+     "timeskew": 0.00316751
+    },
+    {
+     "offset": 13.485936523,
+     "timeskew": -0.0011521578
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,377 @@
+{
+ "version": 2,
+ "audio_duration": 14468.304,
+ "probes": [
+  {
+   "t": 13575.0,
+   "window": 30.0,
+   "purpose": "coverage",
+   "result": {
+    "title": "Sookie Sookie (Live)",
+    "artist": "Grant Green",
+    "album": "Alive! (Live)",
+    "confidence": 0.666
+   },
+   "offsets": [
+    {
+     "offset": 119.32040625,
+     "timeskew": 0.00076150894
+    }
+   ]
+  },
+  {
+   "t": 13305.0,
+   "window": 30.0,
+   "purpose": "coverage",
+   "result": {
+    "title": "Lowdown",
+    "artist": "Boz Scaggs",
+    "album": "My Time: A Boz Scaggs Anthology (1969-1997)",
+    "confidence": 0.999
+   },
+   "offsets": [
+    {
+     "offset": 138.066484375,
+     "timeskew": -0.0030424595
+    },
+    {
+     "offset": 137.969921875,
+     "timeskew": -0.0038812757
+    },
+    {
+     "offset": 140.350390625,
+     "timeskew": -0.004395783
+    },
+    {
+     "offset": 239.192890625,
+     "timeskew": 0.003403306
+    }
+   ]
+  },
+  {
+   "t": 13485.0,
+   "window": 30.0,
+   "purpose": "coverage",
+   "result": {
+    "title": "Tukka Yoot's Riddim",
+    "artist": "Us3",
+    "album": "Hand On the Torch",
+    "confidence": 0.665
+   },
+   "offsets": [
+    {
+     "offset": 211.599796875,
+     "timeskew": 0.0027468204
+    }
+   ]
+  },
+  {
+   "t": 13395.0,
+   "window": 30.0,
+   "purpose": "coverage",
+   "result": {
+    "title": "Lowdown",
+    "artist": "Boz Scaggs",
+    "album": "My Time: A Boz Scaggs Anthology (1969-1997)",
+    "confidence": 0.999
+   },
+   "offsets": [
+    {
+     "offset": 229.9745,
+     "timeskew": -0.003998935
+    },
+    {
+     "offset": 227.59759375,
+     "timeskew": -0.0041182637
+    },
+    {
+     "offset": 227.7999375,
+     "timeskew": -0.0032237172
+    },
+    {
+     "offset": 354.43934375,
+     "timeskew": -0.004603684
+    }
+   ]
+  },
+  {
+   "t": 13449.0,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Lowdown",
+    "artist": "Boz Scaggs",
+    "album": "My Time: A Boz Scaggs Anthology (1969-1997)",
+    "confidence": 0.998
+   },
+   "offsets": [
+    {
+     "offset": 274.7928125,
+     "timeskew": -0.004041195
+    },
+    {
+     "offset": 272.40875,
+     "timeskew": -0.004215896
+    },
+    {
+     "offset": 424.21321875,
+     "timeskew": -0.00544852
+    }
+   ]
+  },
+  {
+   "t": 13539.0,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Sookie Sookie (Live)",
+    "artist": "Grant Green",
+    "album": "Alive! (Live)",
+    "confidence": 0.666
+   },
+   "offsets": [
+    {
+     "offset": 74.263148437,
+     "timeskew": 0.002044797
+    }
+   ]
+  },
+  {
+   "t": 13471.5,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Sookie Sookie (Live)",
+    "artist": "Grant Green",
+    "album": "Alive! (Live)",
+    "confidence": 0.667
+   },
+   "offsets": [
+    {
+     "offset": 6.697151855,
+     "timeskew": 0.0020182133
+    }
+   ]
+  },
+  {
+   "t": 13516.5,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Sookie Sookie (Live)",
+    "artist": "Grant Green",
+    "album": "Alive! (Live)",
+    "confidence": 0.666
+   },
+   "offsets": [
+    {
+     "offset": 51.749726562000006,
+     "timeskew": 0.0008454323
+    }
+   ]
+  },
+  {
+   "t": 13464.7082226565,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Tukka Yoot's Riddim",
+    "artist": "Us3",
+    "album": "Hand On the Torch",
+    "confidence": 0.667
+   },
+   "offsets": [
+    {
+     "offset": -0.550081604,
+     "timeskew": -0.0008405447
+    }
+   ]
+  },
+  {
+   "t": 13482.75,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Sookie Sookie (Live)",
+    "artist": "Grant Green",
+    "album": "Alive! (Live)",
+    "confidence": 0.666
+   },
+   "offsets": [
+    {
+     "offset": 17.96059375,
+     "timeskew": 0.0015890598
+    }
+   ]
+  },
+  {
+   "t": 13505.25,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Sookie Sookie (Live)",
+    "artist": "Grant Green",
+    "album": "Alive! (Live)",
+    "confidence": 0.667
+   },
+   "offsets": [
+    {
+     "offset": 40.483882812000004,
+     "timeskew": 0.00078368187
+    }
+   ]
+  },
+  {
+   "t": 13456.85411132825,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Lowdown",
+    "artist": "Boz Scaggs",
+    "album": "My Time: A Boz Scaggs Anthology (1969-1997)",
+    "confidence": 0.998
+   },
+   "offsets": [
+    {
+     "offset": 282.612875,
+     "timeskew": -0.0031015277
+    },
+    {
+     "offset": 280.225125,
+     "timeskew": -0.0038342476
+    },
+    {
+     "offset": 432.02146875,
+     "timeskew": -0.0048307776
+    }
+   ]
+  },
+  {
+   "t": 13665.0,
+   "window": 30.0,
+   "purpose": "coverage",
+   "result": {
+    "title": "Sookie Sookie (Live)",
+    "artist": "Grant Green",
+    "album": "Alive! (Live)",
+    "confidence": 0.666
+   },
+   "offsets": [
+    {
+     "offset": 209.4091875,
+     "timeskew": 0.0010956526
+    }
+   ]
+  },
+  {
+   "t": 13488.375,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Sookie Sookie (Live)",
+    "artist": "Grant Green",
+    "album": "Alive! (Live)",
+    "confidence": 0.667
+   },
+   "offsets": [
+    {
+     "offset": 23.596316406000003,
+     "timeskew": 0.000890851
+    }
+   ]
+  },
+  {
+   "t": 13499.625,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Sookie Sookie (Live)",
+    "artist": "Grant Green",
+    "album": "Alive! (Live)",
+    "confidence": 0.666
+   },
+   "offsets": [
+    {
+     "offset": 34.856425781,
+     "timeskew": 0.00082075596
+    }
+   ]
+  },
+  {
+   "t": 13460.781166992376,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Lowdown",
+    "artist": "Boz Scaggs",
+    "album": "My Time: A Boz Scaggs Anthology (1969-1997)",
+    "confidence": 0.998
+   },
+   "offsets": [
+    {
+     "offset": 286.52728125,
+     "timeskew": -0.005643606
+    },
+    {
+     "offset": 284.1438125,
+     "timeskew": -0.0065613985
+    },
+    {
+     "offset": 435.919375,
+     "timeskew": -0.0033382773
+    }
+   ]
+  },
+  {
+   "t": 13468.10411132825,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Tukka Yoot's Riddim",
+    "artist": "Us3",
+    "album": "Hand On the Torch",
+    "confidence": 0.666
+   },
+   "offsets": [
+    {
+     "offset": 0.974436767,
+     "timeskew": -0.001799047
+    }
+   ]
+  },
+  {
+   "t": 13491.1875,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Sookie Sookie (Live)",
+    "artist": "Grant Green",
+    "album": "Alive! (Live)",
+    "confidence": 0.666
+   },
+   "offsets": [
+    {
+     "offset": 26.411769531,
+     "timeskew": 0.0006970167
+    }
+   ]
+  },
+  {
+   "t": 13496.8125,
+   "window": 12.0,
+   "purpose": "refine",
+   "result": {
+    "title": "Tukka Yoot's Riddim",
+    "artist": "Us3",
+    "album": "Hand On the Torch",
+    "confidence": 0.665
+   },
+   "offsets": [
+    {
+     "offset": 165.414109375,
+     "timeskew": 0.00021445751
+    }
+   ]
+  }
+ ]
+}
