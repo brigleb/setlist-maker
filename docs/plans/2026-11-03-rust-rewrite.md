@@ -509,8 +509,10 @@ rename it over the original (about 350MB of writing, once per recording).
   - The peaks mix is the channels' mean at the native rate, not ffmpeg's 8 kHz.
   - v2.4's `TIPL`/`TMCL` are dropped rather than merged into `IPLS`.
   - A cover that doesn't decode gives no picture (Python drew the gradient card).
-  - A rewrite replaces the file, so Finder tags, other extended attributes and the creation
-    date don't survive it. Mode and symlinks do.
+  - A rewrite replaces the file (a new inode). It keeps the mode, symlinks, the creation date
+    and the extended attributes (Finder tags, comment, colour label), less those Apple marks as
+    tied to the old contents or never copied, by `xattr_preserve_for_intent(SAVE)`. Checked on a
+    tagged copy of the 09-28 set. ACLs aren't copied.
   - The CLI now prints library warnings on stderr.
 - **Found in review and fixed:**
   - Chapters go in sorted by start whatever order the `.md` lists them in.

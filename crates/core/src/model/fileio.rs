@@ -122,8 +122,8 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
 
 /// [`atomic_write`] for contents too big to hold in memory: `fill` writes them into the temp
 /// file (the chapters embed copies a 350MB recording this way). Same guarantees: the temp file
-/// is synced, takes the replaced file's permissions, and is renamed over the file a symlink
-/// ends at, or removed if anything fails.
+/// is synced, takes the replaced file's permissions (and on macOS its Finder tags and creation
+/// date), and is renamed over the file a symlink ends at, or removed if anything fails.
 pub fn atomic_replace(
     path: &Path,
     fill: impl FnOnce(&mut fs::File) -> io::Result<()>,
@@ -147,6 +147,10 @@ pub fn atomic_replace(
         .tempfile_in(&dir)?;
     fill(tmp.as_file_mut())?;
     tmp.as_file_mut().flush()?;
+    #[cfg(target_os = "macos")]
+    if mode.is_some() {
+        keep_finder_info(&path, tmp.as_file());
+    }
     tmp.as_file().sync_all()?;
     if let Some(mode) = mode {
         tmp.as_file()
@@ -154,6 +158,56 @@ pub fn atomic_replace(
     }
     tmp.persist(&path).map_err(|e| e.error)?;
     Ok(())
+}
+
+/// Gives the new file what Finder showed on the old one: its extended attributes (tags, colour
+/// label, comment, "where from") and its creation date. Python wrote the MP3 in place, so these
+/// survived; a rename would otherwise drop them. Attributes Apple marks as describing the old
+/// contents, or as never copied, are left behind as a Save in Apple's own apps leaves them.
+/// Best effort: a save doesn't fail over Finder's details, and an attribute the system won't
+/// let us set (`com.apple.provenance`) is skipped.
+#[cfg(target_os = "macos")]
+fn keep_finder_info(old: &Path, new: &fs::File) {
+    use std::os::macos::fs::FileTimesExt;
+    use xattr::FileExt;
+
+    let copy = || -> io::Result<()> {
+        let old = fs::File::open(old)?;
+        for name in old.list_xattr()?.filter(|n| preserved_on_save(n)) {
+            if let Ok(Some(value)) = old.get_xattr(&name)
+                && let Err(e) = new.set_xattr(&name, &value)
+            {
+                log::debug!("not copying the {name:?} attribute: {e}");
+            }
+        }
+        let born = old.metadata()?.created()?;
+        new.set_times(fs::FileTimes::new().set_created(born))
+    };
+    if let Err(e) = copy() {
+        log::warn!(
+            "{} lost its Finder tags or creation date: {e}",
+            old.display()
+        );
+    }
+}
+
+/// Whether a save keeps the attribute, by Apple's rule (`xattr_flags.h`): the flags after a `#`
+/// in its name, or the system's table for well-known names.
+#[cfg(target_os = "macos")]
+fn preserved_on_save(name: &OsStr) -> bool {
+    use std::ffi::{CString, c_char, c_int, c_uint};
+    use std::os::unix::ffi::OsStrExt;
+
+    const XATTR_OPERATION_INTENT_SAVE: c_uint = 2;
+    unsafe extern "C" {
+        // In libSystem since macOS 10.10.
+        fn xattr_preserve_for_intent(name: *const c_char, intent: c_uint) -> c_int;
+    }
+    let Ok(name) = CString::new(name.as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `name` is NUL-terminated and outlives the call, which only reads it.
+    unsafe { xattr_preserve_for_intent(name.as_ptr(), XATTR_OPERATION_INTENT_SAVE) == 1 }
 }
 
 /// Follows a chain of symlinks to the file it ends at, which need not exist yet (Python's
@@ -385,5 +439,57 @@ mod tests {
         assert!(!adopt_python_config(base.path()).unwrap());
         assert!(!adopt_python_cache(base.path()).unwrap());
         assert!(names(base.path()).is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_rewritten_file_keeps_its_finder_info_and_creation_date() {
+        use std::os::macos::fs::FileTimesExt;
+        use std::time::{Duration, SystemTime};
+        use xattr::FileExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("set.mp3");
+        fs::write(&path, "old").unwrap();
+        let file = fs::File::open(&path).unwrap();
+        let tags = b"bplist00 a Finder tag";
+        file.set_xattr("com.apple.metadata:_kMDItemUserTags", tags)
+            .unwrap();
+        file.set_xattr("com.apple.metadata:kMDItemFinderComment", b"a comment")
+            .unwrap();
+        // Marked as describing the old contents (#C) or as never copied (#N): a save drops them.
+        file.set_xattr("org.example.checksum#C", b"of the old bytes")
+            .unwrap();
+        file.set_xattr("org.example.private#N", b"x").unwrap();
+        let born = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        file.set_times(fs::FileTimes::new().set_created(born))
+            .unwrap();
+        drop(file);
+
+        atomic_write(&path, b"new").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        let get = |name: &str| xattr::get(&path, name).unwrap();
+        assert_eq!(
+            get("com.apple.metadata:_kMDItemUserTags").as_deref(),
+            Some(&tags[..])
+        );
+        assert_eq!(
+            get("com.apple.metadata:kMDItemFinderComment").as_deref(),
+            Some(&b"a comment"[..])
+        );
+        assert_eq!(get("org.example.checksum#C"), None);
+        assert_eq!(get("org.example.private#N"), None);
+        assert_eq!(fs::metadata(&path).unwrap().created().unwrap(), born);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_new_file_is_born_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fresh.md");
+        let before = std::time::SystemTime::now() - std::time::Duration::from_secs(2);
+        atomic_write(&path, b"x").unwrap();
+        assert!(fs::metadata(&path).unwrap().created().unwrap() >= before);
     }
 }

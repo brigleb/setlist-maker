@@ -37,3 +37,6 @@ tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+xattr = "1.7.0"
