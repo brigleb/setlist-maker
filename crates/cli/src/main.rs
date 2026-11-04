@@ -1,11 +1,13 @@
-//! `hindsight`: the command line. M3 adds `identify` and `chapters`; for now there's only
-//! the hidden developer command `replay`.
+//! `hindsight`: the command line. `identify` makes a set's tracklist; `chapters` arrives with
+//! M4. `replay` is a hidden developer command.
 
+mod identify;
 mod pyjson;
 mod replay;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
@@ -18,6 +20,29 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Identify the tracks in a recording and write <set>_tracklist.md beside it.
+    ///
+    /// Samples adaptively, one Shazam lookup every 15 seconds, and saves after each, so
+    /// Ctrl-C finishes early with what was heard (twice aborts) and running it again resumes.
+    Identify {
+        /// The recording (MP3, WAV, FLAC or M4A).
+        audio: PathBuf,
+        /// Write the tracklist and run files here instead of beside the audio.
+        #[arg(short, long, value_name = "DIR")]
+        output_dir: Option<PathBuf>,
+        /// Stop after about this long and write what was found: 45m, 2h, 90s, or minutes.
+        #[arg(long, value_name = "DURATION", value_parser = identify::parse_budget)]
+        budget: Option<Duration>,
+        /// Identify a file that decodes shorter than it says it is (still syncing?).
+        #[arg(long)]
+        allow_partial: bool,
+        /// Ask the `claude` CLI for a one-paragraph description of the set.
+        #[arg(long)]
+        summary: bool,
+        /// Ignore an existing tracklist and progress file and start over.
+        #[arg(long)]
+        fresh: bool,
+    },
     /// Fold a progress file one probe at a time, printing a JSON line of what the engine
     /// says after each (and before the first). M2's parity harness compares it with Python.
     #[command(hide = true)]
@@ -32,6 +57,21 @@ enum Command {
 
 fn main() -> ExitCode {
     match Cli::parse().command {
+        Command::Identify {
+            audio,
+            output_dir,
+            budget,
+            allow_partial,
+            summary,
+            fresh,
+        } => identify::run(identify::Args {
+            audio,
+            output_dir,
+            budget,
+            allow_partial,
+            summary,
+            fresh,
+        }),
         Command::Replay { progress, duration } => match replay::run(&progress, duration) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
