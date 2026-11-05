@@ -641,8 +641,10 @@ from the same run.
 - **Not built:** the check for a newer release (not until someone else uses the app).
 - **Not verified:** Gatekeeper's Open Anyway flow on macOS 26+ (this machine is Darwin 27).
   The README's steps are macOS 15's.
-- **Not done (needs Ray's yes):** pushing the branch, tagging `v0.1.0` on `rust-rewrite`,
-  making the release, and creating `brigleb/homebrew-hindsight`.
+- **Published (2026-11-05):** `rust-rewrite` pushed; release `v0.1.0` made as a **draft**
+  pinned to `3aa32dc` (its three assets downloaded back and match `SHA256SUMS`); and
+  `brigleb/homebrew-hindsight` created with `Formula/hindsight.rb`. Making the release public
+  was left to Ray, so until then the formula's download is a 404 and the tag doesn't exist.
 
 ### M7 Cutover (2–3 days)
 
