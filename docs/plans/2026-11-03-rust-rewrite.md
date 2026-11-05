@@ -541,6 +541,58 @@ Verify with the Playwright runner against `serve`, on a copied set, in **both** 
 and WebKit. Then click through the real app, since Playwright's WebKit is close to WKWebView
 but not identical.
 
+**Result (2026-11-05, Playwright Chromium against `hindsight serve` on copies of the 09-28
+set; commits 12a02f1, 385f648, a9c5263, a0be9c9, 56e67a4, 280c8cc):** done but for WebKit and
+the click-through, both below. 337 Rust tests; clippy and fmt clean; Python's 835 still pass.
+- **Layout.** The router is its own crate, `crates/editor`, transport-free (a `Request` in, a
+  `Reply` out), used by the app's scheme and by `hindsight serve`. The app is `app/`, a
+  workspace member. The page is embedded from `setlist_maker/web` until M7 moves it.
+- **Spike 0's fixes**, checked with its probe script in WebKit and Chromium. With the old page,
+  Tab left the artwork dialog 5 times in 14 presses and a quick edge drag committed nothing.
+  Fixed, it never leaves, and the drag lands (41:40 → 41:42).
+- **Python vs Rust, same page, Chromium.** Spike 0's nine scripts, run against both servers.
+  Keys, menus, multi-select, states, drag and probe give identical results. Zoom differs only
+  in timing (peaks 289ms in the debug build vs 143ms). Dialogs is identical up to Done, which
+  now goes to the drop screen. Screenshots match except the artwork panel, which shows the
+  plain cover (the change asked for), and a playhead ±1s in an activity chip.
+- **The app's flows**, with a fake `window.__TAURI__` firing drop, Dock and close events, and
+  routed live/paused/summary states:
+  - the drop screen, and a dropped tracklist opening;
+  - asking before leaving unsaved edits;
+  - an image dropped on the episode cover uploading from its path (one dropped elsewhere
+    gets a toast);
+  - Done back to the drop screen;
+  - Generate filling the description, unsaved;
+  - Finish now and Resume while throttled;
+  - closing mid-run asking Finish now / Keep running / Stop.
+- **Real data.** The 09-28 recording with only its progress file opened as a live run,
+  resumed its 340 probes, asked Shazam nothing, converged, and the same window became the
+  editor (71 rows; 14s, nearly all of it measuring the recording in a debug build).
+  Click-to-sample at 30:30 asked Shazam once and got Donald Byrd, "Street Lady", the track the
+  tracklist has from 26:40 to 31:38. That took 6.4s, opening the recording from its packets
+  without decoding it. It was saved as the 341st probe, `manual`.
+- **Decisions taken:**
+  - A live run is a thread in the editor, and the page reads it as Python's did: the progress
+    file replayed through a fresh engine.
+  - The editor's questions go through `run::Questions`, taken ahead of the engine's own probes.
+  - The app's throttling pause is `Pacing::pause`, ended by Resume or a stop.
+  - Opening anything while a run is live, Done, and closing all make the page say finish or
+    stop; Stop keeps the progress file.
+  - A second close within 2s goes through without asking, so a page that can't answer never
+    traps the window.
+  - Generate describes the saved tracklist.
+  - `/api/artwork` is the plain cover the embed writes, and a 404 with no art.
+  - A dropped `.md` with no tracks is refused.
+  - Click-to-sample's 15s spacing counts the window's last Shazam call, whichever set made it.
+- **Not done or not verified:**
+  - **WebKit:** Playwright's WebKit stopped rendering on this machine mid-milestone. A bare
+    `setContent` hangs, against any server; Chromium is fine. The page's WebKit behaviour
+    rests on spike 0 and the two fixes above.
+  - **The real app:** it launches and stays up. Clicking through it is Ray's: real window and
+    Dock drops, ⌘Q, `close`, WKWebView itself.
+  - Whether ⌘Q reaches the page as a close (`ExitRequested` with no code) is untested.
+  - The login-shell `claude` lookup hasn't been run from a Finder launch.
+
 ### M6 Packaging (2–3 days)
 
 `cargo tauri build` for a universal macOS `.app` and `.dmg`, ad-hoc signed, on GitHub
