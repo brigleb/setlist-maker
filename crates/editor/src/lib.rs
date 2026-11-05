@@ -85,6 +85,8 @@ pub struct Editor {
     /// Held by saves and embeds, which both write the set's files from its tracklist.
     pub(crate) writing: Mutex<()>,
     claude: OnceLock<Option<PathBuf>>,
+    /// When this window last asked Shazam (a run or a click), so a new sampler waits its turn.
+    last_shazam: Mutex<Option<std::time::Instant>>,
 }
 
 impl Editor {
@@ -100,6 +102,7 @@ impl Editor {
             }),
             writing: Mutex::new(()),
             claude: OnceLock::new(),
+            last_shazam: Mutex::new(None),
         });
         // Looked for now, so the Set tab knows by the time anyone opens it.
         let e = Arc::downgrade(&editor);
@@ -113,6 +116,10 @@ impl Editor {
 
     pub(crate) fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub(crate) fn last_shazam(&self) -> MutexGuard<'_, Option<std::time::Instant>> {
+        self.last_shazam.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub(crate) fn claude(&self) -> Option<&Path> {

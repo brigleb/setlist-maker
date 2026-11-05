@@ -157,19 +157,37 @@ impl Reply {
             .map(|(_, v)| v.as_str())
     }
 
-    /// The body as bytes (tests); a file stretch is read.
-    pub fn body_bytes(&self) -> Vec<u8> {
-        match &self.body {
-            Body::Bytes(b) => b.clone(),
+    /// The body as bytes; a file stretch is read. For a transport that takes one buffer
+    /// (the app's, whose audio replies the editor caps) and for tests.
+    pub fn into_bytes(self) -> std::io::Result<Vec<u8>> {
+        match self.body {
+            Body::Bytes(b) => Ok(b),
             Body::File { path, start, len } => {
                 use std::io::{Read, Seek, SeekFrom};
-                let mut f = std::fs::File::open(path).expect("reply file");
-                f.seek(SeekFrom::Start(*start)).expect("seek");
-                let mut out = vec![0; *len as usize];
-                f.read_exact(&mut out).expect("read");
-                out
+                let mut f = std::fs::File::open(path)?;
+                f.seek(SeekFrom::Start(start))?;
+                let mut out = vec![0; len as usize];
+                f.read_exact(&mut out)?;
+                Ok(out)
             }
         }
+    }
+
+    /// [`Reply::into_bytes`] without consuming it (tests).
+    pub fn body_bytes(&self) -> Vec<u8> {
+        let copy = Reply {
+            status: self.status,
+            headers: Vec::new(),
+            body: match &self.body {
+                Body::Bytes(b) => Body::Bytes(b.clone()),
+                Body::File { path, start, len } => Body::File {
+                    path: path.clone(),
+                    start: *start,
+                    len: *len,
+                },
+            },
+        };
+        copy.into_bytes().expect("the reply's file")
     }
 
     pub fn body_json(&self) -> serde_json::Value {

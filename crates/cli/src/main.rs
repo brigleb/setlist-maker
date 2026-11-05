@@ -49,24 +49,11 @@ enum Command {
 /// The first launch copies what Python learned: its corrections and episode artist, and its
 /// artwork and peaks caches. A copy: Python keeps working until the cutover.
 fn adopt_python_folders() {
-    use hindsight_core::model::fileio::{
-        adopt_python_cache, adopt_python_config, cache_dir, config_dir,
-    };
-    let warn = |base: &std::path::Path, e: std::io::Error| {
+    for (base, e) in hindsight_core::model::fileio::adopt_python_folders() {
         eprintln!(
             "Warning: couldn't copy setlist-maker's {}: {e}",
             base.display()
-        )
-    };
-    if let Some(base) = config_dir().parent()
-        && let Err(e) = adopt_python_config(base)
-    {
-        warn(base, e);
-    }
-    if let Some(base) = cache_dir().parent()
-        && let Err(e) = adopt_python_cache(base)
-    {
-        warn(base, e);
+        );
     }
 }
 

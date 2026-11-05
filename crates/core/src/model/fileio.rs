@@ -109,6 +109,27 @@ pub fn adopt_python_cache(base: &Path) -> io::Result<bool> {
     Ok(true)
 }
 
+/// The first launch copies what Python learned (its corrections and episode artist, its
+/// artwork and peaks caches) into the real folders: a copy, so Python keeps working until the
+/// cutover. Each folder that couldn't be copied, and why.
+pub fn adopt_python_folders() -> Vec<(PathBuf, io::Error)> {
+    let mut failed = Vec::new();
+    for (folder, adopt) in [
+        (
+            config_dir(),
+            adopt_python_config as fn(&Path) -> io::Result<bool>,
+        ),
+        (cache_dir(), adopt_python_cache),
+    ] {
+        if let Some(base) = folder.parent()
+            && let Err(e) = adopt(base)
+        {
+            failed.push((base.to_path_buf(), e));
+        }
+    }
+    failed
+}
+
 /// Replaces `path` with `data` so a reader never sees a partial file.
 ///
 /// Written to a temp file in the same folder, synced, then renamed over the target: a crash,

@@ -165,7 +165,6 @@
     </div>
   </div>
   <audio id="audio" src="/api/audio" preload="metadata"></audio>
-  <!-- #62: toasts stack, newest at the bottom, each on its own timer. -->
   <!-- The app with nothing open (Hindsight): drop a set on the window or the Dock icon. -->
   <div id="drop-screen" hidden>
     <div class="drop-box">
@@ -175,6 +174,7 @@
       <p id="drop-notice" class="drop-notice" hidden></p>
     </div>
   </div>
+  <!-- #62: toasts stack, newest at the bottom, each on its own timer. -->
   <div id="toast" popover="manual" role="status" aria-live="polite"></div>
   <!-- Dialogs (#61): native <dialog>s opened with showModal(); see web/dialog.js. -->
   <dialog id="keys-dialog" class="sheet" aria-labelledby="keys-title">

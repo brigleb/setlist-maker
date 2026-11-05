@@ -14,7 +14,6 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -23,7 +22,7 @@ use std::time::{Duration, Instant};
 use tauri::http::{Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use hindsight_editor::{Body, Config, Editor, Reply, Request, find_claude};
+use hindsight_editor::{Config, Editor, Reply, Request, find_claude};
 
 /// The most audio one reply carries: the webview gets each reply as one buffer, and asks
 /// for 64–145KB at a time anyway (spike 3).
@@ -44,26 +43,6 @@ impl log::Log for Warnings {
         }
     }
     fn flush(&self) {}
-}
-
-/// The first launch copies what Python learned, as the CLI's does.
-fn adopt_python_folders() {
-    use hindsight_core::model::fileio::{
-        adopt_python_cache, adopt_python_config, cache_dir, config_dir,
-    };
-    for (base, adopt) in [
-        (
-            config_dir(),
-            adopt_python_config as fn(&std::path::Path) -> std::io::Result<bool>,
-        ),
-        (cache_dir(), adopt_python_cache),
-    ] {
-        if let Some(base) = base.parent()
-            && let Err(e) = adopt(base)
-        {
-            log::warn!("couldn't copy setlist-maker's {}: {e}", base.display());
-        }
-    }
 }
 
 fn to_request(req: &tauri::http::Request<Vec<u8>>) -> Request {
@@ -87,24 +66,16 @@ fn to_request(req: &tauri::http::Request<Vec<u8>>) -> Request {
 }
 
 fn to_response(reply: Reply) -> Response<Vec<u8>> {
-    let body = match reply.body {
-        Body::Bytes(b) => Ok(b),
-        // Capped at AUDIO_CAP by the editor, so one buffer is fine.
-        Body::File { path, start, len } => std::fs::File::open(&path).and_then(|mut f| {
-            f.seek(SeekFrom::Start(start))?;
-            let mut out = vec![0; len as usize];
-            f.read_exact(&mut out)?;
-            Ok(out)
-        }),
-    };
-    let Ok(body) = body else {
+    let (status, headers) = (reply.status, reply.headers.clone());
+    // A file stretch is capped at AUDIO_CAP by the editor, so one buffer is fine.
+    let Ok(body) = reply.into_bytes() else {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(b"not found".to_vec())
             .expect("a plain response");
     };
-    let mut b = Response::builder().status(reply.status);
-    for (name, value) in &reply.headers {
+    let mut b = Response::builder().status(status);
+    for (name, value) in &headers {
         b = b.header(*name, value);
     }
     b.body(body).unwrap_or_else(|_| {
@@ -119,7 +90,9 @@ fn main() {
     if log::set_logger(&Warnings).is_ok() {
         log::set_max_level(log::LevelFilter::Warn);
     }
-    adopt_python_folders();
+    for (base, e) in hindsight_core::model::fileio::adopt_python_folders() {
+        log::warn!("couldn't copy setlist-maker's {}: {e}", base.display());
+    }
 
     let handle: Arc<OnceLock<AppHandle>> = Arc::new(OnceLock::new());
     let closing = Arc::new(AtomicBool::new(false));

@@ -32,13 +32,11 @@ pub struct OpenSet {
     pub tracklist: Tracklist,
     pub corrections: CorrectionsDb,
     /// A run that stopped early and can carry on, and whether the tracklist was edited since.
-    pub unfinished: Option<(Ended, bool)>,
+    pub unfinished: Option<Unfinished>,
     /// The recording's length from its packets, once asked for.
     pub duration: OnceLock<Option<f64>>,
     /// Click-to-sample, opened on the first click.
     pub sampler: SamplerSlot,
-    /// When the run that just finished last asked Shazam, so the first click waits its turn.
-    pub last_call: Option<Instant>,
 }
 
 impl OpenSet {
@@ -59,12 +57,44 @@ pub struct LiveStatus {
     pub paused: Option<String>,
 }
 
+/// Where a live run listens next: the timeline's pulsing pin.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct NextProbe {
+    pub t: f64,
+    pub window: f64,
+    pub purpose: String,
+}
+
+/// A run that stopped early and can carry on (Continue identifying), and whether the
+/// tracklist was edited since, which carrying on would replace.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct Unfinished {
+    pub ended: Ended,
+    pub edited: bool,
+}
+
+/// The unfinished run beside `audio`, if there is one.
+pub fn unfinished_run(audio: Option<&Path>) -> Option<Unfinished> {
+    match run::existing(&SetPaths::new(audio?, None)) {
+        Existing::Unfinished { ended, edited } => Some(Unfinished { ended, edited }),
+        _ => None,
+    }
+}
+
+/// An MP3 that's there: what the chapters embed writes into.
+pub fn is_mp3_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
+}
+
 /// What the page draws while a run is live: the progress file replayed through a fresh engine,
 /// which is the run's own state, since resume is replay.
 #[derive(Clone)]
 pub struct Snapshot {
     pub tracklist: Tracklist,
-    pub next: Option<(f64, f64, String)>,
+    pub next: Option<NextProbe>,
     pub probes: Vec<Probe>,
     pub duration: Option<f64>,
 }
@@ -88,14 +118,24 @@ pub struct Live {
 }
 
 impl Live {
+    fn status(&self) -> std::sync::MutexGuard<'_, LiveStatus> {
+        self.status.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The recording's length, once the run has measured it.
+    pub fn duration(&self) -> Option<f64> {
+        self.status().duration
+    }
+
+    /// Why the run is paused (Shazam throttling), if it is.
+    pub fn paused(&self) -> Option<String> {
+        self.status().paused.clone()
+    }
+
     /// The replay, cached on the progress file's mtime and size, so polling costs a `stat`
     /// until the run records another probe.
     pub fn snapshot(&self) -> Snapshot {
-        let duration = self
-            .status
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .duration;
+        let duration = self.duration();
         let key = std::fs::metadata(&self.paths.progress)
             .ok()
             .map(|m| {
@@ -157,9 +197,11 @@ fn replay(progress: &Path, source_file: &str, duration_hint: Option<f64>) -> Opt
     }
     let (segments, _) = engine.segments();
     let tracklist = run::segments_to_tracklist(&segments, source_file, None, String::new());
-    let next = engine
-        .next_probe()
-        .map(|p| (p.t, p.window, p.purpose.as_str().to_string()));
+    let next = engine.next_probe().map(|p| NextProbe {
+        t: p.t,
+        window: p.window,
+        purpose: p.purpose.as_str().to_string(),
+    });
     Some(Snapshot {
         tracklist: Tracklist {
             generated_on: None,
@@ -218,6 +260,13 @@ pub fn classify(path: &Path) -> Result<Opening, String> {
         return Err(format!("{} isn't a file", path.display()));
     }
     if ext == ".md" {
+        // A notes file isn't a set: what the tracklist reader finds no tracks in.
+        if load_tracklist(path).map_or(true, |p| p.tracklist.tracks.is_empty()) {
+            return Err(format!(
+                "{} isn't a tracklist",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ));
+        }
         return Ok(Opening::Edit {
             tracklist: path.to_path_buf(),
             audio: find_audio_file(path),
@@ -249,7 +298,6 @@ impl Editor {
         &self,
         tracklist_path: &Path,
         audio: Option<PathBuf>,
-        last_call: Option<Instant>,
     ) -> Result<OpenSet, String> {
         let parsed = load_tracklist(tracklist_path)
             .map_err(|e| format!("can't read {}: {e}", tracklist_path.display()))?;
@@ -261,13 +309,7 @@ impl Editor {
         corrections.apply_corrections(&mut tracklist);
         let audio = audio.filter(|a| a.exists());
         let progress = progress_path_for(tracklist_path, audio.as_deref());
-        let unfinished = match audio
-            .as_deref()
-            .map(|a| run::existing(&SetPaths::new(a, None)))
-        {
-            Some(Existing::Unfinished { ended, edited }) => Some((ended, edited)),
-            _ => None,
-        };
+        let unfinished = unfinished_run(audio.as_deref());
         Ok(OpenSet {
             tracklist_path: tracklist_path.to_path_buf(),
             audio,
@@ -277,7 +319,6 @@ impl Editor {
             unfinished,
             duration: OnceLock::new(),
             sampler: Arc::new(OnceLock::new()),
-            last_call,
         })
     }
 
@@ -288,7 +329,7 @@ impl Editor {
         self.end_live(end);
         match opening {
             Opening::Edit { tracklist, audio } => {
-                let set = self.open_set(&tracklist, audio, None)?;
+                let set = self.open_set(&tracklist, audio)?;
                 let mut state = self.state();
                 state.phase = Phase::Editing(Box::new(set));
                 state.revision += 1;
@@ -424,7 +465,10 @@ impl Editor {
                 }
             },
         )
-        .map_err(|e| format!("identifying {name} failed: {e}"))?;
+        .map_err(|e| format!("identifying {name} failed: {e}"));
+        // The run's last call, so the editor's first click waits its turn.
+        *self.last_shazam() = Some(Instant::now());
+        let outcome = outcome?;
         if job.abort.load(Ordering::SeqCst) {
             return Ok(None);
         }
@@ -437,12 +481,8 @@ impl Editor {
         );
         run::finalize(&tracklist, &outcome, &job.paths)
             .map_err(|e| format!("can't save {}: {e}", job.paths.tracklist.display()))?;
-        self.open_set(
-            &job.paths.tracklist,
-            Some(job.audio.clone()),
-            Some(Instant::now()),
-        )
-        .map(Some)
+        self.open_set(&job.paths.tracklist, Some(job.audio.clone()))
+            .map(Some)
     }
 }
 

@@ -13,6 +13,7 @@ hindsight-core = { path = "../core" }
 include_dir = "0.7"
 log = "0.4"
 regex = "1"
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 
 [dev-dependencies]

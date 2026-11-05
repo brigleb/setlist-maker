@@ -54,11 +54,12 @@ export function hideDropScreen() {
 export function syncRunControls() {
   const app = !!S.app;
   finishBtn.hidden = !(app && S.liveMode);
+  if (!S.liveMode) finishBtn.disabled = false;  // ready for the next run
   resumeBtn.hidden = !(app && S.liveMode && S.paused);
   continueBtn.hidden = !(app && !S.liveMode && S.run);
   document.body.classList.toggle("paused", !!(S.liveMode && S.paused));
   const pill = document.getElementById("livepill");
-  pill.textContent = S.paused ? "paused" : "identifying";
+  pill.textContent = S.paused ? "paused: Shazam is throttling" : "identifying";
   pill.title = S.paused
     ? S.paused + ". Resume asks again; Finish now makes the tracklist from what was heard."
     : "Following the run as it samples; editing opens when it finishes";
@@ -66,7 +67,7 @@ export function syncRunControls() {
     S.summaryAvailable = false;
     fetch("/api/summary").then(r => r.json()).then(j => {
       S.summaryAvailable = !!j.available;
-      genBtn.hidden = !S.summaryAvailable;
+      genBtn.hidden = !(S.summaryAvailable && !S.liveMode);
     }).catch(() => {});
   }
   genBtn.hidden = !(app && S.summaryAvailable && !S.liveMode);
@@ -105,34 +106,39 @@ async function leaveEdits(title) {
   return true;
 }
 
+// Before leaving the open set, ask what the user wants: how a live run ends,
+// or what happens to unsaved edits. Resolves to null to stay, else
+// { run } with run "finish", "stop" or undefined (no run was live).
+async function leaveSet(runTitle, editTitle) {
+  if (S.liveMode) {
+    const run = await endRunChoice(runTitle);
+    return run ? { run } : null;
+  }
+  if (!(await leaveEdits(editTitle))) return null;
+  S.dirty = false;  // or beforeunload would ask again
+  return { run: undefined };
+}
+
 // Opens a path dropped on the window or the Dock icon, asking first about
 // whatever is open.
 export async function openPath(path) {
-  let run;
-  if (S.liveMode) {
-    run = await endRunChoice("Open another set?");
-    if (!run) return;
-  } else if (!(await leaveEdits("Save your changes before opening another set?"))) {
-    return;
-  }
+  const leave = await leaveSet("Open another set?", "Save your changes before opening another set?");
+  if (!leave) return;
+  const run = leave.run;
   const label = run === "finish" ? "Finishing the run…" : "Opening " + path.split("/").pop() + "…";
   const res = await during("open", label, () => post("/api/open", { path, run }));
   if (!res.ok) toast(res.error || "Can't open that", { kind: "error" });
   await load();
 }
 
-// Done in the app: back to the drop screen.
+// Done in the app: back to the drop screen, a live run finished or stopped
+// first as the user says.
 export async function done() {
-  if (S.liveMode) {
-    const run = await endRunChoice("Stop identifying?");
-    if (!run) return;
-    await post(run === "finish" ? "/api/finish" : "/api/stop");
-    toast(run === "finish" ? "Finishing after this sample…" : "Stopping after this sample…");
-    return;  // the live poll sees the run end
-  }
-  if (!(await leaveEdits("Save your changes before closing?"))) return;
+  const leave = await leaveSet("Stop identifying?", "Save your changes before closing?");
+  if (!leave) return;
   audio.pause();
-  await fetch("/api/done", { method: "POST" }).catch(() => {});
+  const label = leave.run === "finish" ? "Finishing the run…" : leave.run ? "Stopping the run…" : "Closing…";
+  await during("open", label, () => post("/api/done", { run: leave.run })).catch(() => {});
   await load();
 }
 
@@ -237,16 +243,10 @@ if (tauri && tauri.event) {
   on("tauri://drag-drop", p => dropped(p.paths, p.position));
   on("hindsight://open", () => takePending());
   on("hindsight://close", async () => {
-    let run;
-    if (S.liveMode) {
-      run = await endRunChoice("Close Hindsight?");
-      if (!run) return;
-    } else if (!(await leaveEdits("Save your changes before closing?"))) {
-      return;
-    }
-    S.dirty = false;  // or beforeunload would ask again
-    if (run) toast(run === "finish" ? "Finishing the run, then closing…" : "Stopping, then closing…");
-    await post("/api/close", { run });
+    const leave = await leaveSet("Close Hindsight?", "Save your changes before closing?");
+    if (!leave) return;
+    if (leave.run) toast(leave.run === "finish" ? "Finishing the run, then closing…" : "Stopping, then closing…");
+    await post("/api/close", { run: leave.run });
   });
   // A path from a cold launch (the Dock, Finder) arrives before the page did.
   queueMicrotask(takePending);

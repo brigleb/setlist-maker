@@ -749,7 +749,9 @@ CLI application with the following modules:
   shared by every pane), `artwork` (thumbs, picker, uploads, episode cover, Embed), `dialog`
   (the dialogs' shared behaviour and `ask()`), `selection` (which tracks are selected), `commands`
   (every action, for the menus and ⌘K), `menu` (the context menu), `palette` (⌘K), `activity` (what is running, in the
-  toolbar), `keys` (the keyboard map) and `main` (load, render, save, Done, the live poll). `main` is the entry and
+  toolbar), `keys` (the keyboard map), `app` (the Rust app's drop screen, window and Dock drops, run
+  controls and Generate; inert under this server, which never answers `open` in `/api/tracklist`)
+  and `main` (load, render, save, Done, the live poll). `main` is the entry and
   imports the rest.
 - **State that more than one module reassigns lives on `S` in `state.js`**, because an imported
   binding is read-only. A `let` that only its own module reassigns stays there, exported if

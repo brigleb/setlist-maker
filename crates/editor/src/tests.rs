@@ -281,6 +281,12 @@ fn what_a_drop_opens() {
         Ok(Opening::Edit { audio: Some(_), .. })
     ));
     fs::write(f.path("notes.txt"), "x").unwrap();
+    fs::write(f.path("notes.md"), "# Things to buy\n\n- records\n").unwrap();
+    assert!(
+        classify(&f.path("notes.md"))
+            .unwrap_err()
+            .contains("isn't a tracklist")
+    );
     assert!(
         classify(&f.path("notes.txt"))
             .unwrap_err()
@@ -640,12 +646,15 @@ fn a_run_shazam_keeps_throttling_pauses_until_resumed() {
     let audio = f.set(None);
     *f.gate.throttle.lock().unwrap() = 2; // the call and its one retry
     f.open(&audio);
+    // Not paused yet: a stray Resume is refused, so it can't cut the coming pause short.
+    assert_eq!(f.post("/api/resume", json!({})).status, 409);
     f.gate.allow(2);
     f.wait_until("the pause", |f| {
         !f.get("/api/probes").body_json()["paused"].is_null()
     });
     let p = f.get("/api/probes").body_json();
     assert!(p["paused"].as_str().unwrap().contains("throttling"));
+    assert_eq!(p["live"], true);
     assert_eq!(p["live"], true);
     assert_eq!(f.post("/api/resume", json!({})).status, 200);
     f.gate.allow(10_000);
@@ -700,9 +709,28 @@ fn closing_the_window_mid_run_says_how_the_run_ends_too() {
 fn done_goes_back_to_the_drop_screen() {
     let f = fixture();
     f.open(&f.sample_set());
-    let done = f.editor.handle(&Request::new("POST", "/api/done"));
-    assert_eq!(done.status, 200);
+    // JSON only: a cross-site form can't post to `serve`'s port and close the set.
+    assert_eq!(
+        f.editor.handle(&Request::new("POST", "/api/done")).status,
+        415
+    );
+    assert_eq!(f.post("/api/done", json!({})).status, 200);
     assert_eq!(f.tracklist()["open"], false);
+}
+
+#[test]
+fn done_mid_run_can_finish_it_first() {
+    let f = fixture();
+    f.open(&f.set(None));
+    f.gate.allow(1);
+    f.wait_until("a probe", |f| f.gate.calls().len() == 1);
+    let r = f.pump(f.post_in_background("/api/done", json!({"run": "finish"})));
+    assert_eq!(r.status, 200);
+    assert_eq!(f.tracklist()["open"], false, "back to the drop screen");
+    assert!(
+        f.path("set_tracklist.md").exists(),
+        "Finish wrote the tracklist first"
+    );
 }
 
 #[test]

@@ -25,12 +25,15 @@ use hindsight_core::summary;
 use crate::api::{self, BadEdit};
 use crate::http::{Body, Reply, Request};
 use crate::range::byte_range;
-use crate::session::{EndRun, ListenFor, Phase};
+use crate::session::{EndRun, ListenFor, Phase, is_mp3_file, unfinished_run};
 use crate::{Editor, assets};
 
 /// How long a click on the live timeline waits for the run to get to it. The run answers
 /// between its own probes, so this is generous.
 const LIVE_SAMPLE_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// A live run would be ended by this, and the page must say how (it asked the user).
+const SAY_HOW_THE_RUN_ENDS: &str = "a run is identifying: say whether to finish or stop it";
 
 fn audio_type(path: &Path) -> &'static str {
     let ext = path
@@ -95,10 +98,7 @@ impl Editor {
                 // preflight; application/json can't be sent cross-origin without one, which
                 // nothing here grants. Uploads are image/* for the same reason.
                 let raw_upload = path == "/api/upload";
-                if !raw_upload
-                    && !matches!(path, "/api/done")
-                    && req.content_type() != "application/json"
-                {
+                if !raw_upload && req.content_type() != "application/json" {
                     return Reply::status(415, "expected application/json");
                 }
                 self.post(req, path)
@@ -133,16 +133,17 @@ impl Editor {
     }
 
     fn post(self: &Arc<Self>, req: &Request, path: &str) -> Reply {
-        let body = || json_object(&req.body);
+        let body = || json_object(&req.body).map_err(|e| Reply::error(400, e));
         let result = match path {
             "/api/save" => return self.save(&req.body),
             "/api/sample" => return self.sample(&req.body),
             "/api/upload" => return self.upload(req),
             "/api/chapters" => return self.embed(),
-            "/api/done" => {
-                self.close_set(EndRun::Stop);
-                Ok(json!({"ok": true}))
-            }
+            // Back to the drop screen; a live run ends as the page says (it asked).
+            "/api/done" => body().map(|b| {
+                self.close_set(EndRun::parse(b.get("run")).unwrap_or(EndRun::Stop));
+                json!({"ok": true})
+            }),
             "/api/upload/path" => return self.upload_path(&req.body),
             "/api/open" => body().and_then(|b| self.open_path(&b)),
             "/api/finish" | "/api/stop" | "/api/resume" => self.steer(path),
@@ -151,10 +152,7 @@ impl Editor {
             "/api/close" => body().and_then(|b| self.close_window(&b)),
             _ => return Reply::status(404, "not found"),
         };
-        match result {
-            Ok(v) => Reply::ok(v),
-            Err(BadEdit(why)) => Reply::error(409, why),
-        }
+        result.map_or_else(|refused| refused, Reply::ok)
     }
 
     /// The set in the window, live or being edited.
@@ -191,10 +189,7 @@ impl Editor {
                 api["live"] = json!(false);
                 // A run that stopped early can carry on (Continue identifying); `edited` warns
                 // that carrying on replaces the edits made since.
-                api["run"] = match set.unfinished {
-                    Some((ended, edited)) => json!({"ended": ended, "edited": edited}),
-                    None => Value::Null,
-                };
+                api["run"] = json!(set.unfinished);
                 (api, set.tracklist_path.clone(), set.audio.clone())
             }
         };
@@ -209,9 +204,7 @@ impl Editor {
             .map_or(Value::Null, |d| json!(d.as_millis() as u64));
         let tags = episode_tags_in(&self.config.config_dir, &tracklist_path);
         api["episode"] = json!({"title": tags.title, "artist": tags.artist});
-        api["can_embed"] = json!(audio.as_deref().is_some_and(|a| {
-            a.is_file() && a.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
-        }));
+        api["can_embed"] = json!(audio.as_deref().is_some_and(|a| { is_mp3_file(a) }));
         Reply::ok(api)
     }
 
@@ -223,18 +216,10 @@ impl Editor {
             ),
             Phase::Live(live) => {
                 let snap = live.snapshot();
-                let paused = live
-                    .status
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .paused
-                    .clone();
+                let paused = live.paused();
                 let mut api = api::probes_to_api(&snap.probes, snap.duration);
                 api["live"] = json!(true);
-                api["next"] = snap.next.map_or(
-                    Value::Null,
-                    |(t, window, purpose)| json!({"t": t, "window": window, "purpose": purpose}),
-                );
+                api["next"] = json!(snap.next);
                 api["can_sample"] = json!(true);
                 // Shazam is still throttling: the run waits for Resume.
                 api["paused"] = json!(paused);
@@ -293,13 +278,7 @@ impl Editor {
         let (audio, duration) = {
             let state = self.state();
             match &state.phase {
-                Phase::Live(live) => (
-                    Some(live.audio.clone()),
-                    live.status
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .duration,
-                ),
+                Phase::Live(live) => (Some(live.audio.clone()), live.duration()),
                 Phase::Editing(set) => (set.audio.clone(), set.duration()),
                 Phase::Empty => (None, None),
             }
@@ -530,13 +509,8 @@ impl Editor {
                 .filter(|t| t.was_corrected())
                 .count(),
         );
-        if let Some(audio) = &set.audio
-            && set.unfinished.is_some()
-        {
-            set.unfinished = match run::existing(&run::SetPaths::new(audio, None)) {
-                run::Existing::Unfinished { ended, edited } => Some((ended, edited)),
-                _ => None,
-            };
+        if set.unfinished.is_some() {
+            set.unfinished = unfinished_run(set.audio.as_deref());
         }
         if reordered {
             state.revision += 1;
@@ -564,26 +538,18 @@ impl Editor {
                 progress: PathBuf,
                 duration: Option<f64>,
                 sampler: crate::session::SamplerSlot,
-                last_call: Option<std::time::Instant>,
             },
         }
         let ask = {
             let state = self.state();
             match &state.phase {
-                Phase::Live(live) => Ask::Live(
-                    live.questions.clone(),
-                    live.status
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .duration,
-                ),
+                Phase::Live(live) => Ask::Live(live.questions.clone(), live.duration()),
                 Phase::Editing(set) if set.audio.as_deref().is_some_and(Path::is_file) => {
                     Ask::Edit {
                         audio: set.audio.clone().expect("checked"),
                         progress: set.progress.clone(),
                         duration: set.duration(),
                         sampler: set.sampler.clone(),
-                        last_call: set.last_call,
                     }
                 }
                 _ => return Reply::error(409, "sampling is unavailable"),
@@ -609,16 +575,17 @@ impl Editor {
                 progress,
                 duration,
                 sampler,
-                last_call,
             } => {
+                // Spaced from the window's last Shazam call, whichever set made it.
                 let sampler = sampler.get_or_init(|| {
                     (self.config.listener)(&audio, ListenFor::Sample)
-                        .map(|(l, _)| Sampler::new(l, self.config.delay, last_call))
+                        .map(|(l, _)| Sampler::new(l, self.config.delay, *self.last_shazam()))
                 });
                 let probe = match sampler {
                     Ok(s) => s.sample(t).map_err(|e| e.to_string()),
                     Err(e) => Err(e.clone()),
                 };
+                *self.last_shazam() = Some(std::time::Instant::now());
                 let probe = match probe {
                     Ok(p) => p,
                     Err(why) => return Reply::error(502, why),
@@ -698,9 +665,7 @@ impl Editor {
                 ),
             }
         };
-        let Some(audio) = audio.filter(|a| {
-            a.is_file() && a.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
-        }) else {
+        let Some(audio) = audio.filter(|a| is_mp3_file(a)) else {
             return Reply::error(400, "chapter markers need the set's MP3");
         };
         if !tracklist
@@ -741,17 +706,15 @@ impl Editor {
     }
 
     /// Opens a dropped path. While a run is live the page must say how it ends (it asked).
-    fn open_path(self: &Arc<Self>, body: &Map<String, Value>) -> Result<Value, BadEdit> {
+    fn open_path(self: &Arc<Self>, body: &Map<String, Value>) -> Result<Value, Reply> {
         let path = body
             .get("path")
             .and_then(Value::as_str)
             .map(PathBuf::from)
-            .ok_or_else(|| BadEdit("path must be a file's path".into()))?;
+            .ok_or_else(|| Reply::error(409, "path must be a file's path"))?;
         let end = EndRun::parse(body.get("run"));
         if self.is_live() && end.is_none() {
-            return Err(BadEdit(
-                "a run is identifying: say whether to finish or stop it".into(),
-            ));
+            return Err(Reply::error(409, SAY_HOW_THE_RUN_ENDS));
         }
         match self.open(&path, end.unwrap_or(EndRun::Finish)) {
             Ok(()) => Ok(json!({"ok": true})),
@@ -761,10 +724,10 @@ impl Editor {
 
     /// Finish now, Stop, or Resume after throttling. None of them waits: the page sees the
     /// run end on its next poll.
-    fn steer(&self, path: &str) -> Result<Value, BadEdit> {
+    fn steer(&self, path: &str) -> Result<Value, Reply> {
         let state = self.state();
         let Phase::Live(live) = &state.phase else {
-            return Err(BadEdit("nothing is identifying".into()));
+            return Err(Reply::error(409, "nothing is identifying"));
         };
         match path {
             "/api/stop" => {
@@ -772,14 +735,16 @@ impl Editor {
                 live.stop.request();
             }
             "/api/finish" => live.stop.request(),
-            _ => live.stop.resume(),
+            // Only while paused: a stray Resume would otherwise cut the next pause short.
+            _ if live.paused().is_some() => live.stop.resume(),
+            _ => return Err(Reply::error(409, "the run isn't paused")),
         }
         Ok(json!({"ok": true}))
     }
 
     /// Continue identifying a run that stopped early. The page warns first when the tracklist
     /// was edited since: the run's finish writes over it.
-    fn carry_on(self: &Arc<Self>) -> Result<Value, BadEdit> {
+    fn carry_on(self: &Arc<Self>) -> Result<Value, Reply> {
         let audio = {
             let state = self.state();
             match &state.phase {
@@ -787,7 +752,7 @@ impl Editor {
                 _ => None,
             }
         };
-        let audio = audio.ok_or_else(|| BadEdit("no unfinished run to carry on".into()))?;
+        let audio = audio.ok_or_else(|| Reply::error(409, "no unfinished run to carry on"))?;
         self.start_live(&audio);
         Ok(json!({"ok": true}))
     }
@@ -815,11 +780,10 @@ impl Editor {
     }
 
     /// Closes the window, ending a live run as the page says (it asked).
-    fn close_window(&self, body: &Map<String, Value>) -> Result<Value, BadEdit> {
+    fn close_window(&self, body: &Map<String, Value>) -> Result<Value, Reply> {
         if self.is_live() {
-            let end = EndRun::parse(body.get("run")).ok_or_else(|| {
-                BadEdit("a run is identifying: say whether to finish or stop it".into())
-            })?;
+            let end = EndRun::parse(body.get("run"))
+                .ok_or_else(|| Reply::error(409, SAY_HOW_THE_RUN_ENDS))?;
             self.end_live(end);
         }
         (self.config.on_close)();
