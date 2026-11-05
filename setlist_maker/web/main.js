@@ -8,7 +8,7 @@ import { markSaved, resetHistory, syncSaveState } from "./history.js";
 import { during } from "./activity.js";
 import { focusSelected, renderList } from "./list.js";
 import { syncPlayerBar } from "./player.js";
-import { loadPeaks, loadProbes, renderTimeline } from "./grid.js";
+import { loadPeaks, loadProbes, renderTimeline, resetForNewSet } from "./grid.js";
 import { closeArtwork, renderCover } from "./artwork.js";
 import { done as appDone, hideDropScreen, showDropScreen, syncRunControls } from "./app.js";
 import "./util.js";
@@ -29,6 +29,7 @@ export async function load() {
     S.selectedTrack = S.playingTrack = S.editing = null;
     S.dirty = false;
     S.run = S.paused = null;
+    S.setKey = null;  // whatever opens next is a new set
     S.probes = [];
     S.selected = new Set();
     resetHistory();
@@ -39,6 +40,17 @@ export async function load() {
     return false;
   }
   hideDropScreen();
+  // The app opens one set after another in the same page: a different one
+  // needs its own audio and waveform (loadPeaks asks once per set).
+  if (S.app && data.set !== S.setKey) {
+    if (S.setKey !== undefined) {
+      audio.pause();
+      audio.src = "/api/audio?v=" + Date.now();
+      resetForNewSet();
+      S.playingTrack = null;
+    }
+    S.setKey = data.set;
+  }
   S.run = data.run || null;
   S.fileName = data.source_file || "";
   document.getElementById("file").textContent = S.fileName || "—";

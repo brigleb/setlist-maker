@@ -194,6 +194,8 @@ impl Editor {
             }
         };
         api["open"] = json!(true);
+        // Which set: the page reloads its audio and waveform when this changes.
+        api["set"] = json!(tracklist_path.to_string_lossy());
         api["revision"] = json!(state.revision);
         drop(state);
         // A version for the page to cache-bust /api/cover with; null with no uploaded cover.

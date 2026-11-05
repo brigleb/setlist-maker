@@ -44,6 +44,7 @@ export const S = {
   run: null,
   paused: null,
   summaryAvailable: undefined,
+  setKey: undefined,  // which set the page has open (its tracklist's path), see main.js load()
   artVersion: 0,  // bumped on save so re-requested thumbs bypass the decoded-image cache
   // The episode cover file <set>_cover.jpg: coverVersion is the saved file's
   // mtime (null: none), coverChoice the unsaved change -- undefined for none,

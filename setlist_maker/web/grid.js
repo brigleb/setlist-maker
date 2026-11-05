@@ -276,6 +276,15 @@ new ResizeObserver(() => {
 // The waveform, fetched once a page (peaks.py). The page draws without it
 // meanwhile, and a set with no audio simply has none.
 let peaksAsked = false;
+// Another set opened in this page (the app): its waveform, and the whole of it in view.
+export function resetForNewSet() {
+  peaksAsked = false;
+  S.peaks = null;
+  S.probes = [];
+  seenProbes = 0;
+  fitAll = true;
+  view = { start: 0, span: 0 };
+}
 export async function loadPeaks() {
   if (peaksAsked) return;
   peaksAsked = true;
