@@ -610,6 +610,31 @@ No updater; once someone else uses it, a launch check for a newer GitHub release
 link. Revisit Tauri's updater together with notarizing. macOS first; Windows and Linux when
 someone tests them.
 
+**Result (2026-11-05, built, not published):** `packaging/build.sh` builds everything into
+`target/dist` and publishes nothing: the universal app's dmg (13MB; the app is 39MB), the
+universal CLI as a tarball, `SHA256SUMS`, the release notes, and the tap's formula and cask
+with the hashes filled in.
+- **The app:** `bundle.macOS.signingIdentity: "-"` works. `codesign` reports `Signature=adhoc`,
+  identifier `com.brigleb.hindsight`, and `--verify --deep --strict` passes. `spctl` rejects
+  it, as expected without notarization. Both architectures (`x86_64 arm64`) launch from the
+  dmg and stay up, the Intel one under Rosetta. Tauri's own dmg step worked from a shell, with
+  no Finder prompt. `minimumSystemVersion` is 14.0, since the page's `popover` needs Safari 17.
+- **The CLI:** two `--target` builds are joined with `lipo`, and each slice keeps the linker's
+  ad-hoc signature. `ring` cross-compiles to x86_64 with Apple clang, needing nothing extra.
+  The formula installs the prebuilt binary rather than building from source (that would mean
+  `depends_on "rust" => :build`). It installed from a throwaway local tap, and `brew test` and
+  `brew audit --strict` passed (Homebrew 7.0.12). Installing by the full name trusted that
+  formula with no separate `brew trust`, so the README's one line is
+  `brew install brigleb/hindsight/hindsight`. The tap, its trust entry and the install were
+  removed afterwards. Installed by Homebrew, it carries no quarantine.
+- **The cask** is written (`packaging/homebrew/Casks/`) but not in the tap. Its postflight
+  strips quarantine, and nobody has run the clean-machine test the plan asks for.
+- **Not built:** the check for a newer release (not until someone else uses the app).
+- **Not verified:** Gatekeeper's Open Anyway flow on macOS 26+ (this machine is Darwin 27).
+  The README's steps are macOS 15's.
+- **Not done (needs Ray's yes):** pushing the branch, tagging `v0.1.0` on `rust-rewrite`,
+  making the release, and creating `brigleb/homebrew-hindsight`.
+
 ### M7 Cutover (2–3 days)
 
 Delete `setlist_maker/`, `tests/`, `pyproject.toml`, `uv.lock`. Move the web assets to `web/`

@@ -4,6 +4,21 @@
 
 You just played a 2-hour set and can't remember half the tracks you played. Setlist Maker takes your recording, slices it into samples, identifies each one through Shazam, and hands you a clean tracklist. Review it in the built-in editor, and it learns from your corrections for next time.
 
+## Hindsight (beta)
+
+Setlist Maker is being rewritten in Rust as **Hindsight**: a Mac app you drop a set's MP3 on,
+and a `hindsight` command. Builds are on the
+[Releases](https://github.com/brigleb/setlist-maker/releases) page, for macOS 14 or later.
+
+- **App:** open the dmg and drag Hindsight to Applications. It isn't notarized, so the first
+  time, open it, click **Done** at the warning, then go to **System Settings → Privacy &
+  Security**, click **Open Anyway** beside "Hindsight was blocked", confirm, and click
+  **Open**. (Control-click → Open no longer skips this on macOS 15 and later.)
+- **Command:** `brew install brigleb/hindsight/hindsight`. The full name trusts that formula,
+  which Homebrew requires for third-party taps since 6.0.
+
+Everything below describes the Python tool.
+
 ## Features
 
 - Identify tracks via Shazam across full-length recordings

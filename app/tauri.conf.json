@@ -11,8 +11,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": ["app", "dmg"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns"],
+    "category": "Music",
+    "copyright": "© 2026 Raymond Brigleb. GPL-3.0-or-later.",
+    "macOS": { "signingIdentity": "-", "minimumSystemVersion": "14.0" },
     "fileAssociations": [
       { "ext": ["mp3"], "name": "MP3 audio", "role": "Viewer", "mimeType": "audio/mpeg" },
       { "ext": ["m4a"], "name": "MPEG-4 audio", "role": "Viewer", "mimeType": "audio/mp4" },
