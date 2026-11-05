@@ -107,6 +107,21 @@ impl Recording {
         Ok(rec)
     }
 
+    /// Measures the file from its packets' lengths without decoding it (well under a second
+    /// for four hours) and skips the decode guard: for click-to-sample in the editor, where a
+    /// window only needs clamping to the end. A run plans against [`Recording::open`].
+    pub fn open_undecoded(path: &Path) -> Result<Recording, AudioError> {
+        let mut dec = Decoder::open(path)?;
+        let (rate, stated_frames) = (dec.rate(), dec.stated_frames());
+        let frames = dec.count_remaining_frames_undecoded()?;
+        Ok(Recording {
+            path: path.to_path_buf(),
+            rate,
+            frames,
+            stated_frames,
+        })
+    }
+
     pub fn rate(&self) -> u32 {
         self.rate
     }

@@ -70,6 +70,13 @@ pub trait Listener {
     fn listen(&mut self, t: f64, window: f64) -> Result<Heard, NoAnswer>;
 }
 
+/// A boxed listener, so the editor can hold Shazam or a test's fake.
+impl<L: Listener + ?Sized> Listener for Box<L> {
+    fn listen(&mut self, t: f64, window: f64) -> Result<Heard, NoAnswer> {
+        (**self).listen(t, window)
+    }
+}
+
 /// The real listener: decode the window, fingerprint its centred 10 seconds, ask Shazam.
 pub struct ShazamListener {
     recording: Recording,

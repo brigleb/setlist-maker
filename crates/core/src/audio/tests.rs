@@ -119,6 +119,19 @@ fn a_recording_is_measured_by_decoding_it() {
 }
 
 #[test]
+fn a_recording_opened_without_decoding_has_the_same_windows() {
+    for name in ["stereo48_cbr.mp3", "mono44_info.mp3"] {
+        let decoded = Recording::open(&fixture(name), false).unwrap();
+        let quick = Recording::open_undecoded(&fixture(name)).unwrap();
+        assert_eq!(quick.frames(), decoded.frames(), "{name}");
+        assert_eq!(
+            quick.window_16k(2.0, 6.0).unwrap(),
+            decoded.window_16k(2.0, 6.0).unwrap()
+        );
+    }
+}
+
+#[test]
 fn the_packets_add_up_to_the_decoded_length() {
     for name in ["stereo48_cbr.mp3", "mono44_info.mp3", "tone8k.flac"] {
         let rec = Recording::open(&fixture(name), false).unwrap();

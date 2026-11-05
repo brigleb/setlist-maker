@@ -24,6 +24,17 @@ pub trait Fetch: Send + Sync {
     fn final_url(&self, url: &str) -> Option<String>;
 }
 
+/// A boxed source, so the editor can hold the real web or a test's canned one.
+impl<F: Fetch + ?Sized> Fetch for Box<F> {
+    fn get(&self, url: &str) -> Option<Vec<u8>> {
+        (**self).get(url)
+    }
+
+    fn final_url(&self, url: &str) -> Option<String> {
+        (**self).final_url(url)
+    }
+}
+
 /// The real web, through a blocking reqwest client.
 pub struct Web {
     http: reqwest::blocking::Client,

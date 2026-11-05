@@ -1,0 +1,20 @@
+[package]
+name = "hindsight-editor"
+version = "0.1.0"
+description = "Hindsight's editor backend: the page's routes, the open set, live runs"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hindsight-core = { path = "../core" }
+# The page, until M7 moves it to web/ (build.rs watches the same paths).
+include_dir = "0.7"
+log = "0.4"
+regex = "1"
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+tempfile = "3"
