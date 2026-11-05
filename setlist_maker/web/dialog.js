@@ -26,15 +26,19 @@ export function sheet(dlg) {
     if (onBackdrop(dlg, e) || e.target.closest("[data-close]")) dlg.close();
   });
   // showModal() keeps focus out of the page, but Chrome lets Tab carry on
-  // into its own toolbar, and keys pressed there never reach the dialog. So
-  // Tab wraps at either end, as a desktop sheet's does.
+  // into its own toolbar, and keys pressed there never reach the dialog. And
+  // WebKit's Tab skips buttons (Safari's default), so from the last field it
+  // left the dialog for <body>. So the dialog moves focus itself, through
+  // every focusable it holds, wrapping at either end as a desktop sheet's does.
   dlg.addEventListener("keydown", e => {
     if (e.key !== "Tab" || e.altKey || e.metaKey || e.ctrlKey) return;
     const all = focusables(dlg);
     if (!all.length) return;
-    const first = all[0], last = all[all.length - 1], at = document.activeElement;
-    if (e.shiftKey && (at === first || !dlg.contains(at))) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && (at === last || !dlg.contains(at))) { e.preventDefault(); first.focus(); }
+    e.preventDefault();
+    const i = all.indexOf(document.activeElement);
+    const next = i < 0 ? (e.shiftKey ? all.length - 1 : 0)
+      : (i + (e.shiftKey ? -1 : 1) + all.length) % all.length;
+    all[next].focus();
   });
   return dlg;
 }

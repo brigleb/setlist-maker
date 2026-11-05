@@ -539,37 +539,49 @@ tlRows.addEventListener("pointerdown", e => {
   const tip = el("div", "tl-cursor tl-dragtip");
   document.body.appendChild(tip);
   drag = { t, owner, from: t.timestamp, home: viewEl, snaps: TL.snapPoints(S.probes),
-           tip, pointerId: e.pointerId, snapped: false, frame: 0 };
+           tip, pointerId: e.pointerId, snapped: false, frame: 0, x: e.clientX, alt: e.altKey };
   document.body.classList.add("tl-dragging");
   document.addEventListener("keydown", onDragKey, true);
   selectTrack(owner);
   dragReadout(owner, e.clientX, drag.home);
 });
 
+// The latest pointer position is kept on `drag` and read when the frame runs:
+// a frame that closed over its first move's x would preview, and on release
+// commit, a position the pointer had already left (spike 0: WebKit's 60Hz
+// frames showed it, Chromium has it too).
+function applyDrag() {
+  if (!drag) return;
+  drag.frame = 0;
+  const { x, alt } = drag;
+  const { t: raw, pxPerSec, lanes } = timeAtPoint(x);
+  let at = raw;
+  drag.snapped = false;
+  if (!alt) {
+    let best = null;
+    for (const s of drag.snaps) if (best === null || Math.abs(s - raw) < Math.abs(best - raw)) best = s;
+    if (best !== null && Math.abs(best - raw) * pxPerSec <= SNAP_PX) { at = best; drag.snapped = true; }
+  }
+  const i = S.tracks.indexOf(drag.t);
+  previewStart(drag.t, clampStart(i, at));
+  renderList();
+  renderTimeline();
+  dragReadout(drag.owner, x, lanes);
+}
+
 tlRows.addEventListener("pointermove", e => {
   if (!drag || e.pointerId !== drag.pointerId) return;
-  const { x, alt } = { x: e.clientX, alt: e.altKey };
-  if (drag.frame) return;  // one preview per frame, however fast the pointer
-  drag.frame = requestAnimationFrame(() => {
-    if (!drag) return;
-    drag.frame = 0;
-    const { t: raw, pxPerSec, lanes } = timeAtPoint(x);
-    let at = raw;
-    drag.snapped = false;
-    if (!alt) {
-      let best = null;
-      for (const s of drag.snaps) if (best === null || Math.abs(s - raw) < Math.abs(best - raw)) best = s;
-      if (best !== null && Math.abs(best - raw) * pxPerSec <= SNAP_PX) { at = best; drag.snapped = true; }
-    }
-    const i = S.tracks.indexOf(drag.t);
-    previewStart(drag.t, clampStart(i, at));
-    renderList();
-    renderTimeline();
-    dragReadout(drag.owner, x, lanes);
-  });
+  drag.x = e.clientX;
+  drag.alt = e.altKey;
+  if (!drag.frame) drag.frame = requestAnimationFrame(applyDrag);  // one preview per frame
 });
 
-tlRows.addEventListener("pointerup", e => { if (drag && e.pointerId === drag.pointerId) endDrag(true); });
+tlRows.addEventListener("pointerup", e => {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  // A frame still pending holds the last moves: apply them before committing.
+  if (drag.frame) { cancelAnimationFrame(drag.frame); applyDrag(); }
+  endDrag(true);
+});
 tlRows.addEventListener("pointercancel", e => { if (drag && e.pointerId === drag.pointerId) endDrag(false); });
 
 // Drop the pins back in, in the order the run asked for them -- the coarse
