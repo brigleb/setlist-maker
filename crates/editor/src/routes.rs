@@ -300,7 +300,7 @@ impl Editor {
                         .unwrap_or_else(|e| e.into_inner())
                         .duration,
                 ),
-                Phase::Editing(set) => (set.audio.clone(), None),
+                Phase::Editing(set) => (set.audio.clone(), set.duration()),
                 Phase::Empty => (None, None),
             }
         };

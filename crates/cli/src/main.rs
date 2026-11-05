@@ -1,10 +1,11 @@
 //! `hindsight`: the command line. `identify` makes a set's tracklist; `chapters` embeds it in
-//! the MP3. `replay` is a hidden developer command.
+//! the MP3. `replay` and `serve` are hidden developer commands.
 
 mod chapters;
 mod identify;
 mod pyjson;
 mod replay;
+mod serve;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -40,6 +41,9 @@ enum Command {
         #[arg(long)]
         duration: Option<f64>,
     },
+    /// The app's editor on a loopback port, for headless browser checks.
+    #[command(hide = true)]
+    Serve(serve::Args),
 }
 
 /// The first launch copies what Python learned: its corrections and episode artist, and its
@@ -66,6 +70,17 @@ fn adopt_python_folders() {
     }
 }
 
+/// `program` on this process's PATH, if it's an executable file.
+pub(crate) fn find_on_path(program: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(program))
+        .find(|p| {
+            p.metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+}
+
 /// Library warnings (a corrupt corrections file set aside, an unreadable episode file) on
 /// stderr; nothing quieter.
 struct Warnings;
@@ -89,6 +104,7 @@ fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Identify(args) => identify::run(args),
         Command::Chapters(args) => chapters::run(args),
+        Command::Serve(args) => serve::run(args),
         Command::Replay { progress, duration } => match replay::run(&progress, duration) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

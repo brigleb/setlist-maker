@@ -2,7 +2,7 @@
 //! and its sidecar. Plain lines, one per sample; the progress file is saved after each, so
 //! Ctrl-C (or a crash) loses nothing and running the command again resumes.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -213,7 +213,7 @@ fn finish(args: &Args, paths: &SetPaths, outcome: &Outcome) -> ExitCode {
             .map(|t| format!("{} - {}", t.artist, t.title))
             .collect();
         println!("  Writing the set's description...");
-        match find_on_path("claude") {
+        match crate::find_on_path("claude") {
             None => eprintln!("  Warning: 'claude' CLI not found; no description."),
             Some(claude) => match summary::generate(&claude, &lines) {
                 Ok(s) => tracklist.summary = Some(s),
@@ -264,18 +264,6 @@ fn coarse_note(outcome: &Outcome) -> String {
         n if n <= 6 => format!(" Still rough: the starts at {}.", coarse.join(", ")),
         n => format!(" Still rough: {n} starts, from {} on.", coarse[0]),
     }
-}
-
-fn find_on_path(program: &str) -> Option<PathBuf> {
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|dir| dir.join(program))
-        .find(|p| is_executable(p))
-}
-
-fn is_executable(p: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    p.metadata()
-        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(test)]
