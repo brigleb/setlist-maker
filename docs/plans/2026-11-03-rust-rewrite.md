@@ -542,7 +542,7 @@ and WebKit. Then click through the real app, since Playwright's WebKit is close 
 but not identical.
 
 **Result (2026-11-05, Playwright Chromium against `hindsight serve` on copies of the 09-28
-set; commits 12a02f1, 385f648, a9c5263, a0be9c9, 56e67a4, 280c8cc):** done but for WebKit and
+set; commits 12a02f1, 385f648, a9c5263, a0be9c9, 56e67a4, 280c8cc, d5fac37):** done but for WebKit and
 the click-through, both below. 337 Rust tests; clippy and fmt clean; Python's 835 still pass.
 - **Layout.** The router is its own crate, `crates/editor`, transport-free (a `Request` in, a
   `Reply` out), used by the app's scheme and by `hindsight serve`. The app is `app/`, a
@@ -561,7 +561,8 @@ the click-through, both below. 337 Rust tests; clippy and fmt clean; Python's 83
   - asking before leaving unsaved edits;
   - an image dropped on the episode cover uploading from its path (one dropped elsewhere
     gets a toast);
-  - Done back to the drop screen;
+  - Done back to the drop screen, and the set dropped again in the same page playing and
+    drawing its own waveform (it didn't before d5fac37);
   - Generate filling the description, unsaved;
   - Finish now and Resume while throttled;
   - closing mid-run asking Finish now / Keep running / Stop.
@@ -588,6 +589,10 @@ the click-through, both below. 337 Rust tests; clippy and fmt clean; Python's 83
   - **WebKit:** Playwright's WebKit stopped rendering on this machine mid-milestone. A bare
     `setContent` hangs, against any server; Chromium is fine. The page's WebKit behaviour
     rests on spike 0 and the two fixes above.
+  - **Playback in later runs:** headless Chromium stopped playing audio at about the same
+    time ("play() was interrupted by pause()"), with this morning's page too, so the last runs'
+    playhead readings can't speak to playback. The Python-vs-Rust diffs still compare like
+    with like.
   - **The real app:** it launches and stays up. Clicking through it is Ray's: real window and
     Dock drops, ⌘Q, `close`, WKWebView itself.
   - Whether ⌘Q reaches the page as a close (`ExitRequested` with no code) is untested.
