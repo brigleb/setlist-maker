@@ -9,9 +9,12 @@
 
 mod events;
 mod pacing;
+mod questions;
+mod sampler;
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::sha256_hex;
@@ -25,6 +28,8 @@ use crate::shazam::{self, Client, Heard, NoAnswer};
 
 pub use events::EventLog;
 pub use pacing::{Clock, Pacing, StopSignal};
+pub use questions::{Question, Questions, SAMPLE_WINDOW, sample_window_start};
+pub use sampler::Sampler;
 
 /// Seconds between Shazam calls. Field evidence puts the safe rate at 4–6 a minute.
 pub const DELAY: Duration = Duration::from_secs(15);
@@ -101,6 +106,10 @@ pub enum Note<'a> {
         attempt: usize,
         of: usize,
     },
+    /// Still no answer after the backoff; waiting to be told to carry on.
+    Paused(&'a NoAnswer),
+    /// Told to carry on after a pause.
+    Unpaused,
 }
 
 pub struct Options {
@@ -108,6 +117,11 @@ pub struct Options {
     pub backoff: Vec<Duration>,
     pub budget: Option<Duration>,
     pub engine: EngineConfig,
+    /// The editor's questions, taken ahead of the engine's own probes.
+    pub questions: Option<Arc<Questions>>,
+    /// When Shazam is still throttling after the backoff, pause (the app, which stays live
+    /// and offers Resume) rather than finish (the CLI).
+    pub pause_when_throttled: bool,
 }
 
 impl Default for Options {
@@ -117,6 +131,8 @@ impl Default for Options {
             backoff: BACKOFF.to_vec(),
             budget: None,
             engine: EngineConfig::default(),
+            questions: None,
+            pause_when_throttled: false,
         }
     }
 }
@@ -160,6 +176,8 @@ pub fn identify(
     }
     let mut events = EventLog::open(&paths.events)?;
     let mut gave_up = None;
+    let questions = options.questions.clone();
+    let _close = questions::CloseOnDrop(questions.clone());
 
     let (ended, reason) = loop {
         if pacing.stopped() {
@@ -171,14 +189,32 @@ pub fn identify(
             )?;
             break (Ended::Budget, "budget");
         }
-        let Some(plan) = engine.next_probe() else {
-            break (Ended::Converged, "converged");
+        // The user's question first: they are watching and waiting on it, and the engine
+        // loses nothing, since the answer is evidence it folds in.
+        let question = questions.as_ref().and_then(|q| q.pop());
+        let (t, window, purpose) = match &question {
+            Some(q) => (sample_window_start(q.t()), SAMPLE_WINDOW, MANUAL),
+            None => match engine.next_probe() {
+                Some(plan) => (plan.t, plan.window, plan.purpose.as_str()),
+                None => break (Ended::Converged, "converged"),
+            },
         };
-        let heard = match ask(listener, pacing, options, plan.t, plan.window, note) {
+        let heard = match ask(listener, pacing, options, t, window, note) {
             Ok(heard) => heard,
             Err(why) => {
+                if let Some(q) = &question {
+                    q.answer(Err(why.to_string()));
+                }
                 if pacing.stopped() {
                     break (Ended::FinishedEarly, "interrupted");
+                }
+                if why == NoAnswer::Throttled && options.pause_when_throttled {
+                    note(Note::Paused(&why));
+                    if pacing.pause() {
+                        break (Ended::FinishedEarly, "interrupted");
+                    }
+                    note(Note::Unpaused);
+                    continue;
                 }
                 let throttled = why == NoAnswer::Throttled;
                 gave_up = Some(why);
@@ -190,9 +226,9 @@ pub fn identify(
             }
         };
         let probe = Probe {
-            t: plan.t,
-            window: plan.window,
-            purpose: plan.purpose.as_str().into(),
+            t,
+            window,
+            purpose: purpose.into(),
             result: heard.result,
             offsets: heard.offsets,
         };
@@ -201,8 +237,14 @@ pub fn identify(
         }
         progress.probes.push(probe);
         save_progress(&paths.progress, &progress)?;
-        note(Note::Probe(progress.probes.last().expect("just pushed")));
-        if engine.next_probe().is_some() && !pacing.stopped() {
+        let probe = progress.probes.last().expect("just pushed");
+        if let Some(q) = &question {
+            // Only now, once it's saved: the asker's page re-reads the probes for its pin.
+            q.answer(Ok(probe.clone()));
+        }
+        note(Note::Probe(probe));
+        let asked = questions.as_ref().is_some_and(|q| q.pending());
+        if (engine.next_probe().is_some() || asked) && !pacing.stopped() {
             pacing.wait(options.delay);
         }
     };

@@ -55,13 +55,16 @@ impl Listener for Fake {
     }
 }
 
-/// A clock that only moves when the run waits; stops after `stop_after` waits.
+/// A clock that only moves when the run waits; stops after `stop_after` waits. A pause is
+/// resumed at once, or ends the run when `stop_on_pause`.
 #[derive(Default)]
 struct FakeClock {
     elapsed: Duration,
     waits: Vec<Duration>,
     stop_after: Option<usize>,
     stopped: bool,
+    pauses: usize,
+    stop_on_pause: bool,
 }
 
 impl Pacing for FakeClock {
@@ -71,6 +74,11 @@ impl Pacing for FakeClock {
         if self.stop_after == Some(self.waits.len()) {
             self.stopped = true;
         }
+        self.stopped
+    }
+    fn pause(&mut self) -> bool {
+        self.pauses += 1;
+        self.stopped |= self.stop_on_pause;
         self.stopped
     }
     fn stopped(&self) -> bool {
@@ -466,4 +474,146 @@ fn probe_lines() {
     );
     let unsure = probe("manual", Some(json!({"artist": "B", "title": "Beta"})));
     assert_eq!(probe_line(&unsure), "  *    5:10  +   --   B - Beta");
+}
+
+fn throttled_for(calls: std::ops::RangeInclusive<usize>) -> Fake {
+    let mut fake = Fake::new();
+    fake.failures = calls.map(|n| (n, NoAnswer::Throttled)).collect();
+    fake
+}
+
+fn pausing() -> Options {
+    Options {
+        pause_when_throttled: true,
+        ..Options::default()
+    }
+}
+
+#[test]
+fn a_run_that_pauses_when_throttled_carries_on_once_resumed() {
+    // Call 3 and its four retries are throttled: about five minutes, then a pause.
+    let plain = run(
+        &set(),
+        &mut Fake::new(),
+        &mut FakeClock::default(),
+        &Options::default(),
+    );
+    let set = set();
+    let mut fake = throttled_for(3..=7);
+    let mut clock = FakeClock::default();
+    let mut notes = Vec::new();
+    let outcome = identify(
+        900.0,
+        Vec::new(),
+        &mut fake,
+        &mut clock,
+        &pausing(),
+        &set.paths,
+        &mut |n| match n {
+            Note::Paused(why) => notes.push(format!("paused: {why}")),
+            Note::Unpaused => notes.push("unpaused".into()),
+            _ => {}
+        },
+    )
+    .unwrap();
+    assert_eq!(clock.pauses, 1);
+    assert_eq!(
+        notes,
+        ["paused: Shazam is throttling (HTTP 429)", "unpaused"]
+    );
+    // After the pause it asks about the same window again, with a fresh backoff.
+    assert_eq!(outcome.ended, Ended::Converged);
+    assert_eq!(fake.calls, outcome.probes.len() + 5);
+    assert_eq!(outcome.probes, plain.probes);
+}
+
+#[test]
+fn a_stop_while_paused_finishes_early_with_what_was_heard() {
+    let set = set();
+    let mut clock = FakeClock {
+        stop_on_pause: true,
+        ..FakeClock::default()
+    };
+    let outcome = run(&set, &mut throttled_for(3..=7), &mut clock, &pausing());
+    assert_eq!(
+        (outcome.ended, outcome.probes.len()),
+        (Ended::FinishedEarly, 2)
+    );
+    assert_eq!(events(&set).last().unwrap()["reason"], "interrupted");
+}
+
+#[test]
+fn a_question_is_answered_ahead_of_the_engine_and_kept_as_evidence() {
+    let set = set();
+    let questions = Questions::new();
+    let asked = questions.submit(450.0);
+    let options = Options {
+        questions: Some(questions.clone()),
+        ..Options::default()
+    };
+    let mut fake = Fake::new();
+    let outcome = run(&set, &mut fake, &mut FakeClock::default(), &options);
+    let probe = asked.wait(Duration::ZERO).unwrap();
+    // Centred on the moment asked about, the way the editor samples.
+    assert_eq!(
+        (probe.t, probe.window, probe.purpose.as_str()),
+        (435.0, 30.0, MANUAL)
+    );
+    assert_eq!(outcome.probes[0], probe);
+    assert_eq!(load_progress(&set.paths.progress).unwrap().probes[0], probe);
+    // Resume is replay: the saved run, manual probe included, folds to the same answer.
+    let again = run(
+        &set,
+        &mut Fake::new(),
+        &mut FakeClock::default(),
+        &Options::default(),
+    );
+    assert_eq!(again.segments, outcome.segments);
+    // The run is over: nothing will serve another question.
+    let late = questions.submit(100.0);
+    assert!(late.wait(Duration::ZERO).is_err());
+}
+
+#[test]
+fn a_question_shazam_wont_answer_fails_and_stores_nothing() {
+    let set = set();
+    let questions = Questions::new();
+    let asked = questions.submit(450.0);
+    let options = Options {
+        questions: Some(questions.clone()),
+        ..pausing()
+    };
+    let mut fake = throttled_for(1..=5);
+    let outcome = run(&set, &mut fake, &mut FakeClock::default(), &options);
+    let why = asked.wait(Duration::ZERO).unwrap_err();
+    assert!(why.contains("throttling"), "{why}");
+    assert!(outcome.probes.iter().all(|p| p.purpose != MANUAL));
+    assert_eq!(outcome.ended, Ended::Converged);
+}
+
+#[test]
+fn a_question_waits_for_its_answer_on_another_thread() {
+    let questions = Questions::new();
+    let asker = {
+        let q = questions.clone();
+        std::thread::spawn(move || q.ask(100.0, Duration::from_secs(5)))
+    };
+    let taken = loop {
+        if let Some(q) = questions.pop() {
+            break q;
+        }
+        std::thread::yield_now();
+    };
+    let probe = Probe {
+        t: 85.0,
+        window: 30.0,
+        purpose: MANUAL.into(),
+        result: None,
+        offsets: None,
+    };
+    taken.answer(Ok(probe.clone()));
+    assert_eq!(asker.join().unwrap(), Ok(probe));
+    // Unanswered in time: the asker gets an error and the question leaves the queue.
+    assert!(questions.ask(5.0, Duration::from_millis(10)).is_err());
+    assert!(!questions.pending());
 }

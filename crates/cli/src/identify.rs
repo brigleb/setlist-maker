@@ -184,6 +184,8 @@ pub fn run(args: Args) -> ExitCode {
                 "  {why}; asking again in {}s ({attempt} of {of})",
                 wait.as_secs()
             ),
+            // The CLI finishes rather than pausing.
+            Note::Paused(_) | Note::Unpaused => {}
         },
     );
     let outcome = match outcome {
