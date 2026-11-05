@@ -612,8 +612,12 @@ someone tests them.
 
 **Result (2026-11-05, built, not published):** `packaging/build.sh` builds everything into
 `target/dist` and publishes nothing: the universal app's dmg (13MB; the app is 39MB), the
-universal CLI as a tarball, `SHA256SUMS`, the release notes, and the tap's formula and cask
-with the hashes filled in.
+universal CLI as a tarball, `SHA256SUMS`, the release notes, and the tap's formula
+(`target/dist/tap`) and the draft cask (`target/dist/cask-draft`) with the hashes filled in.
+It fails if `tauri.conf.json` and the two crates disagree on the version, or if the app or the
+CLI isn't universal, ad-hoc signed, or (the CLI, under both architectures) the right version.
+Neither the dmg nor the tarball is reproducible, so the tap's hash only matches the assets
+from the same run.
 - **The app:** `bundle.macOS.signingIdentity: "-"` works. `codesign` reports `Signature=adhoc`,
   identifier `com.brigleb.hindsight`, and `--verify --deep --strict` passes. `spctl` rejects
   it, as expected without notarization. Both architectures (`x86_64 arm64`) launch from the
@@ -627,8 +631,13 @@ with the hashes filled in.
   formula with no separate `brew trust`, so the README's one line is
   `brew install brigleb/hindsight/hindsight`. The tap, its trust entry and the install were
   removed afterwards. Installed by Homebrew, it carries no quarantine.
-- **The cask** is written (`packaging/homebrew/Casks/`) but not in the tap. Its postflight
-  strips quarantine, and nobody has run the clean-machine test the plan asks for.
+- **The cask** is written (`packaging/homebrew/Casks/`) but not in the tap. Its
+  `postflight_steps` strip quarantine (Homebrew 7's `brew style` refuses a Ruby `postflight`),
+  and nobody has run the clean-machine test the plan asks for. Its `zap` leaves
+  `~/.config/hindsight` and `~/.cache/hindsight` alone, since the CLI shares them.
+- **For M7:** the formula, the cask, the README and the release notes name
+  `brigleb/setlist-maker`. Whether release downloads redirect after the rename is unverified,
+  so the next release regenerates them with the new name.
 - **Not built:** the check for a newer release (not until someone else uses the app).
 - **Not verified:** Gatekeeper's Open Anyway flow on macOS 26+ (this machine is Darwin 27).
   The README's steps are macOS 15's.
