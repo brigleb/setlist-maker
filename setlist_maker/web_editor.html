@@ -71,6 +71,10 @@
         <button id="redo" class="tool icbtn" type="button" disabled title="Redo (⇧⌘Z)" aria-label="Redo"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg></button>
       </div>
       <button id="side-toggle" class="tool icbtn" type="button" aria-controls="side" aria-expanded="false" title="Show the inspector" aria-label="Inspector"><svg class="ic" aria-hidden="true"><use href="#i-panel-right"/></svg></button>
+      <!-- The app's run controls (Hindsight): hidden unless its editor says they apply. -->
+      <button id="resume" class="tool" type="button" hidden title="Shazam stopped answering for a while; ask it again">Resume</button>
+      <button id="finish-now" class="tool" type="button" hidden title="Stop sampling and make the tracklist from what was heard so far">Finish now</button>
+      <button id="continue" class="tool" type="button" hidden title="Carry on with the run that stopped early">Continue identifying</button>
       <button id="done" class="tool" type="button">Done</button>
       <button id="save" class="tool primary" type="button" disabled title="Save (⌘S)">Save</button>
     </div>
@@ -115,6 +119,7 @@
       <div id="panel-set" class="panel" role="tabpanel" aria-labelledby="tab-set" hidden>
         <div class="in-lbl">Description</div>
         <textarea id="summary" class="summary" rows="3" aria-label="Set description" placeholder="Add a description for this set…"></textarea>
+        <div class="in-btns"><button id="gen-summary" class="tbtn" type="button" hidden title="Ask Claude for a one-paragraph description of the tracklist as saved">Generate</button></div>
         <div class="in-lbl">Podcast episode</div>
         <section id="episode" aria-label="Podcast episode">
           <div class="ep-row">
@@ -161,6 +166,15 @@
   </div>
   <audio id="audio" src="/api/audio" preload="metadata"></audio>
   <!-- #62: toasts stack, newest at the bottom, each on its own timer. -->
+  <!-- The app with nothing open (Hindsight): drop a set on the window or the Dock icon. -->
+  <div id="drop-screen" hidden>
+    <div class="drop-box">
+      <svg class="ic" aria-hidden="true"><use href="#i-waveform"/></svg>
+      <h1>Drop a set here</h1>
+      <p>Its recording, to identify the tracks, or its <code>_tracklist.md</code>, to edit one already made.</p>
+      <p id="drop-notice" class="drop-notice" hidden></p>
+    </div>
+  </div>
   <div id="toast" popover="manual" role="status" aria-live="polite"></div>
   <!-- Dialogs (#61): native <dialog>s opened with showModal(); see web/dialog.js. -->
   <dialog id="keys-dialog" class="sheet" aria-labelledby="keys-title">

@@ -530,3 +530,19 @@ body.closed { display:flex; align-items:center; justify-content:center; }
 .mi.off { color:var(--text-faint); }
 .mi.off:focus { background:var(--hairline); color:var(--text-faint); }
 #menu-why { color:var(--muted); font-size:11px; padding:5px 10px 3px; border-top:1px solid var(--line); margin-top:4px; max-width:340px; }
+
+/* ---- the app (Hindsight): the drop screen, the run controls ----
+   The drop screen covers the page while no set is open; the page's own
+   panes stay underneath, empty. */
+#drop-screen { position:fixed; inset:0; z-index:40; display:flex; align-items:center; justify-content:center; background:var(--bg); }
+#drop-screen .drop-box { text-align:center; max-width:440px; padding:44px 36px; border:2px dashed var(--btn-border); border-radius:18px; }
+#drop-screen.over .drop-box { border-color:var(--accent); background:var(--focus-bg); }
+#drop-screen .ic { font-size:44px; color:var(--accent); }
+#drop-screen h1 { font-size:20px; margin:14px 0 8px; }
+#drop-screen p { color:var(--muted); font-size:14px; line-height:1.5; margin:6px 0; }
+#drop-screen code { white-space:nowrap; font-size:13px; background:var(--card); border:1px solid var(--line); border-radius:5px; padding:1px 6px; }
+#drop-screen .drop-notice { color:#c9352c; }
+body.paused #livepill { background:var(--warn); }
+body.paused #livepill::before { animation:none; }
+#gen-summary { margin-top:6px; }
+.drop-target { outline:2px dashed var(--accent); outline-offset:-2px; }

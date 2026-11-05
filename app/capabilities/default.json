@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "The page listens for drops, Dock opens and close requests through window.__TAURI__.",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}

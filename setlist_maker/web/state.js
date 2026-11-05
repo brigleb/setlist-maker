@@ -37,6 +37,13 @@ export const S = {
   peaks: null,
   liveMode: false,   // `identify --watch` and the run has not finished
   livePoll: null,
+  // The app (Hindsight) only, see app.js: its editor answers /api/tracklist
+  // with `open`; a run that stopped early and can carry on; why a live run is
+  // paused (Shazam throttling); whether the claude CLI was found.
+  app: false,
+  run: null,
+  paused: null,
+  summaryAvailable: undefined,
   artVersion: 0,  // bumped on save so re-requested thumbs bypass the decoded-image cache
   // The episode cover file <set>_cover.jpg: coverVersion is the saved file's
   // mtime (null: none), coverChoice the unsaved change -- undefined for none,

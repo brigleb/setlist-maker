@@ -10,6 +10,7 @@ import { renderList, revealSelected } from "./list.js";
 import { moveStart, previewStart, splitAt } from "./edits.js";
 import { renderInspector, sampleAt } from "./inspector.js";
 import { renderIssues } from "./issues.js";
+import { syncRunControls } from "./app.js";
 import { artFor } from "./artwork.js";
 import { html, keyOf, render as paint } from "./ui.js";
 import { showTab } from "./shell.js";
@@ -30,12 +31,13 @@ export async function loadProbes() {
     S.probeDuration = data.duration || null;
     S.canSample = !!data.can_sample;
     nextProbe = data.next || null;
+    if (S.paused !== (data.paused || null)) { S.paused = data.paused || null; syncRunControls(); }
     if (wasLive && !data.live) {
       // The run finished and this server is now its editor. Everything on
-      // the page was a live guess; start over from the saved tracklist.
+      // the page was a live guess; start over from the saved tracklist. (In
+      // the app a stopped run leaves nothing open: the drop screen.)
       setLive(false);
-      toast("Identification finished — the tracklist is yours to edit");
-      await load();
+      if (await load()) toast("Identification finished — the tracklist is yours to edit");
       return;
     }
     if (data.live && S.liveMode && S.probes.length !== seenProbes) await refreshLiveTracks();

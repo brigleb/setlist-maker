@@ -4,6 +4,7 @@
 
 pub mod api;
 mod assets;
+mod claude;
 mod http;
 mod range;
 mod routes;
@@ -20,6 +21,7 @@ use hindsight_core::audio::peaks;
 use hindsight_core::model::fileio::config_dir;
 use hindsight_core::run::BACKOFF;
 
+pub use claude::find_claude;
 pub use http::{Body, Reply, Request};
 pub use session::{EndRun, ListenFor, OpenListener, Opening, classify, shazam_listener};
 

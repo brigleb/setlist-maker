@@ -10,6 +10,7 @@ import { focusSelected, renderList } from "./list.js";
 import { syncPlayerBar } from "./player.js";
 import { loadPeaks, loadProbes, renderTimeline } from "./grid.js";
 import { closeArtwork, renderCover } from "./artwork.js";
+import { done as appDone, hideDropScreen, showDropScreen, syncRunControls } from "./app.js";
 import "./util.js";
 import "./edits.js";
 import "./inspector.js";
@@ -18,8 +19,27 @@ import "./keys.js";
 import "./shell.js";
 
 export let revision = null;
+// Resolves to whether a set is open: the app's editor can have none (app.js).
 export async function load() {
   const data = await (await fetch("/api/tracklist")).json();
+  S.app = data.open !== undefined;
+  if (data.open === false) {
+    setLive(false);
+    S.tracks = [];
+    S.selectedTrack = S.playingTrack = S.editing = null;
+    S.dirty = false;
+    S.run = S.paused = null;
+    S.probes = [];
+    S.selected = new Set();
+    resetHistory();
+    render();  // the panes under the drop screen, emptied
+    syncSaveState();
+    showDropScreen(data.notice);
+    syncRunControls();
+    return false;
+  }
+  hideDropScreen();
+  S.run = data.run || null;
   S.fileName = data.source_file || "";
   document.getElementById("file").textContent = S.fileName || "—";
   // A reload replaces every track object, so the selection is carried over
@@ -54,9 +74,11 @@ export async function load() {
   resetHistory();
   render();
   syncSaveState();
+  syncRunControls();
   if (listFocused) focusSelected();
   loadProbes();
   loadPeaks();  // once a page; slow the first time a set is opened (peaks.py)
+  return true;
 }
 
 export function updateCounts() {
@@ -142,6 +164,7 @@ export async function doSave() {
 // Done (#61): unsaved work gets the three answers a desktop app gives, as an
 // in-app dialog rather than the browser's, and the page then shows its end state.
 document.getElementById("done").onclick = async () => {
+  if (S.app) return appDone();  // the app goes back to its drop screen
   if (S.dirty) {
     const v = await ask({
       title: "Save your changes before closing?",

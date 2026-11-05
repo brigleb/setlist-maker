@@ -1,0 +1,18 @@
+[package]
+name = "hindsight-app"
+version = "0.1.0"
+description = "Hindsight, the app: drop a set's MP3 on it to identify its tracks, then edit them"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[build-dependencies]
+# Pinned to spike 3's measured versions.
+tauri-build = { version = "=2.7.4", features = [] }
+
+[dependencies]
+hindsight-core = { path = "../crates/core" }
+hindsight-editor = { path = "../crates/editor" }
+log = "0.4"
+tauri = { version = "=2.12.5", features = [] }

@@ -338,8 +338,12 @@ function cssUrl(u) {
 export async function uploadImage(file) {
   if (!file || !(file.type || "").startsWith("image/")) throw new Error("That file is not an image.");
   if (file.size > 25 * 1024 * 1024) throw new Error("That image is over 25 MB.");
-  const r = await during("upload", "Uploading " + (file.name || "the image") + "…",
-    () => fetch("/api/upload", { method: "POST", headers: { "Content-Type": file.type }, body: file }));
+  // An image dropped on the app's window comes as a path the editor reads
+  // itself (app.js): the native drop gives the page no File.
+  const send = file.path
+    ? () => fetch("/api/upload/path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: file.path }) })
+    : () => fetch("/api/upload", { method: "POST", headers: { "Content-Type": file.type }, body: file });
+  const r = await during("upload", "Uploading " + (file.name || "the image") + "…", send);
   const res = await r.json().catch(() => ({}));
   if (!r.ok || !res.ok) throw new Error(res.error ? "Upload failed: " + res.error : "Upload failed (" + r.status + ")");
   return res.ref;

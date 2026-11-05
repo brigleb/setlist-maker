@@ -14,6 +14,10 @@ update the versions and hashes here.
 `web_editor.html` resolves to `/web/preact.js`. The page's own modules import
 all three through `ui.js` only.
 
+The rest of this folder is Hindsight's own code, released with it under the GNU
+General Public License, version 3 or later (ADR 0001). These three files keep
+their own licenses, below; MIT and Apache-2.0 are compatible with the GPL-3.
+
 ## preact — MIT
 
 The MIT License (MIT)
