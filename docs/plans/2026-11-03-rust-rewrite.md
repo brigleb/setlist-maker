@@ -645,6 +645,12 @@ from the same run.
   pinned to `3aa32dc` (its three assets downloaded back and match `SHA256SUMS`); and
   `brigleb/homebrew-hindsight` created with `Formula/hindsight.rb`. Making the release public
   was left to Ray, so until then the formula's download is a 404 and the tag doesn't exist.
+- **The CLI moved off the app's release (2026-11-23).** Ray's first download from the release
+  page was the CLI tarball, which Safari unpacked; double-clicked, it opened Terminal and
+  printed the help. The app's release now carries only the dmg and its `SHA256SUMS`; the
+  tarball is on `brigleb/homebrew-hindsight`'s own `v0.1.0` release, where the formula points
+  (same hash, checked by downloading it). Gatekeeper's Done → Open Anyway prompt appeared as
+  the README says, on macOS 27.
 
 ### M7 Cutover (2–3 days)
 

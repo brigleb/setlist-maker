@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Builds a release into target/dist: the universal app's dmg, the universal CLI as a tarball,
-# their SHA256SUMS, the release notes, and the tap's formula with this version's hash filled
-# in. `target/dist/tap` is the tap repo's contents. The cask, also filled in, goes to
+# Builds a release into target/dist: the universal app's dmg and its SHA256SUMS and release
+# notes (the app's release, on brigleb/setlist-maker), the universal CLI as a tarball (the
+# tap's release, on brigleb/homebrew-hindsight, so the app's page offers nothing a Finder user
+# could mistake for the app), and the tap's formula with this version's hash filled in. `target/dist/tap` is the tap repo's contents. The cask, also filled in, goes to
 # `target/dist/cask-draft`: it stays out of the tap until a clean-machine test.
 # Publishes nothing. Needs both macOS Rust targets and the Tauri CLI:
 #   rustup target add aarch64-apple-darwin x86_64-apple-darwin
@@ -42,9 +43,9 @@ lipo -create -output "$stage/hindsight" \
 tarball="hindsight-${version}-macos-universal.tar.gz"
 tar -czf "$dist/$tarball" -C "$stage" hindsight
 
-(cd "$dist" && shasum -a 256 "$dmg" "$tarball" > SHA256SUMS)
-dmg_sha=$(grep " $dmg\$" "$dist/SHA256SUMS" | cut -d' ' -f1)
-cli_sha=$(grep " $tarball\$" "$dist/SHA256SUMS" | cut -d' ' -f1)
+(cd "$dist" && shasum -a 256 "$dmg" > SHA256SUMS)
+dmg_sha=$(cut -d' ' -f1 "$dist/SHA256SUMS")
+cli_sha=$(shasum -a 256 "$dist/$tarball" | cut -d' ' -f1)
 fill() { sed -e "s/@VERSION@/$version/g" -e "s/@CLI_SHA256@/$cli_sha/g" -e "s/@DMG_SHA256@/$dmg_sha/g" "$1"; }
 fill packaging/homebrew/Formula/hindsight.rb > "$dist/tap/Formula/hindsight.rb"
 fill packaging/homebrew/Casks/hindsight.rb > "$dist/cask-draft/hindsight.rb"
@@ -66,3 +67,4 @@ for a in arm64 x86_64; do
 done
 echo "Built $version in $dist:"
 cat "$dist/SHA256SUMS"
+echo "$cli_sha  $tarball (for the tap's release)"
