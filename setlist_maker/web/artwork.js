@@ -75,7 +75,7 @@ export function showArtwork(t, opts) {
   } else {
     artCurrentUrl = null;
     overlayImg.hidden = false;
-    overlayImg.src = "/api/artwork?index=" + t.index + "&v=" + S.artVersion;
+    overlayImg.src = "/api/artwork?index=" + t.index + "&v=" + S.artVersion + liveKey(t);
     artNote.hidden = true;
   }
   const i = S.tracks.indexOf(t);
@@ -328,7 +328,24 @@ export function artFor(t, i, near = true) {
   // 0 is a real index; an unsaved inserted row has none.
   const saved = t.index !== undefined && t.index !== null;
   if (!near || !saved || !(t.artist || t.title)) return grad;
-  return cssUrl("/api/artwork/source?index=" + t.index + "&v=" + S.artVersion) + ", " + grad;
+  return cssUrl("/api/artwork/source?index=" + t.index + "&v=" + S.artVersion + liveKey(t)) + ", " + grad;
+}
+
+// During a live run the page re-reads the list after every sample, and a newly
+// found track usually lands among the others and shifts them, so an index names
+// another track from one read to the next. Keyed by index alone, a thumb kept
+// whatever picture its position had first: the browser reuses an image by URL.
+// `at` is the start this page thinks the index has; the server answers for the
+// track at that start or not at all, since the run can be a sample ahead of the
+// page. The names and URL in `k` make a track renamed in place ask again. The
+// editor needs neither: load() and save bump artVersion whenever indices move.
+function liveKey(t) {
+  if (!S.liveMode) return "";
+  let h = 0x811c9dc5;  // FNV-1a
+  for (const c of [t.artist, t.title, t.coverart_url].join("\0")) {
+    h = Math.imul(h ^ c.codePointAt(0), 0x01000193);
+  }
+  return "&at=" + t.timestamp + "&k=" + (h >>> 0).toString(36);
 }
 
 function cssUrl(u) {

@@ -432,6 +432,27 @@ fn artwork_as_found_and_as_the_embed_writes_it() {
 }
 
 #[test]
+fn a_live_page_gets_the_art_of_the_start_it_asked_about() {
+    // A live page is a list read behind the run: a newly found track shifts the ones after
+    // it, so the page's index 1 may be the server's index 0. `at` says which it means.
+    let f = fixture();
+    f.open(&f.sample_set());
+    let art = |q: &str| f.get(&format!("/api/artwork/source?{q}")).status;
+    assert_eq!(art("index=0&at=0&k=x"), 200);
+    assert_eq!(
+        art("index=1&at=0&k=x"),
+        200,
+        "the start wins over the index"
+    );
+    assert_eq!(art("index=0&at=180"), 404, "Chemical Brothers has no art");
+    assert_eq!(art("index=0&at=999"), 404, "no track starts there now");
+    assert_eq!(art("index=3&at=360"), 404, "an unidentified track has none");
+    assert_eq!(f.get("/api/artwork?index=1&at=0").status, 200);
+    // A bad `at` is ignored, as before the page sent one.
+    assert_eq!(art("index=0&at=soon"), 200);
+}
+
+#[test]
 fn the_pickers_options_lead_with_the_cover_in_use_and_search_the_names_the_page_sends() {
     let f = fixture();
     f.open(&f.sample_set());

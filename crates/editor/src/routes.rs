@@ -310,11 +310,21 @@ impl Editor {
         let current = self
             .current()
             .ok_or_else(|| Reply::status(404, "no set is open"))?;
-        let track = current
-            .tracklist
-            .tracks
+        let tracks = &current.tracklist.tracks;
+        let mut track = tracks
             .get(index)
             .ok_or_else(|| Reply::status(404, "no such track"))?;
+        // A live page sends the start it thinks `index` has. The run can be a sample ahead
+        // of the page, and a found track shifts the ones after it, so answer for the track
+        // at that start, or not at all, rather than for whichever holds the index now.
+        if let Some(at) = req.param("at").and_then(|a| a.trim().parse::<i64>().ok())
+            && track.timestamp != at
+        {
+            track = tracks
+                .iter()
+                .find(|t| t.timestamp == at)
+                .ok_or_else(|| Reply::status(404, "no track starts there now"))?;
+        }
         if track.is_unidentified() {
             return Err(Reply::status(404, "track is unidentified"));
         }
