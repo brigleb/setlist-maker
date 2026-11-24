@@ -1,6 +1,6 @@
 [package]
 name = "hindsight-editor"
-version = "0.1.0"
+version = "0.1.1"
 description = "Hindsight's editor backend: the page's routes, the open set, live runs"
 edition.workspace = true
 rust-version.workspace = true

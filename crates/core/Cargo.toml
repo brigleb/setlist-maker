@@ -1,6 +1,6 @@
 [package]
 name = "hindsight-core"
-version = "0.1.0"
+version = "0.1.1"
 description = "Hindsight's model, engine, audio, Shazam, artwork and chapters: everything with no UI"
 edition.workspace = true
 rust-version.workspace = true

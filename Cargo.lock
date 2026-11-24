@@ -1443,7 +1443,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hindsight-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hindsight-core",
  "hindsight-editor",
@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "hindsight-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "ctrlc",
@@ -1467,7 +1467,7 @@ dependencies = [
 
 [[package]]
 name = "hindsight-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "chfft",
@@ -1490,7 +1490,7 @@ dependencies = [
 
 [[package]]
 name = "hindsight-editor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hindsight-core",
  "image",
