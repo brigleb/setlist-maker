@@ -1,7 +1,7 @@
 // Row thumbnails, the artwork panel and picker, uploads, the episode cover, Embed.
 
 import { GRADS, S, TL } from "./state.js";
-import { audio, epArtist, epTitle, icon, toast } from "./dom.js";
+import { audio, el, epArtist, epTitle, icon, toast } from "./dom.js";
 import { begin, during } from "./activity.js";
 import { trackName } from "./util.js";
 import { setDirty } from "./history.js";
@@ -214,7 +214,19 @@ export async function loadAlternates(t) {
     const query = "/api/artwork/options?index=" + t.index
       + "&artist=" + encodeURIComponent(t.artist || "")
       + "&title=" + encodeURIComponent(t.title || "");
-    data = await (await fetch(query, { signal: ctl.signal })).json();
+    const r = await fetch(query, { signal: ctl.signal });
+    if (!r.ok) {
+      // A refusal is an answer, not a network failure: say what it was. Only a plain-text
+      // reason is shown; the Python server's error pages are HTML.
+      const plain = (r.headers.get("content-type") || "").startsWith("text/plain");
+      const why = plain ? (await r.text()).trim() : "";
+      job.end();
+      if (t !== artTrack) return;
+      artGrid.innerHTML = "";
+      artGrid.append(el("div", "status", "No artwork lookup for this track" + (why ? " (" + why + ")." : ".")));
+      return;
+    }
+    data = await r.json();
     job.end();
   } catch (e) {
     job.end();

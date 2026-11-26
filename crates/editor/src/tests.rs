@@ -469,6 +469,26 @@ fn the_pickers_options_lead_with_the_cover_in_use_and_search_the_names_the_page_
 }
 
 #[test]
+fn the_picker_searches_an_unidentified_track_the_page_has_named() {
+    let f = fixture();
+    f.open(&f.sample_set());
+    // Track 2 is unidentified on disk; the user typed a name and hasn't saved yet.
+    let r = f.get("/api/artwork/options?index=2&artist=Moby&title=Porcelain");
+    assert_eq!(r.status, 200);
+    assert_eq!(r.body_json()["candidates"], json!([]));
+    let asked = f.web.0.lock().unwrap().join(" ");
+    assert!(asked.contains("Moby"), "{asked}");
+    // With no name from the page either, there is nothing to search for.
+    assert_eq!(f.get("/api/artwork/options?index=2").status, 404);
+    assert_eq!(
+        f.get("/api/artwork/options?index=2&artist=+&title=").status,
+        404
+    );
+    // The composite still answers for saved state only.
+    assert_eq!(f.get("/api/artwork?index=2").status, 404);
+}
+
+#[test]
 fn uploads_are_images_only_and_come_back_by_reference() {
     let f = fixture();
     f.open(&f.sample_set());

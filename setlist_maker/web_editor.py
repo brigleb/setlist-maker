@@ -750,12 +750,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._send_json({"ok": True, "probe": probe_to_api(probe)})
 
-    def _track_for_query(self) -> Track | None:
+    def _track_for_query(self, allow_unidentified: bool = False) -> Track | None:
         """Resolve ``?index=N`` to a track, sending the 404 itself on failure.
 
-        Shared by both artwork endpoints so they answer for exactly the same
+        Shared by the artwork endpoints so they answer for exactly the same
         set of tracks: a bad or out-of-range index, and an unidentified track,
-        which ``chapters`` skips too.
+        which ``chapters`` skips too. The picker passes ``allow_unidentified``,
+        since it searches the names the page sends, and a track the user has
+        just named is still unidentified on disk until a save.
         """
         params = parse_qs(urlparse(self.path).query)
         try:
@@ -770,7 +772,7 @@ class _Handler(BaseHTTPRequestHandler):
             return None
 
         track = tracks[index]
-        if track.is_unidentified:
+        if track.is_unidentified and not allow_unidentified:
             # chapters skips unidentified tracks, so there is nothing to preview
             self.send_error(HTTPStatus.NOT_FOUND, "track is unidentified")
             return None
@@ -796,13 +798,16 @@ class _Handler(BaseHTTPRequestHandler):
         wrong song and then pin one. The composite endpoint does the opposite,
         and must, because it has to show what would be embedded.
         """
-        track = self._track_for_query()
+        track = self._track_for_query(allow_unidentified=True)
         if track is None:
             return
 
         params = parse_qs(urlparse(self.path).query)
-        artist = (params.get("artist", [""])[0] or track.artist).strip()
-        title = (params.get("title", [""])[0] or track.title).strip()
+        artist = (params.get("artist", [""])[0].strip() or track.artist).strip()
+        title = (params.get("title", [""])[0].strip() or track.title).strip()
+        if not artist and not title:
+            self.send_error(HTTPStatus.NOT_FOUND, "track is unidentified")
+            return
 
         candidates: list[dict] = []
         # Offered at the chapter image's size, which is the URL fetch_artwork

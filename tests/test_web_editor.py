@@ -1251,6 +1251,35 @@ def test_artwork_options_searches_the_live_artist_and_title(
     assert asked == [("Justice", "Genesis"), ("Daft Punk", "Around the World")]
 
 
+def test_artwork_options_searches_an_unidentified_track_the_page_has_named(
+    sample_tracklist, tmp_path, monkeypatch
+):
+    """Naming an unidentified track and then picking its cover is one workflow.
+
+    Until a save the track is still unidentified on disk, and refusing it left
+    the picker reporting that it could not reach the artwork sources.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    asked = []
+    monkeypatch.setattr(
+        "setlist_maker.web_editor.artwork_options",
+        lambda artist, title: asked.append((artist, title)) or [],
+    )
+
+    with running_server(_ctx(sample_tracklist, tmp_path)) as base:
+        with urllib.request.urlopen(
+            base + "/api/artwork/options?index=2&artist=Moby&title=Porcelain"
+        ) as r:
+            assert r.status == 200
+            assert json.loads(r.read())["candidates"] == []
+        # With no name from the page either, there is nothing to search for.
+        with pytest.raises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(base + "/api/artwork/options?index=2&artist=+")
+        assert err.value.code == 404
+
+    assert asked == [("Moby", "Porcelain")]
+
+
 def _write_progress(path, probes, duration=900.0):
     path.write_text(json.dumps({"version": 2, "audio_duration": duration, "probes": probes}))
 

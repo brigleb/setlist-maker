@@ -303,6 +303,16 @@ impl Editor {
     /// unidentified track, which the embed skips too. Shared by the artwork routes, so they
     /// answer for the same tracks.
     fn track_for_query(&self, req: &Request) -> Result<(Track, PathBuf), Reply> {
+        let (track, dir) = self.saved_track_for_query(req)?;
+        if track.is_unidentified() {
+            return Err(Reply::status(404, "track is unidentified"));
+        }
+        Ok((track, dir))
+    }
+
+    /// `track_for_query` without its refusal of an unidentified track, for the one endpoint
+    /// that can answer for one: the picker searches the names the page sends.
+    fn saved_track_for_query(&self, req: &Request) -> Result<(Track, PathBuf), Reply> {
         let index: usize = req
             .param("index")
             .and_then(|i| i.trim().parse().ok())
@@ -324,9 +334,6 @@ impl Editor {
                 .iter()
                 .find(|t| t.timestamp == at)
                 .ok_or_else(|| Reply::status(404, "no track starts there now"))?;
-        }
-        if track.is_unidentified() {
-            return Err(Reply::status(404, "track is unidentified"));
         }
         Ok((track.clone(), artwork_dir_for(&current.tracklist_path)))
     }
@@ -362,7 +369,10 @@ impl Editor {
     /// looking at, maybe a correction not yet saved), falling back to the saved ones; the one
     /// in use comes first, at the size the embed would fetch it.
     fn artwork_options(&self, req: &Request) -> Reply {
-        let (track, _) = match self.track_for_query(req) {
+        // Not `track_for_query`: a track Shazam left unidentified and the user has just named
+        // is still unidentified on disk until a save, and refusing it left the picker with
+        // nothing to show for exactly the tracks that most need a cover.
+        let (track, _) = match self.saved_track_for_query(req) {
             Ok(t) => t,
             Err(reply) => return reply,
         };
@@ -373,6 +383,9 @@ impl Editor {
                 .unwrap_or_else(|| saved.trim().to_string())
         };
         let (artist, title) = (pick("artist", &track.artist), pick("title", &track.title));
+        if artist.is_empty() && title.is_empty() {
+            return Reply::status(404, "track is unidentified");
+        }
         let in_use = track
             .coverart_url
             .as_deref()

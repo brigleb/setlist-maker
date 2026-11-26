@@ -188,6 +188,19 @@ def test_a_lone_stray_from_another_artist_is_not_a_second_name():
     assert [i["index"] for i in issues if i["kind"] == "variants"] == [1]
 
 
+def test_a_track_with_a_title_and_no_artist_does_not_break_the_issues():
+    """Naming an unidentified track title-first leaves it with no artist for a while.
+
+    The variant rule took the artist's identity and split it, and identity() of
+    nothing is null, so the render threw for as long as the artist was blank.
+    """
+    tracks = [track(0, "A", "a"), track(300, "", "Porcelain"), track(600, "C", "c")]
+    probes = [probe(350, "", "Porcelain (Live)"), probe(420, "Moby", "Porcelain")]
+    issues = js("T.findIssues(tracks, probes, 900)", tracks=tracks, probes=probes)
+    # A lone stray is not a rival, and two blank artists are not "the same artist".
+    assert not [i for i in issues if i["kind"] == "variants"]
+
+
 def test_a_tidied_title_is_not_a_rival_of_shazams_spelling():
     tracks = [track(0, "A", "a"), track(300, "Kraftwerk", "Computer Love"), track(600, "C", "c")]
     probes = [probe(350 + 60 * k, "Kraftwerk", "Computer Love (2009 Remaster)") for k in range(3)]

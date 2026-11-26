@@ -280,12 +280,15 @@
         if (o === i && r !== i && idOf(r) !== idOf(i)) byIndex[r].forEach(p => settled.add(p));
       });
       const names = variants(byIndex[i].filter(p => !settled.has(p)), neighbours);
-      const own = identity(t.artist, "").split("\u0000")[0];
+      // A track can have a title and no artist (one the user is still naming), and
+      // identity() of nothing at all is null, so a missing artist is "" here.
+      const artistOf = a => (a ? identity(a, "").split("\u0000")[0] : "");
+      const own = artistOf(t.artist);
       // Compared by identity, not spelling: once a title is tidied, Shazam's
       // "(2009 Remaster)" spelling of it is the same name, not a rival.
       const mine = identity(t.artist, t.title);
       const rivals = names.filter(n => identity(n.artist, n.title) !== mine);
-      const real = rivals.filter(n => n.count >= 2 || identity(n.artist, "").split("\u0000")[0] === own);
+      const real = rivals.filter(n => n.count >= 2 || (own && artistOf(n.artist) === own));
       if (!real.length) continue;
       issues.push({
         kind: "variants", key: "variants:" + t.timestamp, index: i,
